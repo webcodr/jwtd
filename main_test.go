@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // helper to build a JWT from raw JSON header/payload and a signature string.
@@ -521,7 +522,7 @@ func TestDecodeAndPrint_EndToEnd(t *testing.T) {
 		`"typ": "JWT"`,
 		`"sub": "1234567890"`,
 		`"name": "John Doe"`,
-		`"iat": 1516239022`,
+		"2018-01-18T01:30:22Z",
 		"Header",
 		"Payload",
 		"Signature",
@@ -560,5 +561,148 @@ func TestDecodeAndPrint_TokenWithNestedObject(t *testing.T) {
 	}
 	if !strings.Contains(output, "value") {
 		t.Error("output missing nested value")
+	}
+}
+
+// --- formatTimestamps --------------------------------------------------------
+
+func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
+	data := map[string]interface{}{
+		"iat": float64(1516239022),
+		"exp": float64(1716239022),
+		"nbf": float64(1516239022),
+	}
+
+	formatTimestamps(data)
+
+	expected := time.Unix(1516239022, 0).UTC().Format(time.RFC3339)
+	if data["iat"] != expected {
+		t.Errorf("iat: expected %q, got %v", expected, data["iat"])
+	}
+	if data["nbf"] != expected {
+		t.Errorf("nbf: expected %q, got %v", expected, data["nbf"])
+	}
+
+	expectedExp := time.Unix(1716239022, 0).UTC().Format(time.RFC3339)
+	if data["exp"] != expectedExp {
+		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
+	}
+}
+
+func TestFormatTimestamps_NonTimestampFieldsUnchanged(t *testing.T) {
+	data := map[string]interface{}{
+		"sub":  "1234567890",
+		"name": "John Doe",
+		"num":  float64(42),
+	}
+
+	formatTimestamps(data)
+
+	if data["sub"] != "1234567890" {
+		t.Errorf("sub changed: %v", data["sub"])
+	}
+	if data["name"] != "John Doe" {
+		t.Errorf("name changed: %v", data["name"])
+	}
+	if data["num"] != float64(42) {
+		t.Errorf("num changed: %v", data["num"])
+	}
+}
+
+func TestFormatTimestamps_MixedFields(t *testing.T) {
+	data := map[string]interface{}{
+		"sub": "user123",
+		"iat": float64(0),
+		"exp": float64(1700000000),
+	}
+
+	formatTimestamps(data)
+
+	if data["sub"] != "user123" {
+		t.Errorf("sub changed: %v", data["sub"])
+	}
+
+	expectedIat := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	if data["iat"] != expectedIat {
+		t.Errorf("iat: expected %q, got %v", expectedIat, data["iat"])
+	}
+
+	expectedExp := time.Unix(1700000000, 0).UTC().Format(time.RFC3339)
+	if data["exp"] != expectedExp {
+		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
+	}
+}
+
+func TestFormatTimestamps_NonNumericTimestampField(t *testing.T) {
+	data := map[string]interface{}{
+		"iat": "not-a-number",
+	}
+
+	formatTimestamps(data)
+
+	// Should be left as-is when the value is not a number
+	if data["iat"] != "not-a-number" {
+		t.Errorf("non-numeric iat was modified: %v", data["iat"])
+	}
+}
+
+func TestFormatTimestamps_EmptyMap(t *testing.T) {
+	data := map[string]interface{}{}
+	formatTimestamps(data) // should not panic
+	if len(data) != 0 {
+		t.Errorf("empty map modified: %v", data)
+	}
+}
+
+func TestFormatTimestamps_OutputFormat(t *testing.T) {
+	data := map[string]interface{}{
+		"iat": float64(1516239022),
+	}
+
+	formatTimestamps(data)
+
+	val, ok := data["iat"].(string)
+	if !ok {
+		t.Fatalf("iat should be a string after formatting, got %T", data["iat"])
+	}
+
+	// Verify it's a valid RFC3339 timestamp
+	_, err := time.Parse(time.RFC3339, val)
+	if err != nil {
+		t.Errorf("iat is not valid RFC3339: %v", err)
+	}
+
+	// Verify the specific value
+	if val != "2018-01-18T01:30:22Z" {
+		t.Errorf("expected 2018-01-18T01:30:22Z, got %s", val)
+	}
+}
+
+func TestDecodeAndPrint_TimestampsFormatted(t *testing.T) {
+	token := makeJWT(
+		`{"alg":"HS256"}`,
+		`{"sub":"user1","iat":1516239022,"exp":1716239022,"nbf":1516239022}`,
+		"sig",
+	)
+
+	output := captureStdout(t, func() {
+		err := decodeAndPrint(token)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// Should contain formatted dates, not raw numbers
+	if strings.Contains(output, "1516239022") {
+		t.Error("output still contains raw iat/nbf timestamp")
+	}
+	if strings.Contains(output, "1716239022") {
+		t.Error("output still contains raw exp timestamp")
+	}
+	if !strings.Contains(output, "2018-01-18T01:30:22Z") {
+		t.Error("output missing formatted iat/nbf date")
+	}
+	if !strings.Contains(output, "2024-05-20T") {
+		t.Error("output missing formatted exp date")
 	}
 }

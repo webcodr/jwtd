@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // ANSI color codes
@@ -100,6 +101,8 @@ func printSection(label string, data map[string]interface{}, useColor bool) {
 	} else {
 		fmt.Println(label)
 	}
+
+	formatTimestamps(data)
 
 	pretty, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -234,6 +237,29 @@ func isJSONKey(s string, i int) bool {
 		j++
 	}
 	return false
+}
+
+// timestampKeys are JWT claims that contain Unix timestamps.
+var timestampKeys = map[string]bool{
+	"iat": true,
+	"exp": true,
+	"nbf": true,
+}
+
+// formatTimestamps converts numeric Unix timestamp values for known JWT claims
+// into human-readable date strings. The map is modified in place.
+func formatTimestamps(data map[string]interface{}) {
+	for key, val := range data {
+		if !timestampKeys[key] {
+			continue
+		}
+		num, ok := val.(float64)
+		if !ok {
+			continue
+		}
+		t := time.Unix(int64(num), 0).UTC()
+		data[key] = t.Format(time.RFC3339)
+	}
 }
 
 func isTerminal() bool {
