@@ -1,6 +1,6 @@
 module github.com/jwtd/jwtd
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/chzyer/readline v1.5.1 // indirect
