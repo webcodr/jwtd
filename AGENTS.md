@@ -44,6 +44,7 @@ echo <token> | jwtd
 - **ANSI color constants** are defined at the top of `main.go`. Colors auto-disable when stdout is not a TTY.
 - **Error handling:** Return errors up the call stack with `fmt.Errorf` wrapping (`%w`). Print to stderr and exit non-zero in `main()` only.
 - **Formatting:** Use `gofmt`/`goimports` standard formatting. No special linter configuration.
+- **Commit messages:** Use the [Conventional Commits](https://www.conventionalcommits.org/) format (e.g. `feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`). Keep the subject line short and lowercase after the prefix.
 
 ## Color Scheme
 
