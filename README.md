@@ -12,21 +12,27 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) with syntax-hig
 
 ## Installation
 
+### Homebrew (macOS and Linux)
+
+```sh
+brew install webcodr/tap/jwtd
+```
+
 ### From source
 
 Requires Go 1.26+.
 
 ```sh
-go install github.com/jwtd/jwtd@latest
+go install github.com/webcodr/jwtd@latest
 ```
 
 ### From releases
 
-Download a prebuilt binary from the [Releases](https://github.com/jwtd/jwtd/releases) page. Binaries are available for:
+Download a prebuilt binary from the [Releases](https://github.com/webcodr/jwtd/releases) page. Binaries are available for:
 
-- Linux (amd64)
+- Linux (amd64, arm64)
 - macOS (amd64, arm64)
-- Windows (amd64)
+- Windows (amd64, arm64)
 
 ## Usage
 

@@ -1,4 +1,4 @@
-module github.com/jwtd/jwtd
+module github.com/webcodr/jwtd
 
 go 1.26.0
 
