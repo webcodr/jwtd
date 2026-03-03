@@ -16,6 +16,9 @@ jobs:
           - goos: linux
             goarch: amd64
             suffix: ""
+          - goos: linux
+            goarch: arm64
+            suffix: ""
           - goos: darwin
             goarch: amd64
             suffix: ""
@@ -24,6 +27,9 @@ jobs:
             suffix: ""
           - goos: windows
             goarch: amd64
+            suffix: ".exe"
+          - goos: windows
+            goarch: arm64
             suffix: ".exe"
     runs-on: ubuntu-latest
     steps:
@@ -36,13 +42,14 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -ldflags="-s -w" -o "jwtd-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}" .
+          go build -ldflags="-s -w" -o "jwtd${{ matrix.suffix }}" .
+          tar czf "jwtd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" "jwtd${{ matrix.suffix }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: jwtd-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: jwtd-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
+          path: jwtd-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
 
   release:
     needs: build
