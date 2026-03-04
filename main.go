@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -53,7 +56,7 @@ func main() {
 		RunE:  run,
 	}
 
-	rootCmd.Flags().StringP("key", "k", "", "decryption key for JWE tokens (file path or base64-encoded key)")
+	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification (file path, base64, or JWK)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -73,7 +76,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if isJWE(token) {
 		return decodeAndPrintJWE(w, token, keyStr)
 	}
-	return decodeAndPrint(w, token)
+	return decodeAndPrint(w, token, keyStr)
 }
 
 // readToken resolves the JWT string from arguments, stdin pipe, or interactive prompt.
@@ -121,7 +124,8 @@ func isJWE(token string) bool {
 }
 
 // decodeAndPrint parses the JWT and prints header, payload, and signature.
-func decodeAndPrint(w io.Writer, tokenStr string) error {
+// If keyStr is provided, the signature is verified against the given key.
+func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 	parser := jwt.NewParser()
 	token, parts, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
 	if err != nil {
@@ -142,7 +146,51 @@ func decodeAndPrint(w io.Writer, tokenStr string) error {
 	fmt.Fprintln(w)
 	printSignature(w, parts[2])
 
+	if keyStr != "" {
+		fmt.Fprintln(w)
+		verifySignature(w, tokenStr, keyStr)
+	}
+
 	return nil
+}
+
+// verifySignature verifies a JWT signature using the provided key and prints the result.
+func verifySignature(w io.Writer, tokenStr, keyStr string) {
+	key, err := loadKey(keyStr)
+	if err != nil {
+		dimColor.Fprintf(w, "Signature verification: error loading key: %v\n", err)
+		return
+	}
+
+	// Extract the public key from private keys for verification.
+	key = publicKeyForVerification(key)
+
+	parser := jwt.NewParser()
+	_, err = parser.Parse(tokenStr, func(token *jwt.Token) (any, error) {
+		return key, nil
+	})
+
+	if err != nil {
+		color.New(color.FgRed, color.Bold).Fprintln(w, "Signature: INVALID")
+		dimColor.Fprintf(w, "  %v\n", err)
+	} else {
+		color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
+	}
+}
+
+// publicKeyForVerification extracts the public key from asymmetric private keys.
+// Symmetric keys ([]byte) and public keys are returned as-is.
+func publicKeyForVerification(key any) any {
+	switch k := key.(type) {
+	case *rsa.PrivateKey:
+		return &k.PublicKey
+	case *ecdsa.PrivateKey:
+		return &k.PublicKey
+	case ed25519.PrivateKey:
+		return k.Public()
+	default:
+		return key
+	}
 }
 
 // decodeAndPrintJWE parses a JWE token and prints its contents.
@@ -238,7 +286,7 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 	if strings.Count(text, ".") == 2 {
 		labelColor.Fprintln(w, "Decrypted Payload (nested JWT)")
 		fmt.Fprintln(w)
-		if err := decodeAndPrint(w, text); err == nil {
+		if err := decodeAndPrint(w, text, ""); err == nil {
 			return
 		}
 	}

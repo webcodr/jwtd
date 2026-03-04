@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // helper to build a JWT from raw JSON header/payload and a signature string.
@@ -78,7 +79,7 @@ func TestDecodeAndPrint_ValidJWT(t *testing.T) {
 	)
 
 	var buf bytes.Buffer
-	if err := decodeAndPrint(&buf, token); err != nil {
+	if err := decodeAndPrint(&buf, token, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -123,7 +124,7 @@ func TestDecodeAndPrint_WrongPartCount(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			err := decodeAndPrint(&buf, tt.token)
+			err := decodeAndPrint(&buf, tt.token, "")
 			if err == nil {
 				t.Fatal("expected error for wrong part count")
 			}
@@ -137,7 +138,7 @@ func TestDecodeAndPrint_InvalidHeader(t *testing.T) {
 		".sig"
 
 	var buf bytes.Buffer
-	err := decodeAndPrint(&buf, token)
+	err := decodeAndPrint(&buf, token, "")
 	if err == nil {
 		t.Fatal("expected error for invalid header")
 	}
@@ -149,7 +150,7 @@ func TestDecodeAndPrint_InvalidPayload(t *testing.T) {
 		"sig"
 
 	var buf bytes.Buffer
-	err := decodeAndPrint(&buf, token)
+	err := decodeAndPrint(&buf, token, "")
 	if err == nil {
 		t.Fatal("expected error for invalid payload")
 	}
@@ -157,7 +158,7 @@ func TestDecodeAndPrint_InvalidPayload(t *testing.T) {
 
 func TestDecodeAndPrint_EmptyToken(t *testing.T) {
 	var buf bytes.Buffer
-	err := decodeAndPrint(&buf, "")
+	err := decodeAndPrint(&buf, "", "")
 	if err == nil {
 		t.Fatal("expected error for empty token")
 	}
@@ -171,7 +172,7 @@ func TestDecodeAndPrint_TokenWithNestedObject(t *testing.T) {
 	)
 
 	var buf bytes.Buffer
-	err := decodeAndPrint(&buf, token)
+	err := decodeAndPrint(&buf, token, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -304,7 +305,7 @@ func TestDecodeAndPrint_TimestampsFormatted(t *testing.T) {
 	)
 
 	var buf bytes.Buffer
-	err := decodeAndPrint(&buf, token)
+	err := decodeAndPrint(&buf, token, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -513,7 +514,7 @@ func TestDecodeAndPrint_EndToEnd(t *testing.T) {
 		"SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
 
 	var buf bytes.Buffer
-	err := decodeAndPrint(&buf, token)
+	err := decodeAndPrint(&buf, token, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -550,7 +551,7 @@ func TestDecodeAndPrint_SectionOrder(t *testing.T) {
 	)
 
 	var buf bytes.Buffer
-	err := decodeAndPrint(&buf, token)
+	err := decodeAndPrint(&buf, token, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1885,5 +1886,122 @@ func TestLoadKey_JWKFromBase64(t *testing.T) {
 	}
 	if rsaPub.N.Cmp(priv.PublicKey.N) != 0 {
 		t.Error("loaded key from base64 JWK does not match original")
+	}
+}
+
+// --- JWS signature verification -----------------------------------------------
+
+// signJWT creates a signed JWT with the given claims and RSA private key.
+func signJWT(t *testing.T, key *rsa.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+	return signed
+}
+
+// signJWTWithHMAC creates a signed JWT using HMAC-SHA256 with the given symmetric key.
+func signJWTWithHMAC(t *testing.T, key []byte, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+	return signed
+}
+
+func TestDecodeAndPrint_SignatureValid_RSA(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	claims := jwt.MapClaims{"sub": "test", "iss": "jwtd"}
+	token := signJWT(t, key, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature message, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_SignatureValid_RSAPublicKey(t *testing.T) {
+	key := generateRSAKey(t)
+	pubKeyPath := writeRSAPublicKeyFile(t, &key.PublicKey)
+	claims := jwt.MapClaims{"sub": "test", "iss": "jwtd"}
+	token := signJWT(t, key, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, pubKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature message with public key, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_SignatureInvalid_WrongKey(t *testing.T) {
+	signingKey := generateRSAKey(t)
+	wrongKey := generateRSAKey(t)
+	wrongKeyPath := writeKeyFile(t, wrongKey)
+	claims := jwt.MapClaims{"sub": "test"}
+	token := signJWT(t, signingKey, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, wrongKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: INVALID") {
+		t.Errorf("expected invalid signature message, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_SignatureValid_HMAC(t *testing.T) {
+	symKey := make([]byte, 32)
+	if _, err := rand.Read(symKey); err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	b64Key := base64.StdEncoding.EncodeToString(symKey)
+	claims := jwt.MapClaims{"sub": "test"}
+	token := signJWTWithHMAC(t, symKey, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, b64Key)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature message for HMAC, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_NoKeyNoVerification(t *testing.T) {
+	key := generateRSAKey(t)
+	claims := jwt.MapClaims{"sub": "test"}
+	token := signJWT(t, key, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if strings.Contains(output, "Signature:") {
+		t.Errorf("should not show verification when no key provided, got:\n%s", output)
 	}
 }
