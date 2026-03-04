@@ -2005,3 +2005,36 @@ func TestDecodeAndPrint_NoKeyNoVerification(t *testing.T) {
 		t.Errorf("should not show verification when no key provided, got:\n%s", output)
 	}
 }
+
+// --- nested JWE-in-JWE -------------------------------------------------------
+
+func TestDecodeAndPrintJWE_NestedJWE(t *testing.T) {
+	// Create inner JWE encrypted with innerKey.
+	innerKey := make([]byte, 32)
+	if _, err := rand.Read(innerKey); err != nil {
+		t.Fatalf("generating inner key: %v", err)
+	}
+	innerJWE := encryptJWEGeneric(t, jose.A256KW, jose.A128CBC_HS256, innerKey, []byte(`{"secret":"nested"}`))
+
+	// Create outer JWE that wraps the inner JWE.
+	outerKey := generateRSAKey(t)
+	outerJWE := encryptJWE(t, outerKey, []byte(innerJWE))
+
+	outerKeyPath := writeKeyFile(t, outerKey)
+
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, outerJWE, outerKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	// Should detect the nested JWE and display its header.
+	if !strings.Contains(output, "nested JWE") {
+		t.Errorf("expected nested JWE detection, got:\n%s", output)
+	}
+	// Should show the inner JWE's protected header (A256KW algorithm).
+	if !strings.Contains(output, "A256KW") {
+		t.Errorf("expected inner JWE algorithm in output, got:\n%s", output)
+	}
+}

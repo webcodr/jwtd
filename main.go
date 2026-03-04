@@ -278,9 +278,18 @@ func decodedLen(s string) int {
 
 // printDecryptedPayload formats and prints the decrypted JWE plaintext.
 // If the plaintext is valid JSON, it is pretty-printed. If the plaintext
-// is itself a JWT, it is decoded and printed recursively.
+// is itself a JWT or JWE, it is decoded and printed recursively.
 func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byte) {
 	text := string(plaintext)
+
+	// Check if the decrypted payload is a nested JWE.
+	if isJWE(text) {
+		labelColor.Fprintln(w, "Decrypted Payload (nested JWE)")
+		fmt.Fprintln(w)
+		if err := decodeAndPrintJWE(w, text, ""); err == nil {
+			return
+		}
+	}
 
 	// Check if the decrypted payload is a nested JWT.
 	if strings.Count(text, ".") == 2 {
