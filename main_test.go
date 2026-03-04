@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -1748,5 +1749,141 @@ func TestLoadKey_PKCS1RSAPublicKeyFromPEMFile(t *testing.T) {
 	}
 	if rsaPub.N.Cmp(priv.PublicKey.N) != 0 {
 		t.Error("loaded PKCS1 RSA public key does not match original")
+	}
+}
+
+// --- JWK key loading ---------------------------------------------------------
+
+func TestLoadKey_RSAPrivateKeyFromJWKFile(t *testing.T) {
+	priv := generateRSAKey(t)
+	jwk := jose.JSONWebKey{Key: priv, KeyID: "test-rsa"}
+	data, err := json.Marshal(jwk)
+	if err != nil {
+		t.Fatalf("marshaling JWK: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "rsa-priv.jwk")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("writing JWK file: %v", err)
+	}
+
+	loaded, err := loadKey(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rsaKey, ok := loaded.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", loaded)
+	}
+	if rsaKey.N.Cmp(priv.N) != 0 {
+		t.Error("loaded RSA private key does not match original")
+	}
+}
+
+func TestLoadKey_RSAPublicKeyFromJWKFile(t *testing.T) {
+	priv := generateRSAKey(t)
+	jwk := jose.JSONWebKey{Key: &priv.PublicKey, KeyID: "test-rsa-pub"}
+	data, err := json.Marshal(jwk)
+	if err != nil {
+		t.Fatalf("marshaling JWK: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "rsa-pub.jwk")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("writing JWK file: %v", err)
+	}
+
+	loaded, err := loadKey(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rsaPub, ok := loaded.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+	if rsaPub.N.Cmp(priv.PublicKey.N) != 0 {
+		t.Error("loaded RSA public key does not match original")
+	}
+}
+
+func TestLoadKey_ECPrivateKeyFromJWKFile(t *testing.T) {
+	priv := generateECKey(t)
+	jwk := jose.JSONWebKey{Key: priv, KeyID: "test-ec"}
+	data, err := json.Marshal(jwk)
+	if err != nil {
+		t.Fatalf("marshaling JWK: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "ec-priv.jwk")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("writing JWK file: %v", err)
+	}
+
+	loaded, err := loadKey(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ecKey, ok := loaded.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", loaded)
+	}
+	if ecKey.X.Cmp(priv.X) != 0 || ecKey.Y.Cmp(priv.Y) != 0 {
+		t.Error("loaded EC key does not match original")
+	}
+}
+
+func TestLoadKey_JWKSetFirstKey(t *testing.T) {
+	priv1 := generateRSAKey(t)
+	priv2 := generateRSAKey(t)
+	jwks := jose.JSONWebKeySet{
+		Keys: []jose.JSONWebKey{
+			{Key: &priv1.PublicKey, KeyID: "key-1"},
+			{Key: &priv2.PublicKey, KeyID: "key-2"},
+		},
+	}
+	data, err := json.Marshal(jwks)
+	if err != nil {
+		t.Fatalf("marshaling JWK Set: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "jwks.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("writing JWK Set file: %v", err)
+	}
+
+	loaded, err := loadKey(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rsaPub, ok := loaded.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+	// Should return the first key from the set.
+	if rsaPub.N.Cmp(priv1.PublicKey.N) != 0 {
+		t.Error("loaded key does not match first key in JWK Set")
+	}
+}
+
+func TestLoadKey_JWKFromBase64(t *testing.T) {
+	priv := generateRSAKey(t)
+	jwk := jose.JSONWebKey{Key: &priv.PublicKey, KeyID: "test-b64"}
+	data, err := json.Marshal(jwk)
+	if err != nil {
+		t.Fatalf("marshaling JWK: %v", err)
+	}
+	b64 := base64.StdEncoding.EncodeToString(data)
+
+	loaded, err := loadKey(b64)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rsaPub, ok := loaded.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+	if rsaPub.N.Cmp(priv.PublicKey.N) != 0 {
+		t.Error("loaded key from base64 JWK does not match original")
 	}
 }

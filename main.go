@@ -288,9 +288,14 @@ func loadKey(keyStr string) (any, error) {
 	return decoded, nil
 }
 
-// parseKeyData attempts to parse key data as PEM or DER encoded key material.
-// Supports both private and public keys.
+// parseKeyData attempts to parse key data as JWK, JWK Set, PEM, or DER encoded
+// key material. Supports both private and public keys.
 func parseKeyData(data []byte) (any, error) {
+	// Try JWK / JWK Set (JSON-based formats).
+	if key, err := parseJWK(data); err == nil {
+		return key, nil
+	}
+
 	// Try PEM decoding.
 	block, _ := pem.Decode(data)
 	if block != nil {
@@ -352,6 +357,24 @@ func parseDERKey(der []byte, blockType string) (any, error) {
 		}
 		return nil, fmt.Errorf("unable to parse key from PEM block type %q", blockType)
 	}
+}
+
+// parseJWK attempts to parse data as a JWK (JSON Web Key) or JWK Set.
+// For a JWK Set, the first key is returned.
+func parseJWK(data []byte) (any, error) {
+	// Try single JWK.
+	var jwk jose.JSONWebKey
+	if err := json.Unmarshal(data, &jwk); err == nil && jwk.Key != nil {
+		return jwk.Key, nil
+	}
+
+	// Try JWK Set ({"keys": [...]}).
+	var jwks jose.JSONWebKeySet
+	if err := json.Unmarshal(data, &jwks); err == nil && len(jwks.Keys) > 0 {
+		return jwks.Keys[0].Key, nil
+	}
+
+	return nil, fmt.Errorf("not a valid JWK or JWK Set")
 }
 
 // allKeyAlgorithms returns all JWE key management algorithms supported by go-jose.
