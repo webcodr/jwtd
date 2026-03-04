@@ -2160,3 +2160,50 @@ func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 		t.Errorf("expected --key flag to override env var, got:\n%s", output)
 	}
 }
+
+// --- nested JWT inside JWE ---------------------------------------------------
+
+func TestDecodeAndPrintJWE_NestedJWT(t *testing.T) {
+	// Create a signed JWT.
+	signingKey := generateRSAKey(t)
+	claims := jwt.MapClaims{
+		"sub": "nested-jwt-test",
+		"iss": "jwtd",
+		"iat": float64(time.Now().Unix()),
+	}
+	innerJWT := signJWT(t, signingKey, claims)
+
+	// Encrypt the JWT inside a JWE.
+	encKey := generateRSAKey(t)
+	jweToken := encryptJWE(t, encKey, []byte(innerJWT))
+
+	encKeyPath := writeKeyFile(t, encKey)
+
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, jweToken, encKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+
+	// Should detect the nested JWT.
+	if !strings.Contains(output, "nested JWT") {
+		t.Errorf("expected 'nested JWT' label, got:\n%s", output)
+	}
+
+	// Should display the inner JWT header.
+	if !strings.Contains(output, "RS256") {
+		t.Errorf("expected inner JWT algorithm RS256, got:\n%s", output)
+	}
+
+	// Should display the inner JWT payload.
+	if !strings.Contains(output, "nested-jwt-test") {
+		t.Errorf("expected inner JWT subject claim, got:\n%s", output)
+	}
+
+	// Should display the inner JWT signature.
+	if !strings.Contains(output, "Signature") {
+		t.Errorf("expected inner JWT signature section, got:\n%s", output)
+	}
+}
