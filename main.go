@@ -289,6 +289,7 @@ func loadKey(keyStr string) (interface{}, error) {
 }
 
 // parseKeyData attempts to parse key data as PEM or DER encoded key material.
+// Supports both private and public keys.
 func parseKeyData(data []byte) (interface{}, error) {
 	// Try PEM decoding.
 	block, _ := pem.Decode(data)
@@ -296,7 +297,7 @@ func parseKeyData(data []byte) (interface{}, error) {
 		return parseDERKey(block.Bytes, block.Type)
 	}
 
-	// Try raw DER parsing.
+	// Try raw DER parsing (private keys).
 	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil {
 		return key, nil
 	}
@@ -307,10 +308,19 @@ func parseKeyData(data []byte) (interface{}, error) {
 		return key, nil
 	}
 
+	// Try raw DER parsing (public keys).
+	if key, err := x509.ParsePKIXPublicKey(data); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS1PublicKey(data); err == nil {
+		return key, nil
+	}
+
 	return nil, fmt.Errorf("unrecognized key format")
 }
 
 // parseDERKey parses DER-encoded key bytes based on the PEM block type.
+// Supports both private and public key PEM block types.
 func parseDERKey(der []byte, blockType string) (interface{}, error) {
 	switch blockType {
 	case "RSA PRIVATE KEY":
@@ -319,8 +329,12 @@ func parseDERKey(der []byte, blockType string) (interface{}, error) {
 		return x509.ParseECPrivateKey(der)
 	case "PRIVATE KEY":
 		return x509.ParsePKCS8PrivateKey(der)
+	case "PUBLIC KEY":
+		return x509.ParsePKIXPublicKey(der)
+	case "RSA PUBLIC KEY":
+		return x509.ParsePKCS1PublicKey(der)
 	default:
-		// Try all parsers.
+		// Try all parsers (private keys first, then public).
 		if key, err := x509.ParsePKCS8PrivateKey(der); err == nil {
 			return key, nil
 		}
@@ -328,6 +342,12 @@ func parseDERKey(der []byte, blockType string) (interface{}, error) {
 			return key, nil
 		}
 		if key, err := x509.ParseECPrivateKey(der); err == nil {
+			return key, nil
+		}
+		if key, err := x509.ParsePKIXPublicKey(der); err == nil {
+			return key, nil
+		}
+		if key, err := x509.ParsePKCS1PublicKey(der); err == nil {
 			return key, nil
 		}
 		return nil, fmt.Errorf("unable to parse key from PEM block type %q", blockType)

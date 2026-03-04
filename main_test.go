@@ -1625,3 +1625,128 @@ func TestLoadKey_SymmetricKeyFromFile(t *testing.T) {
 		t.Fatal("loaded key is nil")
 	}
 }
+
+// --- public key loading ------------------------------------------------------
+
+// writeRSAPublicKeyFile writes an RSA public key to a temp PEM file and returns the path.
+func writeRSAPublicKeyFile(t *testing.T, key *rsa.PublicKey) string {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(key)
+	if err != nil {
+		t.Fatalf("marshaling RSA public key: %v", err)
+	}
+	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
+	path := filepath.Join(t.TempDir(), "test-rsa-pub.pem")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating key file: %v", err)
+	}
+	defer f.Close()
+	if err := pem.Encode(f, block); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+	return path
+}
+
+// writeECPublicKeyFile writes an ECDSA public key to a temp PEM file and returns the path.
+func writeECPublicKeyFile(t *testing.T, key *ecdsa.PublicKey) string {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(key)
+	if err != nil {
+		t.Fatalf("marshaling EC public key: %v", err)
+	}
+	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
+	path := filepath.Join(t.TempDir(), "test-ec-pub.pem")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating key file: %v", err)
+	}
+	defer f.Close()
+	if err := pem.Encode(f, block); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+	return path
+}
+
+func TestLoadKey_RSAPublicKeyFromPEMFile(t *testing.T) {
+	priv := generateRSAKey(t)
+	keyPath := writeRSAPublicKeyFile(t, &priv.PublicKey)
+
+	loaded, err := loadKey(keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rsaPub, ok := loaded.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+	if rsaPub.N.Cmp(priv.PublicKey.N) != 0 {
+		t.Error("loaded RSA public key does not match original")
+	}
+}
+
+func TestLoadKey_ECPublicKeyFromPEMFile(t *testing.T) {
+	priv := generateECKey(t)
+	keyPath := writeECPublicKeyFile(t, &priv.PublicKey)
+
+	loaded, err := loadKey(keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ecPub, ok := loaded.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey, got %T", loaded)
+	}
+	if ecPub.X.Cmp(priv.PublicKey.X) != 0 || ecPub.Y.Cmp(priv.PublicKey.Y) != 0 {
+		t.Error("loaded EC public key does not match original")
+	}
+}
+
+func TestLoadKey_RSAPublicKeyFromBase64(t *testing.T) {
+	priv := generateRSAKey(t)
+	der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("marshaling public key: %v", err)
+	}
+	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
+	pemBytes := pem.EncodeToMemory(block)
+	b64 := base64.StdEncoding.EncodeToString(pemBytes)
+
+	loaded, err := loadKey(b64)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rsaPub, ok := loaded.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+	if rsaPub.N.Cmp(priv.PublicKey.N) != 0 {
+		t.Error("loaded RSA public key does not match original")
+	}
+}
+
+func TestLoadKey_PKCS1RSAPublicKeyFromPEMFile(t *testing.T) {
+	priv := generateRSAKey(t)
+	der := x509.MarshalPKCS1PublicKey(&priv.PublicKey)
+	block := &pem.Block{Type: "RSA PUBLIC KEY", Bytes: der}
+	path := filepath.Join(t.TempDir(), "test-rsa-pub-pkcs1.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+
+	loaded, err := loadKey(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rsaPub, ok := loaded.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+	if rsaPub.N.Cmp(priv.PublicKey.N) != 0 {
+		t.Error("loaded PKCS1 RSA public key does not match original")
+	}
+}
