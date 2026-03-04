@@ -68,10 +68,12 @@ func run(cmd *cobra.Command, args []string) error {
 
 	keyStr, _ := cmd.Flags().GetString("key")
 
+	w := os.Stdout
+
 	if isJWE(token) {
-		return decodeAndPrintJWE(token, keyStr)
+		return decodeAndPrintJWE(w, token, keyStr)
 	}
-	return decodeAndPrint(token)
+	return decodeAndPrint(w, token)
 }
 
 // readToken resolves the JWT string from arguments, stdin pipe, or interactive prompt.
@@ -119,7 +121,7 @@ func isJWE(token string) bool {
 }
 
 // decodeAndPrint parses the JWT and prints header, payload, and signature.
-func decodeAndPrint(tokenStr string) error {
+func decodeAndPrint(w io.Writer, tokenStr string) error {
 	parser := jwt.NewParser()
 	token, parts, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
 	if err != nil {
@@ -133,12 +135,12 @@ func decodeAndPrint(tokenStr string) error {
 
 	f := newFormatter()
 
-	printSection(f, "Header", token.Header)
-	fmt.Fprintln(os.Stdout)
+	printSection(w, f, "Header", token.Header)
+	fmt.Fprintln(w)
 	formatTimestamps(claims)
-	printSection(f, "Payload", map[string]interface{}(claims))
-	fmt.Fprintln(os.Stdout)
-	printSignature(parts[2])
+	printSection(w, f, "Payload", map[string]interface{}(claims))
+	fmt.Fprintln(w)
+	printSignature(w, parts[2])
 
 	return nil
 }
@@ -146,7 +148,7 @@ func decodeAndPrint(tokenStr string) error {
 // decodeAndPrintJWE parses a JWE token and prints its contents.
 // If keyStr is provided, the token is decrypted and the plaintext payload is displayed.
 // Otherwise, only the protected header and encrypted part metadata are shown.
-func decodeAndPrintJWE(tokenStr, keyStr string) error {
+func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	jwe, err := jose.ParseEncrypted(tokenStr, allKeyAlgorithms(), allContentEncryptions())
 	if err != nil {
 		return fmt.Errorf("parsing JWE: %w", err)
@@ -155,11 +157,11 @@ func decodeAndPrintJWE(tokenStr, keyStr string) error {
 	f := newFormatter()
 
 	header := jweHeaderMap(jwe)
-	printSection(f, "Protected Header", header)
+	printSection(w, f, "Protected Header", header)
 
 	if keyStr == "" {
-		fmt.Fprintln(os.Stdout)
-		printEncryptedParts(tokenStr)
+		fmt.Fprintln(w)
+		printEncryptedParts(w, tokenStr)
 		return nil
 	}
 
@@ -173,8 +175,8 @@ func decodeAndPrintJWE(tokenStr, keyStr string) error {
 		return fmt.Errorf("decrypting JWE: %w", err)
 	}
 
-	fmt.Fprintln(os.Stdout)
-	printDecryptedPayload(f, plaintext)
+	fmt.Fprintln(w)
+	printDecryptedPayload(w, f, plaintext)
 
 	return nil
 }
@@ -202,19 +204,19 @@ func jweHeaderMap(jwe *jose.JSONWebEncryption) map[string]interface{} {
 }
 
 // printEncryptedParts displays metadata about the encrypted JWE parts.
-func printEncryptedParts(tokenStr string) {
+func printEncryptedParts(w io.Writer, tokenStr string) {
 	parts := strings.SplitN(tokenStr, ".", 5)
 	if len(parts) != 5 {
 		return
 	}
 
-	labelColor.Fprintln(os.Stdout, "Encrypted Content")
-	dimColor.Fprintf(os.Stdout, "Encrypted Key : %d bytes\n", decodedLen(parts[1]))
-	dimColor.Fprintf(os.Stdout, "IV            : %d bytes\n", decodedLen(parts[2]))
-	dimColor.Fprintf(os.Stdout, "Ciphertext    : %d bytes\n", decodedLen(parts[3]))
-	dimColor.Fprintf(os.Stdout, "Auth Tag      : %d bytes\n", decodedLen(parts[4]))
-	fmt.Fprintln(os.Stdout)
-	dimColor.Fprintln(os.Stdout, "Use --key/-k to provide a decryption key")
+	labelColor.Fprintln(w, "Encrypted Content")
+	dimColor.Fprintf(w, "Encrypted Key : %d bytes\n", decodedLen(parts[1]))
+	dimColor.Fprintf(w, "IV            : %d bytes\n", decodedLen(parts[2]))
+	dimColor.Fprintf(w, "Ciphertext    : %d bytes\n", decodedLen(parts[3]))
+	dimColor.Fprintf(w, "Auth Tag      : %d bytes\n", decodedLen(parts[4]))
+	fmt.Fprintln(w)
+	dimColor.Fprintln(w, "Use --key/-k to provide a decryption key")
 }
 
 // decodedLen returns the byte length of a base64url-encoded string.
@@ -229,14 +231,14 @@ func decodedLen(s string) int {
 // printDecryptedPayload formats and prints the decrypted JWE plaintext.
 // If the plaintext is valid JSON, it is pretty-printed. If the plaintext
 // is itself a JWT, it is decoded and printed recursively.
-func printDecryptedPayload(f *prettyjson.Formatter, plaintext []byte) {
+func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byte) {
 	text := string(plaintext)
 
 	// Check if the decrypted payload is a nested JWT.
 	if strings.Count(text, ".") == 2 {
-		labelColor.Fprintln(os.Stdout, "Decrypted Payload (nested JWT)")
-		fmt.Fprintln(os.Stdout)
-		if err := decodeAndPrint(text); err == nil {
+		labelColor.Fprintln(w, "Decrypted Payload (nested JWT)")
+		fmt.Fprintln(w)
+		if err := decodeAndPrint(w, text); err == nil {
 			return
 		}
 	}
@@ -245,13 +247,13 @@ func printDecryptedPayload(f *prettyjson.Formatter, plaintext []byte) {
 	var data map[string]interface{}
 	if err := json.Unmarshal(plaintext, &data); err == nil {
 		formatTimestamps(data)
-		printSection(f, "Decrypted Payload", data)
+		printSection(w, f, "Decrypted Payload", data)
 		return
 	}
 
 	// Fall back to raw text output.
-	labelColor.Fprintln(os.Stdout, "Decrypted Payload")
-	fmt.Fprintln(os.Stdout, text)
+	labelColor.Fprintln(w, "Decrypted Payload")
+	fmt.Fprintln(w, text)
 }
 
 // loadKey reads a decryption key from either a file path or an inline base64 string.
@@ -385,19 +387,19 @@ func formatTimestamps(data map[string]interface{}) {
 }
 
 // printSection outputs a labeled, pretty-printed JSON section.
-func printSection(f *prettyjson.Formatter, label string, data map[string]interface{}) {
-	labelColor.Fprintln(os.Stdout, label)
+func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[string]interface{}) {
+	labelColor.Fprintln(w, label)
 
 	pretty, err := f.Marshal(data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error formatting %s: %v\n", label, err)
 		return
 	}
-	fmt.Fprintln(os.Stdout, string(pretty))
+	fmt.Fprintln(w, string(pretty))
 }
 
 // printSignature outputs the raw signature string in dimmed text.
-func printSignature(sig string) {
-	labelColor.Fprintln(os.Stdout, "Signature")
-	dimColor.Fprintln(os.Stdout, sig)
+func printSignature(w io.Writer, sig string) {
+	labelColor.Fprintln(w, "Signature")
+	dimColor.Fprintln(w, sig)
 }

@@ -27,6 +27,27 @@ func makeJWT(headerJSON, payloadJSON, sig string) string {
 	return h + "." + p + "." + sig
 }
 
+// stripANSI removes ANSI escape sequences from a string for easier assertion.
+func stripANSI(s string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\033' {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			i++ // skip the 'm'
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+// captureStdout is retained only for tests that exercise stdin-reading code paths
+// which still write to os.Stdout internally (e.g. readToken). For all other tests,
+// use a bytes.Buffer passed as io.Writer directly.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout
@@ -46,24 +67,6 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// stripANSI removes ANSI escape sequences from a string for easier assertion.
-func stripANSI(s string) string {
-	var b strings.Builder
-	i := 0
-	for i < len(s) {
-		if s[i] == '\033' {
-			for i < len(s) && s[i] != 'm' {
-				i++
-			}
-			i++ // skip the 'm'
-			continue
-		}
-		b.WriteByte(s[i])
-		i++
-	}
-	return b.String()
-}
-
 // --- decodeAndPrint ----------------------------------------------------------
 
 func TestDecodeAndPrint_ValidJWT(t *testing.T) {
@@ -73,13 +76,12 @@ func TestDecodeAndPrint_ValidJWT(t *testing.T) {
 		"test-signature",
 	)
 
-	output := captureStdout(t, func() {
-		if err := decodeAndPrint(token); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := decodeAndPrint(&buf, token); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	if !strings.Contains(plain, "Header") {
 		t.Error("output missing Header label")
@@ -119,7 +121,8 @@ func TestDecodeAndPrint_WrongPartCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := decodeAndPrint(tt.token)
+			var buf bytes.Buffer
+			err := decodeAndPrint(&buf, tt.token)
 			if err == nil {
 				t.Fatal("expected error for wrong part count")
 			}
@@ -132,7 +135,8 @@ func TestDecodeAndPrint_InvalidHeader(t *testing.T) {
 		base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"123"}`)) +
 		".sig"
 
-	err := decodeAndPrint(token)
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token)
 	if err == nil {
 		t.Fatal("expected error for invalid header")
 	}
@@ -143,14 +147,16 @@ func TestDecodeAndPrint_InvalidPayload(t *testing.T) {
 		".!!!." +
 		"sig"
 
-	err := decodeAndPrint(token)
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token)
 	if err == nil {
 		t.Fatal("expected error for invalid payload")
 	}
 }
 
 func TestDecodeAndPrint_EmptyToken(t *testing.T) {
-	err := decodeAndPrint("")
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, "")
 	if err == nil {
 		t.Fatal("expected error for empty token")
 	}
@@ -163,14 +169,13 @@ func TestDecodeAndPrint_TokenWithNestedObject(t *testing.T) {
 		"sig",
 	)
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrint(token)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 	if !strings.Contains(plain, "nested") {
 		t.Error("output missing nested key")
 	}
@@ -297,14 +302,13 @@ func TestDecodeAndPrint_TimestampsFormatted(t *testing.T) {
 		"sig",
 	)
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrint(token)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	if strings.Contains(plain, "1516239022") {
 		t.Error("output still contains raw iat/nbf timestamp")
@@ -382,11 +386,10 @@ func TestPrintSection_ContainsLabelAndData(t *testing.T) {
 		"typ": "JWT",
 	}
 
-	output := captureStdout(t, func() {
-		printSection(f, "Header", data)
-	})
+	var buf bytes.Buffer
+	printSection(&buf, f, "Header", data)
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	if !strings.HasPrefix(plain, "Header\n") {
 		t.Errorf("expected output to start with 'Header\\n', got: %q", plain[:min(len(plain), 20)])
@@ -409,11 +412,10 @@ func TestPrintSection_FormatsJSON(t *testing.T) {
 		"b": "two",
 	}
 
-	output := captureStdout(t, func() {
-		printSection(f, "Test", data)
-	})
+	var buf bytes.Buffer
+	printSection(&buf, f, "Test", data)
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	// Should be pretty-printed (multi-line with indentation)
 	lines := strings.Split(strings.TrimSpace(plain), "\n")
@@ -425,11 +427,10 @@ func TestPrintSection_FormatsJSON(t *testing.T) {
 // --- printSignature ----------------------------------------------------------
 
 func TestPrintSignature_Output(t *testing.T) {
-	output := captureStdout(t, func() {
-		printSignature("abc123sig")
-	})
+	var buf bytes.Buffer
+	printSignature(&buf, "abc123sig")
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	if !strings.Contains(plain, "Signature") {
 		t.Error("missing Signature label")
@@ -440,11 +441,10 @@ func TestPrintSignature_Output(t *testing.T) {
 }
 
 func TestPrintSignature_LabelsOnSeparateLines(t *testing.T) {
-	output := captureStdout(t, func() {
-		printSignature("mysig")
-	})
+	var buf bytes.Buffer
+	printSignature(&buf, "mysig")
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 	lines := strings.Split(strings.TrimSpace(plain), "\n")
 	if len(lines) != 2 {
 		t.Errorf("expected 2 lines, got %d: %v", len(lines), lines)
@@ -511,14 +511,13 @@ func TestDecodeAndPrint_EndToEnd(t *testing.T) {
 		"eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ." +
 		"SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrint(token)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	checks := []string{
 		`"alg"`,
@@ -549,14 +548,13 @@ func TestDecodeAndPrint_SectionOrder(t *testing.T) {
 		"sig",
 	)
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrint(token)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	headerIdx := strings.Index(plain, "Header")
 	payloadIdx := strings.Index(plain, "Payload")
@@ -735,14 +733,13 @@ func TestDecodeAndPrintJWE_HeaderOnly(t *testing.T) {
 	key := generateRSAKey(t)
 	token := encryptJWE(t, key, []byte(`{"sub":"user1","name":"Jane"}`))
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrintJWE(token, "")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	if !strings.Contains(plain, "Protected Header") {
 		t.Error("output missing Protected Header label")
@@ -772,14 +769,13 @@ func TestDecodeAndPrintJWE_WithDecryption(t *testing.T) {
 	token := encryptJWE(t, key, []byte(`{"sub":"user1","name":"Jane Doe"}`))
 	keyPath := writeKeyFile(t, key)
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrintJWE(token, keyPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	if !strings.Contains(plain, "Protected Header") {
 		t.Error("output missing Protected Header label")
@@ -800,14 +796,13 @@ func TestDecodeAndPrintJWE_WithTimestampFormatting(t *testing.T) {
 	token := encryptJWE(t, key, []byte(`{"sub":"user1","iat":1516239022}`))
 	keyPath := writeKeyFile(t, key)
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrintJWE(token, keyPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	if strings.Contains(plain, "1516239022") {
 		t.Error("output contains raw timestamp, should be formatted")
@@ -818,7 +813,8 @@ func TestDecodeAndPrintJWE_WithTimestampFormatting(t *testing.T) {
 }
 
 func TestDecodeAndPrintJWE_InvalidToken(t *testing.T) {
-	err := decodeAndPrintJWE("a.b.c.d.e", "")
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, "a.b.c.d.e", "")
 	if err == nil {
 		t.Fatal("expected error for invalid JWE token")
 	}
@@ -833,7 +829,8 @@ func TestDecodeAndPrintJWE_WrongKey(t *testing.T) {
 	token := encryptJWE(t, key, []byte(`{"sub":"user1"}`))
 	keyPath := writeKeyFile(t, wrongKey)
 
-	err := decodeAndPrintJWE(token, keyPath)
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, keyPath)
 	if err == nil {
 		t.Fatal("expected error when decrypting with wrong key")
 	}
@@ -847,14 +844,13 @@ func TestDecodeAndPrintJWE_NonJSONPayload(t *testing.T) {
 	token := encryptJWE(t, key, []byte("plain text content, not JSON"))
 	keyPath := writeKeyFile(t, key)
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrintJWE(token, keyPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	if !strings.Contains(plain, "Decrypted Payload") {
 		t.Error("output missing Decrypted Payload label")
@@ -963,11 +959,10 @@ func TestPrintEncryptedParts_ShowsAllParts(t *testing.T) {
 	key := generateRSAKey(t)
 	token := encryptJWE(t, key, []byte(`{"sub":"test"}`))
 
-	output := captureStdout(t, func() {
-		printEncryptedParts(token)
-	})
+	var buf bytes.Buffer
+	printEncryptedParts(&buf, token)
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	checks := []string{"Encrypted Key", "IV", "Ciphertext", "Auth Tag", "bytes"}
 	for _, check := range checks {
@@ -979,11 +974,10 @@ func TestPrintEncryptedParts_ShowsAllParts(t *testing.T) {
 
 func TestPrintEncryptedParts_WrongPartCount(t *testing.T) {
 	// Should not panic or produce output for non-5-part input.
-	output := captureStdout(t, func() {
-		printEncryptedParts("a.b.c")
-	})
-	if output != "" {
-		t.Errorf("expected no output for 3-part input, got: %q", output)
+	var buf bytes.Buffer
+	printEncryptedParts(&buf, "a.b.c")
+	if buf.String() != "" {
+		t.Errorf("expected no output for 3-part input, got: %q", buf.String())
 	}
 }
 
@@ -993,14 +987,13 @@ func TestDecodeAndPrintJWE_EndToEnd_HeaderOnly(t *testing.T) {
 	key := generateRSAKey(t)
 	token := encryptJWE(t, key, []byte(`{"sub":"e2e-test","role":"admin"}`))
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrintJWE(token, "")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	// Should show header but NOT decrypted content.
 	if !strings.Contains(plain, "Protected Header") {
@@ -1019,14 +1012,13 @@ func TestDecodeAndPrintJWE_EndToEnd_WithDecrypt(t *testing.T) {
 	token := encryptJWE(t, key, []byte(`{"sub":"e2e-test","role":"admin","iat":1700000000}`))
 	keyPath := writeKeyFile(t, key)
 
-	output := captureStdout(t, func() {
-		err := decodeAndPrintJWE(token, keyPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	plain := stripANSI(output)
+	plain := stripANSI(buf.String())
 
 	checks := []string{
 		"Protected Header",
@@ -1068,14 +1060,13 @@ func TestDecodeAndPrintJWE_RSAKeyAlgorithms(t *testing.T) {
 			key := generateRSAKey(t)
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"rsa-test"}`))
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, "")
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Protected Header") {
 				t.Error("output missing Protected Header")
 			}
@@ -1095,14 +1086,13 @@ func TestDecodeAndPrintJWE_RSAKeyAlgorithms(t *testing.T) {
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"rsa-test","role":"user"}`))
 			keyPath := writeKeyFile(t, key)
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, keyPath)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, keyPath)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1133,14 +1123,13 @@ func TestDecodeAndPrintJWE_ECDHESKeyAlgorithms(t *testing.T) {
 			key := generateECKey(t)
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"ec-test"}`))
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, "")
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Protected Header") {
 				t.Error("output missing Protected Header")
 			}
@@ -1157,14 +1146,13 @@ func TestDecodeAndPrintJWE_ECDHESKeyAlgorithms(t *testing.T) {
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"ec-test","data":"secret"}`))
 			keyPath := writeECKeyFile(t, key)
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, keyPath)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, keyPath)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1198,14 +1186,13 @@ func TestDecodeAndPrintJWE_AESKWKeyAlgorithms(t *testing.T) {
 			}
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, symKey, []byte(`{"sub":"aeskw-test"}`))
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, "")
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Protected Header") {
 				t.Error("output missing Protected Header")
 			}
@@ -1225,14 +1212,13 @@ func TestDecodeAndPrintJWE_AESKWKeyAlgorithms(t *testing.T) {
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, symKey, []byte(`{"sub":"aeskw-test","msg":"hello"}`))
 			b64Key := base64.StdEncoding.EncodeToString(symKey)
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, b64Key)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, b64Key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1266,14 +1252,13 @@ func TestDecodeAndPrintJWE_AESGCMKWKeyAlgorithms(t *testing.T) {
 			}
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A256GCM, symKey, []byte(`{"sub":"aesgcmkw-test"}`))
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, "")
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Protected Header") {
 				t.Error("output missing Protected Header")
 			}
@@ -1293,14 +1278,13 @@ func TestDecodeAndPrintJWE_AESGCMKWKeyAlgorithms(t *testing.T) {
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A256GCM, symKey, []byte(`{"sub":"aesgcmkw-test","status":"ok"}`))
 			b64Key := base64.StdEncoding.EncodeToString(symKey)
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, b64Key)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, b64Key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1331,14 +1315,13 @@ func TestDecodeAndPrintJWE_DirectKeyAgreement(t *testing.T) {
 			symKey := symmetricKeyForEnc(t, tt.enc)
 			token := encryptJWEGeneric(t, jose.DIRECT, tt.enc, symKey, []byte(`{"sub":"dir-test"}`))
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, "")
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Protected Header") {
 				t.Error("output missing Protected Header")
 			}
@@ -1355,14 +1338,13 @@ func TestDecodeAndPrintJWE_DirectKeyAgreement(t *testing.T) {
 			token := encryptJWEGeneric(t, jose.DIRECT, tt.enc, symKey, []byte(`{"sub":"dir-test","val":"direct"}`))
 			b64Key := base64.StdEncoding.EncodeToString(symKey)
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, b64Key)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, b64Key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1393,14 +1375,13 @@ func TestDecodeAndPrintJWE_PBES2KeyAlgorithms(t *testing.T) {
 		t.Run(tt.name+"/header_only", func(t *testing.T) {
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, password, []byte(`{"sub":"pbes2-test"}`))
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, "")
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Protected Header") {
 				t.Error("output missing Protected Header")
 			}
@@ -1417,14 +1398,13 @@ func TestDecodeAndPrintJWE_PBES2KeyAlgorithms(t *testing.T) {
 			// For PBES2, the "key" is the password passed as base64.
 			b64Password := base64.StdEncoding.EncodeToString(password)
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, b64Password)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, b64Password)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1459,14 +1439,13 @@ func TestDecodeAndPrintJWE_ContentEncryptionAlgorithms(t *testing.T) {
 			key := generateRSAKey(t)
 			token := encryptJWEGeneric(t, jose.RSA_OAEP, tt.enc, &key.PublicKey, []byte(`{"sub":"enc-test"}`))
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, "")
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Protected Header") {
 				t.Error("output missing Protected Header")
 			}
@@ -1483,14 +1462,13 @@ func TestDecodeAndPrintJWE_ContentEncryptionAlgorithms(t *testing.T) {
 			token := encryptJWEGeneric(t, jose.RSA_OAEP, tt.enc, &key.PublicKey, []byte(`{"sub":"enc-test","enc_alg":"tested"}`))
 			keyPath := writeKeyFile(t, key)
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, keyPath)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, keyPath)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1524,14 +1502,13 @@ func TestDecodeAndPrintJWE_ECDHES_WithAllContentEncryptions(t *testing.T) {
 				[]byte(`{"sub":"cross-test","msg":"combo"}`))
 			keyPath := writeECKeyFile(t, key)
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, keyPath)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, keyPath)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1569,14 +1546,13 @@ func TestDecodeAndPrintJWE_A256KW_WithAllContentEncryptions(t *testing.T) {
 			token := encryptJWEGeneric(t, jose.A256KW, tt.enc, symKey,
 				[]byte(`{"sub":"a256kw-combo","result":"success"}`))
 
-			output := captureStdout(t, func() {
-				err := decodeAndPrintJWE(token, b64Key)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			})
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, token, b64Key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			plain := stripANSI(output)
+			plain := stripANSI(buf.String())
 			if !strings.Contains(plain, "Decrypted Payload") {
 				t.Error("output missing Decrypted Payload")
 			}
@@ -1643,10 +1619,8 @@ func TestLoadKey_SymmetricKeyFromFile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Raw bytes that don't parse as PEM or DER should fail parseKeyData,
-	// but loadKey tries the file first. Since raw random bytes won't parse
-	// as any key format, loadKey falls back through to the base64 path.
-	// Let's verify we get something usable back.
+	// Raw bytes that don't parse as PEM or DER should be returned as-is
+	// (symmetric key fallback).
 	if loaded == nil {
 		t.Fatal("loaded key is nil")
 	}
