@@ -187,7 +187,7 @@ func TestDecodeAndPrint_TokenWithNestedObject(t *testing.T) {
 // --- formatTimestamps --------------------------------------------------------
 
 func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"iat": float64(1516239022),
 		"exp": float64(1716239022),
 		"nbf": float64(1516239022),
@@ -210,7 +210,7 @@ func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
 }
 
 func TestFormatTimestamps_NonTimestampFieldsUnchanged(t *testing.T) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"sub":  "1234567890",
 		"name": "John Doe",
 		"num":  float64(42),
@@ -230,7 +230,7 @@ func TestFormatTimestamps_NonTimestampFieldsUnchanged(t *testing.T) {
 }
 
 func TestFormatTimestamps_MixedFields(t *testing.T) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"sub": "user123",
 		"iat": float64(0),
 		"exp": float64(1700000000),
@@ -254,7 +254,7 @@ func TestFormatTimestamps_MixedFields(t *testing.T) {
 }
 
 func TestFormatTimestamps_NonNumericTimestampField(t *testing.T) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"iat": "not-a-number",
 	}
 
@@ -266,7 +266,7 @@ func TestFormatTimestamps_NonNumericTimestampField(t *testing.T) {
 }
 
 func TestFormatTimestamps_EmptyMap(t *testing.T) {
-	data := map[string]interface{}{}
+	data := map[string]any{}
 	formatTimestamps(data) // should not panic
 	if len(data) != 0 {
 		t.Errorf("empty map modified: %v", data)
@@ -274,7 +274,7 @@ func TestFormatTimestamps_EmptyMap(t *testing.T) {
 }
 
 func TestFormatTimestamps_OutputFormat(t *testing.T) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"iat": float64(1516239022),
 	}
 
@@ -338,7 +338,7 @@ func TestNewFormatter_ReturnsFormatter(t *testing.T) {
 
 func TestNewFormatter_MarshalContainsAllValues(t *testing.T) {
 	f := newFormatter()
-	data := map[string]interface{}{
+	data := map[string]any{
 		"key":  "value",
 		"num":  float64(42),
 		"flag": true,
@@ -362,7 +362,7 @@ func TestNewFormatter_MarshalContainsAllValues(t *testing.T) {
 
 func TestNewFormatter_IndentsOutput(t *testing.T) {
 	f := newFormatter()
-	data := map[string]interface{}{
+	data := map[string]any{
 		"key": "value",
 	}
 
@@ -381,7 +381,7 @@ func TestNewFormatter_IndentsOutput(t *testing.T) {
 
 func TestPrintSection_ContainsLabelAndData(t *testing.T) {
 	f := newFormatter()
-	data := map[string]interface{}{
+	data := map[string]any{
 		"alg": "HS256",
 		"typ": "JWT",
 	}
@@ -407,7 +407,7 @@ func TestPrintSection_ContainsLabelAndData(t *testing.T) {
 
 func TestPrintSection_FormatsJSON(t *testing.T) {
 	f := newFormatter()
-	data := map[string]interface{}{
+	data := map[string]any{
 		"a": float64(1),
 		"b": "two",
 	}
@@ -661,7 +661,7 @@ func writeSymmetricKeyFile(t *testing.T, key []byte) string {
 }
 
 // encryptJWEGeneric creates a JWE compact serialization with the given algorithms and key.
-func encryptJWEGeneric(t *testing.T, keyAlg jose.KeyAlgorithm, contentEnc jose.ContentEncryption, encryptionKey interface{}, plaintext []byte) string {
+func encryptJWEGeneric(t *testing.T, keyAlg jose.KeyAlgorithm, contentEnc jose.ContentEncryption, encryptionKey any, plaintext []byte) string {
 	t.Helper()
 	rcpt := jose.Recipient{Algorithm: keyAlg, Key: encryptionKey}
 	enc, err := jose.NewEncrypter(contentEnc, rcpt, nil)

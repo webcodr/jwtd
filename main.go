@@ -138,7 +138,7 @@ func decodeAndPrint(w io.Writer, tokenStr string) error {
 	printSection(w, f, "Header", token.Header)
 	fmt.Fprintln(w)
 	formatTimestamps(claims)
-	printSection(w, f, "Payload", map[string]interface{}(claims))
+	printSection(w, f, "Payload", map[string]any(claims))
 	fmt.Fprintln(w)
 	printSignature(w, parts[2])
 
@@ -182,9 +182,9 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 }
 
 // jweHeaderMap extracts the protected header from a JWE object as a map.
-func jweHeaderMap(jwe *jose.JSONWebEncryption) map[string]interface{} {
+func jweHeaderMap(jwe *jose.JSONWebEncryption) map[string]any {
 	h := jwe.Header
-	result := map[string]interface{}{}
+	result := map[string]any{}
 
 	if h.Algorithm != "" {
 		result["alg"] = h.Algorithm
@@ -244,7 +244,7 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 	}
 
 	// Try to parse as JSON and pretty-print.
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(plaintext, &data); err == nil {
 		formatTimestamps(data)
 		printSection(w, f, "Decrypted Payload", data)
@@ -259,7 +259,7 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 // loadKey reads a decryption key from either a file path or an inline base64 string.
 // It auto-detects the format: if the value looks like a file path (exists on disk),
 // it reads and parses the file; otherwise it treats it as a base64-encoded key.
-func loadKey(keyStr string) (interface{}, error) {
+func loadKey(keyStr string) (any, error) {
 	// Try as file path first.
 	if data, err := os.ReadFile(keyStr); err == nil {
 		if key, err := parseKeyData(data); err == nil {
@@ -290,7 +290,7 @@ func loadKey(keyStr string) (interface{}, error) {
 
 // parseKeyData attempts to parse key data as PEM or DER encoded key material.
 // Supports both private and public keys.
-func parseKeyData(data []byte) (interface{}, error) {
+func parseKeyData(data []byte) (any, error) {
 	// Try PEM decoding.
 	block, _ := pem.Decode(data)
 	if block != nil {
@@ -321,7 +321,7 @@ func parseKeyData(data []byte) (interface{}, error) {
 
 // parseDERKey parses DER-encoded key bytes based on the PEM block type.
 // Supports both private and public key PEM block types.
-func parseDERKey(der []byte, blockType string) (interface{}, error) {
+func parseDERKey(der []byte, blockType string) (any, error) {
 	switch blockType {
 	case "RSA PRIVATE KEY":
 		return x509.ParsePKCS1PrivateKey(der)
@@ -392,7 +392,7 @@ func allContentEncryptions() []jose.ContentEncryption {
 
 // formatTimestamps converts numeric Unix timestamp values for known JWT claims
 // into human-readable date strings. The map is modified in place.
-func formatTimestamps(data map[string]interface{}) {
+func formatTimestamps(data map[string]any) {
 	for key, val := range data {
 		if !timestampKeys[key] {
 			continue
@@ -407,7 +407,7 @@ func formatTimestamps(data map[string]interface{}) {
 }
 
 // printSection outputs a labeled, pretty-printed JSON section.
-func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[string]interface{}) {
+func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[string]any) {
 	labelColor.Fprintln(w, label)
 
 	pretty, err := f.Marshal(data)
