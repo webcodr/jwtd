@@ -70,6 +70,9 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	keyStr, _ := cmd.Flags().GetString("key")
+	if keyStr == "" {
+		keyStr = os.Getenv("JWTD_KEY")
+	}
 
 	w := os.Stdout
 

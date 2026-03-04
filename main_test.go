@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/spf13/cobra"
 )
 
 // helper to build a JWT from raw JSON header/payload and a signature string.
@@ -2036,5 +2037,126 @@ func TestDecodeAndPrintJWE_NestedJWE(t *testing.T) {
 	// Should show the inner JWE's protected header (A256KW algorithm).
 	if !strings.Contains(output, "A256KW") {
 		t.Errorf("expected inner JWE algorithm in output, got:\n%s", output)
+	}
+}
+
+// --- JWTD_KEY environment variable -------------------------------------------
+
+func TestRun_JWTDKeyEnvVar_JWEDecryption(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	token := encryptJWE(t, key, []byte(`{"sub":"env-test"}`))
+
+	t.Setenv("JWTD_KEY", keyPath)
+
+	rootCmd := &cobra.Command{
+		Use:  "jwtd [token]",
+		Args: cobra.MaximumNArgs(1),
+		RunE: run,
+	}
+	rootCmd.Flags().StringP("key", "k", "", "key")
+
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
+	rootCmd.SetArgs([]string{token})
+
+	// Capture stdout since run writes to os.Stdout.
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := rootCmd.Execute()
+
+	w.Close()
+	captured, _ := io.ReadAll(r)
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(string(captured))
+	if !strings.Contains(output, "env-test") {
+		t.Errorf("expected decrypted payload with env key, got:\n%s", output)
+	}
+}
+
+func TestRun_JWTDKeyEnvVar_JWSVerification(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	claims := jwt.MapClaims{"sub": "env-verify"}
+	token := signJWT(t, key, claims)
+
+	t.Setenv("JWTD_KEY", keyPath)
+
+	rootCmd := &cobra.Command{
+		Use:  "jwtd [token]",
+		Args: cobra.MaximumNArgs(1),
+		RunE: run,
+	}
+	rootCmd.Flags().StringP("key", "k", "", "key")
+
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
+	rootCmd.SetArgs([]string{token})
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := rootCmd.Execute()
+
+	w.Close()
+	captured, _ := io.ReadAll(r)
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(string(captured))
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature via env key, got:\n%s", output)
+	}
+}
+
+func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
+	signingKey := generateRSAKey(t)
+	wrongKey := generateRSAKey(t)
+	signingKeyPath := writeKeyFile(t, signingKey)
+	wrongKeyPath := writeKeyFile(t, wrongKey)
+	claims := jwt.MapClaims{"sub": "override-test"}
+	token := signJWT(t, signingKey, claims)
+
+	// Set env var to the wrong key.
+	t.Setenv("JWTD_KEY", wrongKeyPath)
+
+	rootCmd := &cobra.Command{
+		Use:  "jwtd [token]",
+		Args: cobra.MaximumNArgs(1),
+		RunE: run,
+	}
+	rootCmd.Flags().StringP("key", "k", "", "key")
+
+	rootCmd.SetArgs([]string{token, "--key", signingKeyPath})
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := rootCmd.Execute()
+
+	w.Close()
+	captured, _ := io.ReadAll(r)
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(string(captured))
+	// --key flag should take precedence over JWTD_KEY env var.
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected --key flag to override env var, got:\n%s", output)
 	}
 }
