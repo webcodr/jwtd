@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,12 +23,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// timestampKeys are JWT claims that contain Unix timestamps.
-var timestampKeys = map[string]bool{
-	"iat": true,
-	"exp": true,
-	"nbf": true,
-}
+var timestampKeyNames = []string{"iat", "exp", "nbf"}
 
 // Color definitions used for labels and signature output.
 var (
@@ -477,9 +473,10 @@ func allContentEncryptions() []jose.ContentEncryption {
 // into human-readable date strings. The map is modified in place.
 func formatTimestamps(data map[string]any) {
 	for key, val := range data {
-		if !timestampKeys[key] {
+		if !slices.Contains(timestampKeyNames, key) {
 			continue
 		}
+
 		num, ok := val.(float64)
 		if !ok {
 			continue
