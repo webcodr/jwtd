@@ -141,7 +141,7 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 	printSection(w, f, "Header", token.Header)
 	fmt.Fprintln(w)
 	formatTimestamps(claims)
-	printSection(w, f, "Payload", map[string]any(claims))
+	printSection(w, f, "Payload", claims)
 	fmt.Fprintln(w)
 	printSignature(w, parts[2])
 
