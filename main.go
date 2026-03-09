@@ -138,10 +138,14 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 
 	f := newFormatter()
 
-	printSection(w, f, "Header", token.Header)
+	if err := printSection(w, f, "Header", token.Header); err != nil {
+		return err
+	}
 	fmt.Fprintln(w)
 	formatTimestamps(claims)
-	printSection(w, f, "Payload", claims)
+	if err := printSection(w, f, "Payload", claims); err != nil {
+		return err
+	}
 	fmt.Fprintln(w)
 	printSignature(w, parts[2])
 
@@ -204,7 +208,9 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	f := newFormatter()
 
 	header := jweHeaderMap(jwe)
-	printSection(w, f, "Protected Header", header)
+	if err := printSection(w, f, "Protected Header", header); err != nil {
+		return err
+	}
 
 	if keyStr == "" {
 		fmt.Fprintln(w)
@@ -223,9 +229,7 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	}
 
 	fmt.Fprintln(w)
-	printDecryptedPayload(w, f, plaintext)
-
-	return nil
+	return printDecryptedPayload(w, f, plaintext)
 }
 
 // jweHeaderMap extracts the protected header from a JWE object as a map.
@@ -278,7 +282,7 @@ func decodedLen(s string) int {
 // printDecryptedPayload formats and prints the decrypted JWE plaintext.
 // If the plaintext is valid JSON, it is pretty-printed. If the plaintext
 // is itself a JWT or JWE, it is decoded and printed recursively.
-func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byte) {
+func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byte) error {
 	text := string(plaintext)
 
 	// Check if the decrypted payload is a nested JWE.
@@ -286,7 +290,7 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 		labelColor.Fprintln(w, "Decrypted Payload (nested JWE)")
 		fmt.Fprintln(w)
 		if err := decodeAndPrintJWE(w, text, ""); err == nil {
-			return
+			return nil
 		}
 	}
 
@@ -295,7 +299,7 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 		labelColor.Fprintln(w, "Decrypted Payload (nested JWT)")
 		fmt.Fprintln(w)
 		if err := decodeAndPrint(w, text, ""); err == nil {
-			return
+			return nil
 		}
 	}
 
@@ -303,13 +307,13 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 	var data map[string]any
 	if err := json.Unmarshal(plaintext, &data); err == nil {
 		formatTimestamps(data)
-		printSection(w, f, "Decrypted Payload", data)
-		return
+		return printSection(w, f, "Decrypted Payload", data)
 	}
 
 	// Fall back to raw text output.
 	labelColor.Fprintln(w, "Decrypted Payload")
 	fmt.Fprintln(w, text)
+	return nil
 }
 
 // loadKey reads a decryption key from either a file path or an inline base64 string.
@@ -487,15 +491,15 @@ func formatTimestamps(data map[string]any) {
 }
 
 // printSection outputs a labeled, pretty-printed JSON section.
-func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[string]any) {
+func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[string]any) error {
 	labelColor.Fprintln(w, label)
 
 	pretty, err := f.Marshal(data)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error formatting %s: %v\n", label, err)
-		return
+		return fmt.Errorf("formatting %s: %w", label, err)
 	}
 	fmt.Fprintln(w, string(pretty))
+	return nil
 }
 
 // printSignature outputs the raw signature string in dimmed text.
