@@ -101,19 +101,23 @@ func readToken(args []string) (string, error) {
 }
 
 // readInteractive prompts the user for a token using readline.
-func readInteractive() (string, error) {
+func readInteractive() (token string, err error) {
 	rl, err := readline.New("Enter JWT/JWE: ")
 	if err != nil {
 		return "", fmt.Errorf("initializing readline: %w", err)
 	}
-	defer rl.Close()
+	defer func() {
+		if cerr := rl.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("closing readline: %w", cerr)
+		}
+	}()
 
 	line, err := rl.Readline()
 	if err != nil {
 		return "", fmt.Errorf("reading input: %w", err)
 	}
 
-	token := strings.TrimSpace(line)
+	token = strings.TrimSpace(line)
 	if token == "" {
 		return "", fmt.Errorf("no token provided")
 	}
@@ -145,16 +149,24 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 	if err := printSection(w, f, "Header", token.Header); err != nil {
 		return err
 	}
-	fmt.Fprintln(w)
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
 	formatTimestamps(claims)
 	if err := printSection(w, f, "Payload", claims); err != nil {
 		return err
 	}
-	fmt.Fprintln(w)
-	printSignature(w, parts[2])
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if err := printSignature(w, parts[2]); err != nil {
+		return err
+	}
 
 	if keyStr != "" {
-		fmt.Fprintln(w)
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
 		if err := verifySignature(w, tokenStr, keyStr); err != nil {
 			return err
 		}
@@ -179,12 +191,14 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	})
 
 	if err != nil {
-		color.New(color.FgRed, color.Bold).Fprintln(w, "Signature: INVALID")
-		dimColor.Fprintf(w, "  %v\n", err)
-	} else {
-		color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
+		if _, werr := color.New(color.FgRed, color.Bold).Fprintln(w, "Signature: INVALID"); werr != nil {
+			return werr
+		}
+		_, werr := dimColor.Fprintf(w, "  %v\n", err)
+		return werr
 	}
-	return nil
+	_, werr := color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
+	return werr
 }
 
 // publicKeyForVerification extracts the public key from asymmetric private keys.
@@ -219,9 +233,10 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	}
 
 	if keyStr == "" {
-		fmt.Fprintln(w)
-		printEncryptedParts(w, tokenStr)
-		return nil
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+		return printEncryptedParts(w, tokenStr)
 	}
 
 	key, err := loadKey(keyStr)
@@ -234,7 +249,9 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 		return fmt.Errorf("decrypting JWE: %w", err)
 	}
 
-	fmt.Fprintln(w)
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
 	return printDecryptedPayload(w, f, plaintext)
 }
 
@@ -261,19 +278,32 @@ func jweHeaderMap(jwe *jose.JSONWebEncryption) map[string]any {
 }
 
 // printEncryptedParts displays metadata about the encrypted JWE parts.
-func printEncryptedParts(w io.Writer, tokenStr string) {
+func printEncryptedParts(w io.Writer, tokenStr string) error {
 	parts := strings.SplitN(tokenStr, ".", 5)
 	if len(parts) != 5 {
-		return
+		return nil
 	}
 
-	labelColor.Fprintln(w, "Encrypted Content")
-	dimColor.Fprintf(w, "Encrypted Key : %d bytes\n", decodedLen(parts[1]))
-	dimColor.Fprintf(w, "IV            : %d bytes\n", decodedLen(parts[2]))
-	dimColor.Fprintf(w, "Ciphertext    : %d bytes\n", decodedLen(parts[3]))
-	dimColor.Fprintf(w, "Auth Tag      : %d bytes\n", decodedLen(parts[4]))
-	fmt.Fprintln(w)
-	dimColor.Fprintln(w, "Use --key/-k to provide a decryption key")
+	if _, err := labelColor.Fprintln(w, "Encrypted Content"); err != nil {
+		return err
+	}
+	if _, err := dimColor.Fprintf(w, "Encrypted Key : %d bytes\n", decodedLen(parts[1])); err != nil {
+		return err
+	}
+	if _, err := dimColor.Fprintf(w, "IV            : %d bytes\n", decodedLen(parts[2])); err != nil {
+		return err
+	}
+	if _, err := dimColor.Fprintf(w, "Ciphertext    : %d bytes\n", decodedLen(parts[3])); err != nil {
+		return err
+	}
+	if _, err := dimColor.Fprintf(w, "Auth Tag      : %d bytes\n", decodedLen(parts[4])); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	_, err := dimColor.Fprintln(w, "Use --key/-k to provide a decryption key")
+	return err
 }
 
 // decodedLen returns the byte length of a base64url-encoded string.
@@ -293,8 +323,12 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 
 	// Check if the decrypted payload is a nested JWE.
 	if isJWE(text) {
-		labelColor.Fprintln(w, "Decrypted Payload (nested JWE)")
-		fmt.Fprintln(w)
+		if _, err := labelColor.Fprintln(w, "Decrypted Payload (nested JWE)"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
 		if err := decodeAndPrintJWE(w, text, ""); err == nil {
 			return nil
 		}
@@ -302,8 +336,12 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 
 	// Check if the decrypted payload is a nested JWT.
 	if strings.Count(text, ".") == 2 {
-		labelColor.Fprintln(w, "Decrypted Payload (nested JWT)")
-		fmt.Fprintln(w)
+		if _, err := labelColor.Fprintln(w, "Decrypted Payload (nested JWT)"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
 		if err := decodeAndPrint(w, text, ""); err == nil {
 			return nil
 		}
@@ -319,19 +357,23 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 	// Try to parse as JSON array and pretty-print.
 	var arr []any
 	if err := json.Unmarshal(plaintext, &arr); err == nil {
-		labelColor.Fprintln(w, "Decrypted Payload")
+		if _, err := labelColor.Fprintln(w, "Decrypted Payload"); err != nil {
+			return err
+		}
 		pretty, err := f.Marshal(arr)
 		if err != nil {
 			return fmt.Errorf("formatting Decrypted Payload: %w", err)
 		}
-		fmt.Fprintln(w, string(pretty))
-		return nil
+		_, err = fmt.Fprintln(w, string(pretty))
+		return err
 	}
 
 	// Fall back to raw text output.
-	labelColor.Fprintln(w, "Decrypted Payload")
-	fmt.Fprintln(w, text)
-	return nil
+	if _, err := labelColor.Fprintln(w, "Decrypted Payload"); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(w, text)
+	return err
 }
 
 // loadKey reads a decryption key from either a file path or an inline base64 string.
@@ -507,18 +549,23 @@ func formatTimestamps(data map[string]any) {
 
 // printSection outputs a labeled, pretty-printed JSON section.
 func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[string]any) error {
-	labelColor.Fprintln(w, label)
+	if _, err := labelColor.Fprintln(w, label); err != nil {
+		return err
+	}
 
 	pretty, err := f.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("formatting %s: %w", label, err)
 	}
-	fmt.Fprintln(w, string(pretty))
-	return nil
+	_, err = fmt.Fprintln(w, string(pretty))
+	return err
 }
 
 // printSignature outputs the raw signature string in dimmed text.
-func printSignature(w io.Writer, sig string) {
-	labelColor.Fprintln(w, "Signature")
-	dimColor.Fprintln(w, sig)
+func printSignature(w io.Writer, sig string) error {
+	if _, err := labelColor.Fprintln(w, "Signature"); err != nil {
+		return err
+	}
+	_, err := dimColor.Fprintln(w, sig)
+	return err
 }
