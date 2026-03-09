@@ -155,18 +155,19 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 
 	if keyStr != "" {
 		fmt.Fprintln(w)
-		verifySignature(w, tokenStr, keyStr)
+		if err := verifySignature(w, tokenStr, keyStr); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
 // verifySignature verifies a JWT signature using the provided key and prints the result.
-func verifySignature(w io.Writer, tokenStr, keyStr string) {
+func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	key, err := loadKey(keyStr)
 	if err != nil {
-		dimColor.Fprintf(w, "Signature verification: error loading key: %v\n", err)
-		return
+		return fmt.Errorf("signature verification: error loading key: %w", err)
 	}
 
 	// Extract the public key from private keys for verification.
@@ -183,6 +184,7 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) {
 	} else {
 		color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
 	}
+	return nil
 }
 
 // publicKeyForVerification extracts the public key from asymmetric private keys.
