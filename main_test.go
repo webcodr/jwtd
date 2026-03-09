@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -11,7 +12,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,28 +46,6 @@ func stripANSI(s string) string {
 		i++
 	}
 	return b.String()
-}
-
-// captureStdout is retained only for tests that exercise stdin-reading code paths
-// which still write to os.Stdout internally (e.g. readToken). For all other tests,
-// use a bytes.Buffer passed as io.Writer directly.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("creating pipe: %v", err)
-	}
-	os.Stdout = w
-
-	fn()
-
-	w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	return buf.String()
 }
 
 // --- decodeAndPrint ----------------------------------------------------------
@@ -198,7 +176,7 @@ func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
 
 	formatTimestamps(data)
 
-	expected := time.Unix(1516239022, 0).UTC().Format(time.RFC3339)
+	expected := fmt.Sprintf("%s (%d)", time.Unix(1516239022, 0).UTC().Format(time.RFC3339), 1516239022)
 	if data["iat"] != expected {
 		t.Errorf("iat: expected %q, got %v", expected, data["iat"])
 	}
@@ -206,7 +184,7 @@ func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
 		t.Errorf("nbf: expected %q, got %v", expected, data["nbf"])
 	}
 
-	expectedExp := time.Unix(1716239022, 0).UTC().Format(time.RFC3339)
+	expectedExp := fmt.Sprintf("%s (%d)", time.Unix(1716239022, 0).UTC().Format(time.RFC3339), 1716239022)
 	if data["exp"] != expectedExp {
 		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
 	}
@@ -245,12 +223,12 @@ func TestFormatTimestamps_MixedFields(t *testing.T) {
 		t.Errorf("sub changed: %v", data["sub"])
 	}
 
-	expectedIat := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	expectedIat := fmt.Sprintf("%s (%d)", time.Unix(0, 0).UTC().Format(time.RFC3339), 0)
 	if data["iat"] != expectedIat {
 		t.Errorf("iat: expected %q, got %v", expectedIat, data["iat"])
 	}
 
-	expectedExp := time.Unix(1700000000, 0).UTC().Format(time.RFC3339)
+	expectedExp := fmt.Sprintf("%s (%d)", time.Unix(1700000000, 0).UTC().Format(time.RFC3339), 1700000000)
 	if data["exp"] != expectedExp {
 		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
 	}
@@ -288,13 +266,16 @@ func TestFormatTimestamps_OutputFormat(t *testing.T) {
 		t.Fatalf("iat should be a string after formatting, got %T", data["iat"])
 	}
 
-	_, err := time.Parse(time.RFC3339, val)
-	if err != nil {
-		t.Errorf("iat is not valid RFC3339: %v", err)
+	if !strings.Contains(val, "2018-01-18T01:30:22Z") {
+		t.Errorf("expected RFC3339 date in output, got %s", val)
 	}
 
-	if val != "2018-01-18T01:30:22Z" {
-		t.Errorf("expected 2018-01-18T01:30:22Z, got %s", val)
+	if !strings.Contains(val, "1516239022") {
+		t.Errorf("expected original epoch in output, got %s", val)
+	}
+
+	if val != "2018-01-18T01:30:22Z (1516239022)" {
+		t.Errorf("expected '2018-01-18T01:30:22Z (1516239022)', got %s", val)
 	}
 }
 
@@ -313,17 +294,17 @@ func TestDecodeAndPrint_TimestampsFormatted(t *testing.T) {
 
 	plain := stripANSI(buf.String())
 
-	if strings.Contains(plain, "1516239022") {
-		t.Error("output still contains raw iat/nbf timestamp")
-	}
-	if strings.Contains(plain, "1716239022") {
-		t.Error("output still contains raw exp timestamp")
-	}
 	if !strings.Contains(plain, "2018-01-18T01:30:22Z") {
 		t.Error("output missing formatted iat/nbf date")
 	}
 	if !strings.Contains(plain, "2024-05-20T") {
 		t.Error("output missing formatted exp date")
+	}
+	if !strings.Contains(plain, "(1516239022)") {
+		t.Error("output missing original iat/nbf epoch value")
+	}
+	if !strings.Contains(plain, "(1716239022)") {
+		t.Error("output missing original exp epoch value")
 	}
 }
 
@@ -807,11 +788,11 @@ func TestDecodeAndPrintJWE_WithTimestampFormatting(t *testing.T) {
 
 	plain := stripANSI(buf.String())
 
-	if strings.Contains(plain, "1516239022") {
-		t.Error("output contains raw timestamp, should be formatted")
-	}
 	if !strings.Contains(plain, "2018-01-18T01:30:22Z") {
 		t.Error("output missing formatted timestamp")
+	}
+	if !strings.Contains(plain, "(1516239022)") {
+		t.Error("output missing original epoch value in formatted timestamp")
 	}
 }
 
@@ -860,6 +841,34 @@ func TestDecodeAndPrintJWE_NonJSONPayload(t *testing.T) {
 	}
 	if !strings.Contains(plain, "plain text content") {
 		t.Error("output missing plaintext content")
+	}
+}
+
+func TestDecodeAndPrintJWE_JSONArrayPayload(t *testing.T) {
+	key := generateRSAKey(t)
+	token := encryptJWE(t, key, []byte(`[{"id":1,"name":"first"},{"id":2,"name":"second"}]`))
+	keyPath := writeKeyFile(t, key)
+
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	plain := stripANSI(buf.String())
+
+	if !strings.Contains(plain, "Decrypted Payload") {
+		t.Error("output missing Decrypted Payload label")
+	}
+	if !strings.Contains(plain, "first") {
+		t.Error("output missing first array element value")
+	}
+	if !strings.Contains(plain, "second") {
+		t.Error("output missing second array element value")
+	}
+	// Should be pretty-printed, not raw.
+	if !strings.Contains(plain, `"id"`) {
+		t.Error("output missing pretty-printed key")
 	}
 }
 
@@ -942,7 +951,7 @@ func TestJweHeaderMap_ExtractsAlgorithm(t *testing.T) {
 	key := generateRSAKey(t)
 	token := encryptJWE(t, key, []byte(`{"sub":"test"}`))
 
-	jwe, err := jose.ParseEncrypted(token, allKeyAlgorithms(), allContentEncryptions())
+	jwe, err := jose.ParseEncrypted(token, allKeyAlgorithms, allContentEncryptions)
 	if err != nil {
 		t.Fatalf("parsing JWE: %v", err)
 	}
@@ -1039,9 +1048,9 @@ func TestDecodeAndPrintJWE_EndToEnd_WithDecrypt(t *testing.T) {
 		}
 	}
 
-	// Timestamp should be formatted.
-	if strings.Contains(plain, "1700000000") {
-		t.Error("output contains raw timestamp")
+	// Timestamp should be formatted with original epoch value.
+	if !strings.Contains(plain, "(1700000000)") {
+		t.Error("output missing original epoch value in formatted timestamp")
 	}
 }
 
@@ -1990,6 +1999,108 @@ func TestDecodeAndPrint_SignatureValid_HMAC(t *testing.T) {
 	}
 }
 
+// generateEd25519Key creates a fresh Ed25519 key pair for testing.
+func generateEd25519Key(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating Ed25519 key: %v", err)
+	}
+	return priv
+}
+
+// writeEd25519KeyFile writes an Ed25519 private key to a temp PEM file and returns the path.
+func writeEd25519KeyFile(t *testing.T, key ed25519.PrivateKey) string {
+	t.Helper()
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshaling Ed25519 key: %v", err)
+	}
+	block := &pem.Block{Type: "PRIVATE KEY", Bytes: der}
+	path := filepath.Join(t.TempDir(), "test-ed25519-key.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+	return path
+}
+
+// signJWTWithEd25519 creates a signed JWT using Ed25519 with the given private key.
+func signJWTWithEd25519(t *testing.T, key ed25519.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+	return signed
+}
+
+func TestDecodeAndPrint_SignatureValid_Ed25519(t *testing.T) {
+	key := generateEd25519Key(t)
+	keyPath := writeEd25519KeyFile(t, key)
+	claims := jwt.MapClaims{"sub": "test", "iss": "jwtd"}
+	token := signJWTWithEd25519(t, key, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature message for Ed25519, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_SignatureValid_Ed25519PublicKey(t *testing.T) {
+	key := generateEd25519Key(t)
+	claims := jwt.MapClaims{"sub": "test", "iss": "jwtd"}
+	token := signJWTWithEd25519(t, key, claims)
+
+	// Write only the public key to a file.
+	pub := key.Public().(ed25519.PublicKey)
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatalf("marshaling Ed25519 public key: %v", err)
+	}
+	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
+	pubKeyPath := filepath.Join(t.TempDir(), "test-ed25519-pub.pem")
+	if err := os.WriteFile(pubKeyPath, pem.EncodeToMemory(block), 0600); err != nil {
+		t.Fatalf("writing public key file: %v", err)
+	}
+
+	var buf bytes.Buffer
+	err = decodeAndPrint(&buf, token, pubKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature with Ed25519 public key, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_SignatureInvalid_WrongEd25519Key(t *testing.T) {
+	signingKey := generateEd25519Key(t)
+	wrongKey := generateEd25519Key(t)
+	wrongKeyPath := writeEd25519KeyFile(t, wrongKey)
+	claims := jwt.MapClaims{"sub": "test"}
+	token := signJWTWithEd25519(t, signingKey, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, wrongKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: INVALID") {
+		t.Errorf("expected invalid signature message for wrong Ed25519 key, got:\n%s", output)
+	}
+}
+
 func TestDecodeAndPrint_NoKeyNoVerification(t *testing.T) {
 	key := generateRSAKey(t)
 	claims := jwt.MapClaims{"sub": "test"}
@@ -2060,22 +2171,12 @@ func TestRun_JWTDKeyEnvVar_JWEDecryption(t *testing.T) {
 	rootCmd.SetOut(&buf)
 	rootCmd.SetArgs([]string{token})
 
-	// Capture stdout since run writes to os.Stdout.
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	err := rootCmd.Execute()
-
-	w.Close()
-	captured, _ := io.ReadAll(r)
-	os.Stdout = oldStdout
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	output := stripANSI(string(captured))
+	output := stripANSI(buf.String())
 	if !strings.Contains(output, "env-test") {
 		t.Errorf("expected decrypted payload with env key, got:\n%s", output)
 	}
@@ -2100,21 +2201,12 @@ func TestRun_JWTDKeyEnvVar_JWSVerification(t *testing.T) {
 	rootCmd.SetOut(&buf)
 	rootCmd.SetArgs([]string{token})
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	err := rootCmd.Execute()
-
-	w.Close()
-	captured, _ := io.ReadAll(r)
-	os.Stdout = oldStdout
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	output := stripANSI(string(captured))
+	output := stripANSI(buf.String())
 	if !strings.Contains(output, "Signature: VALID") {
 		t.Errorf("expected valid signature via env key, got:\n%s", output)
 	}
@@ -2138,23 +2230,16 @@ func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 	}
 	rootCmd.Flags().StringP("key", "k", "", "key")
 
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
 	rootCmd.SetArgs([]string{token, "--key", signingKeyPath})
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	err := rootCmd.Execute()
-
-	w.Close()
-	captured, _ := io.ReadAll(r)
-	os.Stdout = oldStdout
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	output := stripANSI(string(captured))
+	output := stripANSI(buf.String())
 	// --key flag should take precedence over JWTD_KEY env var.
 	if !strings.Contains(output, "Signature: VALID") {
 		t.Errorf("expected --key flag to override env var, got:\n%s", output)
