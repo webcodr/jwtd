@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -1992,6 +1993,108 @@ func TestDecodeAndPrint_SignatureValid_HMAC(t *testing.T) {
 	output := stripANSI(buf.String())
 	if !strings.Contains(output, "Signature: VALID") {
 		t.Errorf("expected valid signature message for HMAC, got:\n%s", output)
+	}
+}
+
+// generateEd25519Key creates a fresh Ed25519 key pair for testing.
+func generateEd25519Key(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating Ed25519 key: %v", err)
+	}
+	return priv
+}
+
+// writeEd25519KeyFile writes an Ed25519 private key to a temp PEM file and returns the path.
+func writeEd25519KeyFile(t *testing.T, key ed25519.PrivateKey) string {
+	t.Helper()
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshaling Ed25519 key: %v", err)
+	}
+	block := &pem.Block{Type: "PRIVATE KEY", Bytes: der}
+	path := filepath.Join(t.TempDir(), "test-ed25519-key.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+	return path
+}
+
+// signJWTWithEd25519 creates a signed JWT using Ed25519 with the given private key.
+func signJWTWithEd25519(t *testing.T, key ed25519.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+	return signed
+}
+
+func TestDecodeAndPrint_SignatureValid_Ed25519(t *testing.T) {
+	key := generateEd25519Key(t)
+	keyPath := writeEd25519KeyFile(t, key)
+	claims := jwt.MapClaims{"sub": "test", "iss": "jwtd"}
+	token := signJWTWithEd25519(t, key, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature message for Ed25519, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_SignatureValid_Ed25519PublicKey(t *testing.T) {
+	key := generateEd25519Key(t)
+	claims := jwt.MapClaims{"sub": "test", "iss": "jwtd"}
+	token := signJWTWithEd25519(t, key, claims)
+
+	// Write only the public key to a file.
+	pub := key.Public().(ed25519.PublicKey)
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatalf("marshaling Ed25519 public key: %v", err)
+	}
+	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
+	pubKeyPath := filepath.Join(t.TempDir(), "test-ed25519-pub.pem")
+	if err := os.WriteFile(pubKeyPath, pem.EncodeToMemory(block), 0600); err != nil {
+		t.Fatalf("writing public key file: %v", err)
+	}
+
+	var buf bytes.Buffer
+	err = decodeAndPrint(&buf, token, pubKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature with Ed25519 public key, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_SignatureInvalid_WrongEd25519Key(t *testing.T) {
+	signingKey := generateEd25519Key(t)
+	wrongKey := generateEd25519Key(t)
+	wrongKeyPath := writeEd25519KeyFile(t, wrongKey)
+	claims := jwt.MapClaims{"sub": "test"}
+	token := signJWTWithEd25519(t, signingKey, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, wrongKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: INVALID") {
+		t.Errorf("expected invalid signature message for wrong Ed25519 key, got:\n%s", output)
 	}
 }
 
