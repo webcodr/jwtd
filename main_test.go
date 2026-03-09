@@ -919,7 +919,7 @@ func TestJweHeaderMap_ExtractsAlgorithm(t *testing.T) {
 	key := generateRSAKey(t)
 	token := encryptJWE(t, key, []byte(`{"sub":"test"}`))
 
-	jwe, err := jose.ParseEncrypted(token, allKeyAlgorithms(), allContentEncryptions())
+	jwe, err := jose.ParseEncrypted(token, allKeyAlgorithms, allContentEncryptions)
 	if err != nil {
 		t.Fatalf("parsing JWE: %v", err)
 	}

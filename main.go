@@ -204,7 +204,7 @@ func publicKeyForVerification(key any) any {
 // If keyStr is provided, the token is decrypted and the plaintext payload is displayed.
 // Otherwise, only the protected header and encrypted part metadata are shown.
 func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
-	jwe, err := jose.ParseEncrypted(tokenStr, allKeyAlgorithms(), allContentEncryptions())
+	jwe, err := jose.ParseEncrypted(tokenStr, allKeyAlgorithms, allContentEncryptions)
 	if err != nil {
 		return fmt.Errorf("parsing JWE: %w", err)
 	}
@@ -441,40 +441,36 @@ func parseJWK(data []byte) (any, error) {
 	return nil, fmt.Errorf("not a valid JWK or JWK Set")
 }
 
-// allKeyAlgorithms returns all JWE key management algorithms supported by go-jose.
-func allKeyAlgorithms() []jose.KeyAlgorithm {
-	return []jose.KeyAlgorithm{
-		jose.ED25519,
-		jose.RSA1_5,
-		jose.RSA_OAEP,
-		jose.RSA_OAEP_256,
-		jose.A128KW,
-		jose.A192KW,
-		jose.A256KW,
-		jose.DIRECT,
-		jose.ECDH_ES,
-		jose.ECDH_ES_A128KW,
-		jose.ECDH_ES_A192KW,
-		jose.ECDH_ES_A256KW,
-		jose.A128GCMKW,
-		jose.A192GCMKW,
-		jose.A256GCMKW,
-		jose.PBES2_HS256_A128KW,
-		jose.PBES2_HS384_A192KW,
-		jose.PBES2_HS512_A256KW,
-	}
+// allKeyAlgorithms contains all JWE key management algorithms supported by go-jose.
+var allKeyAlgorithms = []jose.KeyAlgorithm{
+	jose.ED25519,
+	jose.RSA1_5,
+	jose.RSA_OAEP,
+	jose.RSA_OAEP_256,
+	jose.A128KW,
+	jose.A192KW,
+	jose.A256KW,
+	jose.DIRECT,
+	jose.ECDH_ES,
+	jose.ECDH_ES_A128KW,
+	jose.ECDH_ES_A192KW,
+	jose.ECDH_ES_A256KW,
+	jose.A128GCMKW,
+	jose.A192GCMKW,
+	jose.A256GCMKW,
+	jose.PBES2_HS256_A128KW,
+	jose.PBES2_HS384_A192KW,
+	jose.PBES2_HS512_A256KW,
 }
 
-// allContentEncryptions returns all JWE content encryption algorithms supported by go-jose.
-func allContentEncryptions() []jose.ContentEncryption {
-	return []jose.ContentEncryption{
-		jose.A128CBC_HS256,
-		jose.A192CBC_HS384,
-		jose.A256CBC_HS512,
-		jose.A128GCM,
-		jose.A192GCM,
-		jose.A256GCM,
-	}
+// allContentEncryptions contains all JWE content encryption algorithms supported by go-jose.
+var allContentEncryptions = []jose.ContentEncryption{
+	jose.A128CBC_HS256,
+	jose.A192CBC_HS384,
+	jose.A256CBC_HS512,
+	jose.A128GCM,
+	jose.A192GCM,
+	jose.A256GCM,
 }
 
 // formatTimestamps converts numeric Unix timestamp values for known JWT claims
