@@ -70,7 +70,7 @@ func run(cmd *cobra.Command, args []string) error {
 		keyStr = os.Getenv("JWTD_KEY")
 	}
 
-	w := os.Stdout
+	w := cmd.OutOrStdout()
 
 	if isJWE(token) {
 		return decodeAndPrintJWE(w, token, keyStr)

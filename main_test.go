@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,28 +45,6 @@ func stripANSI(s string) string {
 		i++
 	}
 	return b.String()
-}
-
-// captureStdout is retained only for tests that exercise stdin-reading code paths
-// which still write to os.Stdout internally (e.g. readToken). For all other tests,
-// use a bytes.Buffer passed as io.Writer directly.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("creating pipe: %v", err)
-	}
-	os.Stdout = w
-
-	fn()
-
-	w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	return buf.String()
 }
 
 // --- decodeAndPrint ----------------------------------------------------------
@@ -2060,22 +2037,12 @@ func TestRun_JWTDKeyEnvVar_JWEDecryption(t *testing.T) {
 	rootCmd.SetOut(&buf)
 	rootCmd.SetArgs([]string{token})
 
-	// Capture stdout since run writes to os.Stdout.
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	err := rootCmd.Execute()
-
-	w.Close()
-	captured, _ := io.ReadAll(r)
-	os.Stdout = oldStdout
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	output := stripANSI(string(captured))
+	output := stripANSI(buf.String())
 	if !strings.Contains(output, "env-test") {
 		t.Errorf("expected decrypted payload with env key, got:\n%s", output)
 	}
@@ -2100,21 +2067,12 @@ func TestRun_JWTDKeyEnvVar_JWSVerification(t *testing.T) {
 	rootCmd.SetOut(&buf)
 	rootCmd.SetArgs([]string{token})
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	err := rootCmd.Execute()
-
-	w.Close()
-	captured, _ := io.ReadAll(r)
-	os.Stdout = oldStdout
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	output := stripANSI(string(captured))
+	output := stripANSI(buf.String())
 	if !strings.Contains(output, "Signature: VALID") {
 		t.Errorf("expected valid signature via env key, got:\n%s", output)
 	}
@@ -2138,23 +2096,16 @@ func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 	}
 	rootCmd.Flags().StringP("key", "k", "", "key")
 
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
 	rootCmd.SetArgs([]string{token, "--key", signingKeyPath})
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	err := rootCmd.Execute()
-
-	w.Close()
-	captured, _ := io.ReadAll(r)
-	os.Stdout = oldStdout
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	output := stripANSI(string(captured))
+	output := stripANSI(buf.String())
 	// --key flag should take precedence over JWTD_KEY env var.
 	if !strings.Contains(output, "Signature: VALID") {
 		t.Errorf("expected --key flag to override env var, got:\n%s", output)
