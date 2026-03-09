@@ -25,6 +25,9 @@ import (
 
 var timestampKeyNames = []string{"iat", "exp", "nbf"}
 
+// version is set at build time via -ldflags.
+var version = "dev"
+
 // Color definitions used for labels and signature output.
 var (
 	labelColor = color.New(color.FgCyan, color.Bold)
@@ -45,11 +48,12 @@ func newFormatter() *prettyjson.Formatter {
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "jwtd [token]",
-		Short: "Decode and pretty-print JSON Web Tokens",
-		Long:  "jwtd decodes JWTs and JWEs and displays their contents with syntax-highlighted JSON output.",
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  run,
+		Use:     "jwtd [token]",
+		Short:   "Decode and pretty-print JSON Web Tokens",
+		Long:    "jwtd decodes JWTs and JWEs and displays their contents with syntax-highlighted JSON output.",
+		Args:    cobra.MaximumNArgs(1),
+		Version: version,
+		RunE:    run,
 	}
 
 	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification (file path, base64, or JWK)")
