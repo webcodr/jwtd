@@ -488,7 +488,7 @@ var allContentEncryptions = []jose.ContentEncryption{
 }
 
 // formatTimestamps converts numeric Unix timestamp values for known JWT claims
-// into human-readable date strings. The map is modified in place.
+// into human-readable date strings with the original value. The map is modified in place.
 func formatTimestamps(data map[string]any) {
 	for key, val := range data {
 		if !slices.Contains(timestampKeyNames, key) {
@@ -499,8 +499,9 @@ func formatTimestamps(data map[string]any) {
 		if !ok {
 			continue
 		}
-		t := time.Unix(int64(num), 0).UTC()
-		data[key] = t.Format(time.RFC3339)
+		epoch := int64(num)
+		t := time.Unix(epoch, 0).UTC()
+		data[key] = fmt.Sprintf("%s (%d)", t.Format(time.RFC3339), epoch)
 	}
 }
 

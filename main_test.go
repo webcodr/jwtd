@@ -176,7 +176,7 @@ func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
 
 	formatTimestamps(data)
 
-	expected := time.Unix(1516239022, 0).UTC().Format(time.RFC3339)
+	expected := fmt.Sprintf("%s (%d)", time.Unix(1516239022, 0).UTC().Format(time.RFC3339), 1516239022)
 	if data["iat"] != expected {
 		t.Errorf("iat: expected %q, got %v", expected, data["iat"])
 	}
@@ -184,7 +184,7 @@ func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
 		t.Errorf("nbf: expected %q, got %v", expected, data["nbf"])
 	}
 
-	expectedExp := time.Unix(1716239022, 0).UTC().Format(time.RFC3339)
+	expectedExp := fmt.Sprintf("%s (%d)", time.Unix(1716239022, 0).UTC().Format(time.RFC3339), 1716239022)
 	if data["exp"] != expectedExp {
 		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
 	}
@@ -223,12 +223,12 @@ func TestFormatTimestamps_MixedFields(t *testing.T) {
 		t.Errorf("sub changed: %v", data["sub"])
 	}
 
-	expectedIat := time.Unix(0, 0).UTC().Format(time.RFC3339)
+	expectedIat := fmt.Sprintf("%s (%d)", time.Unix(0, 0).UTC().Format(time.RFC3339), 0)
 	if data["iat"] != expectedIat {
 		t.Errorf("iat: expected %q, got %v", expectedIat, data["iat"])
 	}
 
-	expectedExp := time.Unix(1700000000, 0).UTC().Format(time.RFC3339)
+	expectedExp := fmt.Sprintf("%s (%d)", time.Unix(1700000000, 0).UTC().Format(time.RFC3339), 1700000000)
 	if data["exp"] != expectedExp {
 		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
 	}
@@ -266,13 +266,16 @@ func TestFormatTimestamps_OutputFormat(t *testing.T) {
 		t.Fatalf("iat should be a string after formatting, got %T", data["iat"])
 	}
 
-	_, err := time.Parse(time.RFC3339, val)
-	if err != nil {
-		t.Errorf("iat is not valid RFC3339: %v", err)
+	if !strings.Contains(val, "2018-01-18T01:30:22Z") {
+		t.Errorf("expected RFC3339 date in output, got %s", val)
 	}
 
-	if val != "2018-01-18T01:30:22Z" {
-		t.Errorf("expected 2018-01-18T01:30:22Z, got %s", val)
+	if !strings.Contains(val, "1516239022") {
+		t.Errorf("expected original epoch in output, got %s", val)
+	}
+
+	if val != "2018-01-18T01:30:22Z (1516239022)" {
+		t.Errorf("expected '2018-01-18T01:30:22Z (1516239022)', got %s", val)
 	}
 }
 
@@ -291,17 +294,17 @@ func TestDecodeAndPrint_TimestampsFormatted(t *testing.T) {
 
 	plain := stripANSI(buf.String())
 
-	if strings.Contains(plain, "1516239022") {
-		t.Error("output still contains raw iat/nbf timestamp")
-	}
-	if strings.Contains(plain, "1716239022") {
-		t.Error("output still contains raw exp timestamp")
-	}
 	if !strings.Contains(plain, "2018-01-18T01:30:22Z") {
 		t.Error("output missing formatted iat/nbf date")
 	}
 	if !strings.Contains(plain, "2024-05-20T") {
 		t.Error("output missing formatted exp date")
+	}
+	if !strings.Contains(plain, "(1516239022)") {
+		t.Error("output missing original iat/nbf epoch value")
+	}
+	if !strings.Contains(plain, "(1716239022)") {
+		t.Error("output missing original exp epoch value")
 	}
 }
 
@@ -785,11 +788,11 @@ func TestDecodeAndPrintJWE_WithTimestampFormatting(t *testing.T) {
 
 	plain := stripANSI(buf.String())
 
-	if strings.Contains(plain, "1516239022") {
-		t.Error("output contains raw timestamp, should be formatted")
-	}
 	if !strings.Contains(plain, "2018-01-18T01:30:22Z") {
 		t.Error("output missing formatted timestamp")
+	}
+	if !strings.Contains(plain, "(1516239022)") {
+		t.Error("output missing original epoch value in formatted timestamp")
 	}
 }
 
@@ -1045,9 +1048,9 @@ func TestDecodeAndPrintJWE_EndToEnd_WithDecrypt(t *testing.T) {
 		}
 	}
 
-	// Timestamp should be formatted.
-	if strings.Contains(plain, "1700000000") {
-		t.Error("output contains raw timestamp")
+	// Timestamp should be formatted with original epoch value.
+	if !strings.Contains(plain, "(1700000000)") {
+		t.Error("output missing original epoch value in formatted timestamp")
 	}
 }
 
