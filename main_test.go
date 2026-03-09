@@ -840,6 +840,34 @@ func TestDecodeAndPrintJWE_NonJSONPayload(t *testing.T) {
 	}
 }
 
+func TestDecodeAndPrintJWE_JSONArrayPayload(t *testing.T) {
+	key := generateRSAKey(t)
+	token := encryptJWE(t, key, []byte(`[{"id":1,"name":"first"},{"id":2,"name":"second"}]`))
+	keyPath := writeKeyFile(t, key)
+
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	plain := stripANSI(buf.String())
+
+	if !strings.Contains(plain, "Decrypted Payload") {
+		t.Error("output missing Decrypted Payload label")
+	}
+	if !strings.Contains(plain, "first") {
+		t.Error("output missing first array element value")
+	}
+	if !strings.Contains(plain, "second") {
+		t.Error("output missing second array element value")
+	}
+	// Should be pretty-printed, not raw.
+	if !strings.Contains(plain, `"id"`) {
+		t.Error("output missing pretty-printed key")
+	}
+}
+
 // --- loadKey -----------------------------------------------------------------
 
 func TestLoadKey_FromPEMFile(t *testing.T) {

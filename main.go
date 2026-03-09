@@ -307,11 +307,23 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 		}
 	}
 
-	// Try to parse as JSON and pretty-print.
+	// Try to parse as JSON object and pretty-print.
 	var data map[string]any
 	if err := json.Unmarshal(plaintext, &data); err == nil {
 		formatTimestamps(data)
 		return printSection(w, f, "Decrypted Payload", data)
+	}
+
+	// Try to parse as JSON array and pretty-print.
+	var arr []any
+	if err := json.Unmarshal(plaintext, &arr); err == nil {
+		labelColor.Fprintln(w, "Decrypted Payload")
+		pretty, err := f.Marshal(arr)
+		if err != nil {
+			return fmt.Errorf("formatting Decrypted Payload: %w", err)
+		}
+		fmt.Fprintln(w, string(pretty))
+		return nil
 	}
 
 	// Fall back to raw text output.
