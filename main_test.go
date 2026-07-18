@@ -2067,6 +2067,28 @@ func TestDecodeAndPrint_SignatureInvalid_WrongKey(t *testing.T) {
 	}
 }
 
+func TestDecodeAndPrint_SignatureInvalid_AlgKeyMismatch(t *testing.T) {
+	// An HS256 token checked against an RSA public key must be rejected by
+	// the algorithm restriction, not attempted as HMAC verification.
+	rsaKey := generateRSAKey(t)
+	pubKeyPath := writeRSAPublicKeyFile(t, &rsaKey.PublicKey)
+	token := signJWTWithHMAC(t, []byte("shared-secret"), jwt.MapClaims{"sub": "test"})
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, pubKeyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: INVALID") {
+		t.Errorf("expected invalid signature for alg/key mismatch, got:\n%s", output)
+	}
+	if !strings.Contains(output, "signing method HS256 is invalid") {
+		t.Errorf("expected signing method rejection reason, got:\n%s", output)
+	}
+}
+
 func TestDecodeAndPrint_SignatureValid_HMACRawKey(t *testing.T) {
 	secret := "plain-text-secret"
 	claims := jwt.MapClaims{"sub": "test"}

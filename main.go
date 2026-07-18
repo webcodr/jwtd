@@ -187,8 +187,14 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	key = publicKeyForVerification(key)
 
 	// Claims validation is disabled so the result reflects only the
-	// cryptographic signature, not token expiry.
-	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	// cryptographic signature, not token expiry. Accepted algorithms are
+	// restricted to those compatible with the key type to rule out
+	// algorithm confusion.
+	opts := []jwt.ParserOption{jwt.WithoutClaimsValidation()}
+	if methods := validMethodsForKey(key); methods != nil {
+		opts = append(opts, jwt.WithValidMethods(methods))
+	}
+	parser := jwt.NewParser(opts...)
 	_, err = parser.Parse(tokenStr, func(token *jwt.Token) (any, error) {
 		return key, nil
 	})
@@ -202,6 +208,23 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	}
 	_, werr := color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
 	return werr
+}
+
+// validMethodsForKey returns the JWS algorithm names compatible with the
+// given verification key type, or nil for unknown key types.
+func validMethodsForKey(key any) []string {
+	switch key.(type) {
+	case *rsa.PublicKey:
+		return []string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS512"}
+	case *ecdsa.PublicKey:
+		return []string{"ES256", "ES384", "ES512"}
+	case ed25519.PublicKey:
+		return []string{"EdDSA"}
+	case []byte:
+		return []string{"HS256", "HS384", "HS512"}
+	default:
+		return nil
+	}
 }
 
 // publicKeyForVerification extracts the public key from asymmetric private keys.
