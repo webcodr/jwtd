@@ -844,6 +844,31 @@ func TestDecodeAndPrintJWE_NonJSONPayload(t *testing.T) {
 	}
 }
 
+func TestDecodeAndPrintJWE_DottedTextPayload(t *testing.T) {
+	key := generateRSAKey(t)
+	// Two dots make this look like a nested JWT, but it is not one.
+	token := encryptJWE(t, key, []byte("not.a.jwt"))
+	keyPath := writeKeyFile(t, key)
+
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	plain := stripANSI(buf.String())
+
+	if strings.Contains(plain, "nested") {
+		t.Errorf("output contains nested label for non-token payload:\n%s", plain)
+	}
+	if got := strings.Count(plain, "Decrypted Payload"); got != 1 {
+		t.Errorf("expected exactly one Decrypted Payload label, got %d:\n%s", got, plain)
+	}
+	if !strings.Contains(plain, "not.a.jwt") {
+		t.Error("output missing raw payload text")
+	}
+}
+
 func TestDecodeAndPrintJWE_JSONArrayPayload(t *testing.T) {
 	key := generateRSAKey(t)
 	token := encryptJWE(t, key, []byte(`[{"id":1,"name":"first"},{"id":2,"name":"second"}]`))

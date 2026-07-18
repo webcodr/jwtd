@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
@@ -323,29 +324,21 @@ func decodedLen(s string) int {
 func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byte) error {
 	text := string(plaintext)
 
-	// Check if the decrypted payload is a nested JWE.
+	// Check if the decrypted payload is a nested JWE. The nested output is
+	// buffered so nothing is printed if decoding fails and the payload falls
+	// through to the JSON/raw handling below.
 	if isJWE(text) {
-		if _, err := labelColor.Fprintln(w, "Decrypted Payload (nested JWE)"); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintln(w); err != nil {
-			return err
-		}
-		if err := decodeAndPrintJWE(w, text, ""); err == nil {
-			return nil
+		var nested bytes.Buffer
+		if err := decodeAndPrintJWE(&nested, text, ""); err == nil {
+			return printNestedPayload(w, "Decrypted Payload (nested JWE)", nested.Bytes())
 		}
 	}
 
 	// Check if the decrypted payload is a nested JWT.
 	if strings.Count(text, ".") == 2 {
-		if _, err := labelColor.Fprintln(w, "Decrypted Payload (nested JWT)"); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintln(w); err != nil {
-			return err
-		}
-		if err := decodeAndPrint(w, text, ""); err == nil {
-			return nil
+		var nested bytes.Buffer
+		if err := decodeAndPrint(&nested, text, ""); err == nil {
+			return printNestedPayload(w, "Decrypted Payload (nested JWT)", nested.Bytes())
 		}
 	}
 
@@ -375,6 +368,19 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 		return err
 	}
 	_, err := fmt.Fprintln(w, text)
+	return err
+}
+
+// printNestedPayload outputs a buffered, successfully decoded nested token
+// under the given label.
+func printNestedPayload(w io.Writer, label string, decoded []byte) error {
+	if _, err := labelColor.Fprintln(w, label); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	_, err := w.Write(decoded)
 	return err
 }
 
