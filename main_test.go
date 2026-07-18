@@ -946,6 +946,59 @@ func TestLoadKey_InvalidInput(t *testing.T) {
 	}
 }
 
+func TestLoadKey_RawPrefix(t *testing.T) {
+	loaded, err := loadKey("raw:my-literal-secret")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	symKey, ok := loaded.([]byte)
+	if !ok {
+		t.Fatalf("expected []byte, got %T", loaded)
+	}
+	if string(symKey) != "my-literal-secret" {
+		t.Errorf("expected literal secret, got %q", symKey)
+	}
+}
+
+func TestLoadKey_TextKeyFileTrimsTrailingNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(path, []byte("my-text-secret\n"), 0600); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+
+	loaded, err := loadKey(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	symKey, ok := loaded.([]byte)
+	if !ok {
+		t.Fatalf("expected []byte, got %T", loaded)
+	}
+	if string(symKey) != "my-text-secret" {
+		t.Errorf("expected trailing newline trimmed, got %q", symKey)
+	}
+}
+
+func TestLoadKey_BinaryKeyFileKeepsTrailingNewlineByte(t *testing.T) {
+	binKey := []byte{0x00, 0x01, 0xfe, 0xff, '\n'}
+	keyPath := writeSymmetricKeyFile(t, binKey)
+
+	loaded, err := loadKey(keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	symKey, ok := loaded.([]byte)
+	if !ok {
+		t.Fatalf("expected []byte, got %T", loaded)
+	}
+	if !bytes.Equal(symKey, binKey) {
+		t.Errorf("binary key modified: expected % x, got % x", binKey, symKey)
+	}
+}
+
 // --- decodedLen --------------------------------------------------------------
 
 func TestDecodedLen_ValidBase64(t *testing.T) {
@@ -2000,6 +2053,23 @@ func TestDecodeAndPrint_SignatureInvalid_WrongKey(t *testing.T) {
 	output := stripANSI(buf.String())
 	if !strings.Contains(output, "Signature: INVALID") {
 		t.Errorf("expected invalid signature message, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_SignatureValid_HMACRawKey(t *testing.T) {
+	secret := "plain-text-secret"
+	claims := jwt.MapClaims{"sub": "test"}
+	token := signJWTWithHMAC(t, []byte(secret), claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, "raw:"+secret)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature with raw: key, got:\n%s", output)
 	}
 }
 

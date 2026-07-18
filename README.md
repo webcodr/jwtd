@@ -97,6 +97,13 @@ The `--key` flag accepts:
 - **DER files**: PKCS#1, PKCS#8, or PKIX encoded keys
 - **JWK files**: Single JSON Web Key or JWK Set (first key is used)
 - **Base64 strings**: Base64 or base64url encoded key material (PEM, DER, JWK, or raw symmetric key)
+- **Literal secrets**: `raw:<secret>` uses the text after the prefix as a symmetric key verbatim
+
+The format is auto-detected in that order: an inline value that is not an existing file path is base64-decoded, so pass plain-text secrets with the `raw:` prefix (or base64-encode them) to avoid misinterpretation. Key files that are neither PEM, DER, nor JWK are used as raw symmetric keys; for text content the trailing newline is trimmed.
+
+```sh
+jwtd --key raw:my-hmac-secret eyJhbGciOiJIUzI1NiIs...
+```
 
 ### Environment variable
 

@@ -57,7 +57,7 @@ func main() {
 		RunE:    run,
 	}
 
-	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification (file path, base64, or JWK)")
+	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification (file path, base64, JWK, or raw:<secret> for a literal symmetric key)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -387,13 +387,25 @@ func printNestedPayload(w io.Writer, label string, decoded []byte) error {
 // loadKey reads a decryption key from either a file path or an inline base64 string.
 // It auto-detects the format: if the value looks like a file path (exists on disk),
 // it reads and parses the file; otherwise it treats it as a base64-encoded key.
+// A "raw:" prefix bypasses detection and uses the remainder as a literal
+// symmetric secret.
 func loadKey(keyStr string) (any, error) {
+	// Explicit literal secret; no file or base64 detection.
+	if secret, ok := strings.CutPrefix(keyStr, "raw:"); ok {
+		return []byte(secret), nil
+	}
+
 	// Try as file path first.
 	if data, err := os.ReadFile(keyStr); err == nil {
 		if key, err := parseKeyData(data); err == nil {
 			return key, nil
 		}
-		// File exists but doesn't parse as PEM/DER; use raw bytes as symmetric key.
+		// File exists but doesn't parse as PEM/DER; use raw bytes as a
+		// symmetric key. Text secrets get the trailing newline editors
+		// typically add trimmed; binary key material is used as-is.
+		if isTextKey(data) {
+			return bytes.TrimRight(data, "\r\n"), nil
+		}
 		return data, nil
 	}
 
@@ -414,6 +426,17 @@ func loadKey(keyStr string) (any, error) {
 
 	// Use raw bytes as a symmetric key.
 	return decoded, nil
+}
+
+// isTextKey reports whether key file content looks like a text secret
+// (printable ASCII) rather than binary key material.
+func isTextKey(data []byte) bool {
+	for _, b := range data {
+		if (b < 0x20 || b > 0x7e) && b != '\n' && b != '\r' && b != '\t' {
+			return false
+		}
+	}
+	return true
 }
 
 // parseKeyData attempts to parse key data as JWK, JWK Set, PEM, or DER encoded

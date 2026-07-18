@@ -17,7 +17,7 @@ Single-file Go program (`main.go`) with all functionality in package `main`:
 - `publicKeyForVerification()` - Extracts the public key from RSA/ECDSA/Ed25519 private keys
 - `decodeAndPrintJWE()` - Parses a JWE with `go-jose`; without a key prints the protected header and encrypted part metadata, with a key decrypts and prints the payload
 - `printDecryptedPayload()` - Pretty-prints decrypted JWE plaintext; recursively decodes nested JWTs/JWEs, falls back to JSON or raw text
-- `loadKey()` / `parseKeyData()` / `parseDERKey()` / `parseJWK()` - Load a key from a file path or base64 string; supports PEM, DER (PKCS#1/PKCS#8/PKIX), JWK/JWK Set, and raw symmetric keys
+- `loadKey()` / `parseKeyData()` / `parseDERKey()` / `parseJWK()` - Load a key from a file path, base64 string, or `raw:<secret>` literal; supports PEM, DER (PKCS#1/PKCS#8/PKIX), JWK/JWK Set, and raw symmetric keys (trailing newline trimmed for text key files)
 - `formatTimestamps()` - Converts `iat`, `exp`, `nbf` Unix timestamps to RFC3339 strings (original epoch value shown in parentheses)
 - `newFormatter()` - Creates a `go-prettyjson` formatter with the project color scheme
 - `printSection()` / `printSignature()` / `printEncryptedParts()` - Formatted output using `fatih/color`
