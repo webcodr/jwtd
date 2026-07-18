@@ -1978,6 +1978,24 @@ func TestDecodeAndPrint_SignatureInvalid_WrongKey(t *testing.T) {
 	}
 }
 
+func TestDecodeAndPrint_SignatureValid_ExpiredToken(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	claims := jwt.MapClaims{"sub": "test", "exp": time.Now().Add(-time.Hour).Unix()}
+	token := signJWT(t, key, claims)
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, keyPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("expected valid signature for expired token, got:\n%s", output)
+	}
+}
+
 func TestDecodeAndPrint_SignatureValid_HMAC(t *testing.T) {
 	symKey := make([]byte, 32)
 	if _, err := rand.Read(symKey); err != nil {

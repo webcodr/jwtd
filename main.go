@@ -185,7 +185,9 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	// Extract the public key from private keys for verification.
 	key = publicKeyForVerification(key)
 
-	parser := jwt.NewParser()
+	// Claims validation is disabled so the result reflects only the
+	// cryptographic signature, not token expiry.
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
 	_, err = parser.Parse(tokenStr, func(token *jwt.Token) (any, error) {
 		return key, nil
 	})
