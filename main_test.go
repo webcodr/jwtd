@@ -463,6 +463,41 @@ func TestReadToken_TrimsWhitespace(t *testing.T) {
 	}
 }
 
+func TestReadToken_StripsInternalWhitespace(t *testing.T) {
+	token, err := readToken([]string{"my.\njwt\n.token\n"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "my.jwt.token" {
+		t.Errorf("expected my.jwt.token, got %q", token)
+	}
+}
+
+func TestReadToken_FromStdinPipe_WrappedToken(t *testing.T) {
+	origStdin := os.Stdin
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating pipe: %v", err)
+	}
+
+	go func() {
+		fmt.Fprint(w, "header.\npayload.\nsignature\n")
+		w.Close()
+	}()
+
+	os.Stdin = r
+	defer func() { os.Stdin = origStdin }()
+
+	token, err := readToken([]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "header.payload.signature" {
+		t.Errorf("expected header.payload.signature, got %q", token)
+	}
+}
+
 func TestReadToken_FromStdinPipe(t *testing.T) {
 	origStdin := os.Stdin
 

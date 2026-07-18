@@ -86,7 +86,7 @@ func run(cmd *cobra.Command, args []string) error {
 // readToken resolves the JWT string from arguments, stdin pipe, or interactive prompt.
 func readToken(args []string) (string, error) {
 	if len(args) > 0 {
-		return strings.TrimSpace(args[0]), nil
+		return sanitizeToken(args[0]), nil
 	}
 
 	stat, _ := os.Stdin.Stat()
@@ -95,10 +95,17 @@ func readToken(args []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("reading stdin: %w", err)
 		}
-		return strings.TrimSpace(string(data)), nil
+		return sanitizeToken(string(data)), nil
 	}
 
 	return readInteractive()
+}
+
+// sanitizeToken removes all whitespace from a token, so tokens that were
+// wrapped across lines when copied from logs or emails still parse. Tokens
+// never contain whitespace themselves.
+func sanitizeToken(s string) string {
+	return strings.Join(strings.Fields(s), "")
 }
 
 // readInteractive prompts the user for a token using readline.
@@ -118,7 +125,7 @@ func readInteractive() (token string, err error) {
 		return "", fmt.Errorf("reading input: %w", err)
 	}
 
-	token = strings.TrimSpace(line)
+	token = sanitizeToken(line)
 	if token == "" {
 		return "", fmt.Errorf("no token provided")
 	}
