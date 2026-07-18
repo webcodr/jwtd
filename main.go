@@ -290,16 +290,16 @@ func printEncryptedParts(w io.Writer, tokenStr string) error {
 	if _, err := labelColor.Fprintln(w, "Encrypted Content"); err != nil {
 		return err
 	}
-	if _, err := dimColor.Fprintf(w, "Encrypted Key : %d bytes\n", decodedLen(parts[1])); err != nil {
+	if _, err := dimColor.Fprintf(w, "Encrypted Key : %s\n", partSize(parts[1])); err != nil {
 		return err
 	}
-	if _, err := dimColor.Fprintf(w, "IV            : %d bytes\n", decodedLen(parts[2])); err != nil {
+	if _, err := dimColor.Fprintf(w, "IV            : %s\n", partSize(parts[2])); err != nil {
 		return err
 	}
-	if _, err := dimColor.Fprintf(w, "Ciphertext    : %d bytes\n", decodedLen(parts[3])); err != nil {
+	if _, err := dimColor.Fprintf(w, "Ciphertext    : %s\n", partSize(parts[3])); err != nil {
 		return err
 	}
-	if _, err := dimColor.Fprintf(w, "Auth Tag      : %d bytes\n", decodedLen(parts[4])); err != nil {
+	if _, err := dimColor.Fprintf(w, "Auth Tag      : %s\n", partSize(parts[4])); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
@@ -309,13 +309,14 @@ func printEncryptedParts(w io.Writer, tokenStr string) error {
 	return err
 }
 
-// decodedLen returns the byte length of a base64url-encoded string.
-func decodedLen(s string) int {
+// partSize describes the decoded byte length of a base64url-encoded JWE part,
+// flagging parts that are not valid base64url instead of reporting 0 bytes.
+func partSize(s string) string {
 	data, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return 0
+		return "invalid base64url"
 	}
-	return len(data)
+	return fmt.Sprintf("%d bytes", len(data))
 }
 
 // printDecryptedPayload formats and prints the decrypted JWE plaintext.

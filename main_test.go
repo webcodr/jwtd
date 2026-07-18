@@ -999,27 +999,24 @@ func TestLoadKey_BinaryKeyFileKeepsTrailingNewlineByte(t *testing.T) {
 	}
 }
 
-// --- decodedLen --------------------------------------------------------------
+// --- partSize ----------------------------------------------------------------
 
-func TestDecodedLen_ValidBase64(t *testing.T) {
+func TestPartSize_ValidBase64(t *testing.T) {
 	data := base64.RawURLEncoding.EncodeToString([]byte("hello world"))
-	n := decodedLen(data)
-	if n != 11 {
-		t.Errorf("expected 11, got %d", n)
+	if got := partSize(data); got != "11 bytes" {
+		t.Errorf("expected 11 bytes, got %q", got)
 	}
 }
 
-func TestDecodedLen_InvalidBase64(t *testing.T) {
-	n := decodedLen("!!!invalid!!!")
-	if n != 0 {
-		t.Errorf("expected 0 for invalid base64, got %d", n)
+func TestPartSize_InvalidBase64(t *testing.T) {
+	if got := partSize("!!!invalid!!!"); got != "invalid base64url" {
+		t.Errorf("expected invalid base64url, got %q", got)
 	}
 }
 
-func TestDecodedLen_Empty(t *testing.T) {
-	n := decodedLen("")
-	if n != 0 {
-		t.Errorf("expected 0 for empty string, got %d", n)
+func TestPartSize_Empty(t *testing.T) {
+	if got := partSize(""); got != "0 bytes" {
+		t.Errorf("expected 0 bytes for empty string, got %q", got)
 	}
 }
 
@@ -1059,6 +1056,20 @@ func TestPrintEncryptedParts_ShowsAllParts(t *testing.T) {
 		if !strings.Contains(plain, check) {
 			t.Errorf("output missing %q", check)
 		}
+	}
+}
+
+func TestPrintEncryptedParts_InvalidBase64Part(t *testing.T) {
+	var buf bytes.Buffer
+	token := "aGVhZGVy.!!!not-base64!!!.aXY.Y2lwaGVy.dGFn"
+	err := printEncryptedParts(&buf, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	plain := stripANSI(buf.String())
+	if !strings.Contains(plain, "Encrypted Key : invalid base64url") {
+		t.Errorf("expected invalid base64url marker, got:\n%s", plain)
 	}
 }
 
