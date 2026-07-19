@@ -39,8 +39,13 @@ The migration must preserve these externally visible properties:
   `v`.
 - Releases continue to be created as drafts, verified after upload, and then
   published.
-- Existing published releases remain immutable and must byte-match rerun
-  artifacts.
+- Published releases built after this migration remain immutable and must
+  byte-match rerun artifacts. Pre-migration releases (v1.0.0 through v3.0.0)
+  were archived with GNU tar/gzip; GoReleaser's Go-native archiver will not
+  reproduce those bytes, so re-dispatching the workflow for a pre-migration
+  version will fail the existing `cmp` verification. This is intentional
+  fail-closed behavior — the rerun fails without modifying the published
+  release — not a preserved byte-match.
 - Prereleases do not update Homebrew, and older stable releases do not become
   GitHub's latest release.
 - `Formula/jwtd.rb` and the `webcodr/homebrew-tap` push logic remain the
@@ -202,8 +207,13 @@ files after generation.
 
 - Modify: `.github/workflows/test.yml`
 
-- [ ] Pin `actions/checkout` and `jdx/mise-action` to full commit SHAs, matching
-      the project's release-workflow security convention.
+- [ ] Pin `actions/checkout` and `jdx/mise-action` to full commit SHAs, reusing
+      the exact SHAs already pinned in `.github/workflows/release.yml`
+      (checkout v7.0.0, mise-action v4.2.1) rather than introducing a second
+      pinned version to maintain.
+- [ ] Check out with `fetch-depth: 0`. GoReleaser's version discovery needs
+      repository history and tags; the default shallow, tag-less checkout
+      either fails outright or computes a wrong snapshot version.
 - [ ] Keep the existing formatting, vet, and Go test steps.
 - [ ] Add `goreleaser check` after mise setup.
 - [ ] Add `goreleaser release --snapshot --clean` after the Go tests. Snapshot
@@ -242,9 +252,14 @@ reproduce the current platform/archive contract, while
   - installs the mise-pinned tools
   - establishes a local `v$VERSION` tag at `GITHUB_SHA` only for GoReleaser's
     version discovery
+  - sets `GORELEASER_CURRENT_TAG` to `v$VERSION` on the GoReleaser step
   - runs exactly `goreleaser release --clean --skip=publish`
   - does not expose a write-capable token to GoReleaser
   - uploads the six archives plus `checksums.txt`
+- [ ] Remove the `matrix.` exemption from the run-script interpolation
+      assertion in `TestReleaseWorkflowSecurityInvariants`; with the matrix
+      gone it is dead code that loosens the invariant, and no `${{ }}`
+      expression should remain in any run script.
 - [ ] Require `.goreleaser.yaml` to keep `release.disable: true`.
 - [ ] Require the release job's fixed `expected_assets` list to contain exactly
       the six existing archives plus `checksums.txt`.
@@ -287,15 +302,25 @@ This local tag supplies GoReleaser's `.Version`; it must not push or alter the
 remote tag. The existing release job remains responsible for creating, freshly
 fetching, peeling, and proving the remote tag.
 
-- [ ] Run:
+- [ ] Run, with `GORELEASER_CURRENT_TAG="v$VERSION"` set in the step's
+      environment:
 
 ```bash
 goreleaser release --clean --skip=publish
 ```
 
+`GORELEASER_CURRENT_TAG` removes tag-detection ambiguity: with
+`fetch-depth: 0` the checkout also fetches all remote tags, and when
+`GITHUB_SHA` already carries another tag (a stable release cut from the same
+commit as its prerelease, or a rerun), GoReleaser could otherwise pick the
+wrong tag and bake the wrong `main.version` into the binaries.
+
 Do not provide `GITHUB_TOKEN` to this step. Workflow default permissions remain
 `contents: read`, and `.goreleaser.yaml` independently disables release
-publication.
+publication. Passing the read-only token to the mise setup step alone is
+acceptable — `jdx/mise-action` downloads GoReleaser from GitHub releases and
+can hit anonymous rate limits on shared runners — but it must not reach the
+GoReleaser invocation.
 
 - [ ] Parse `dist/artifacts.json` and fail unless it contains the exact six
       expected archives and `checksums.txt`.
@@ -332,8 +357,6 @@ publication.
 - [ ] Run `actionlint .github/workflows/test.yml .github/workflows/release.yml`
       when available.
 - [ ] Run `git diff --check`.
-- [ ] Run `lens_diagnostics` with `mode=all` and resolve all blocking findings
-      in edited files.
 - [ ] Review the release workflow manually and confirm:
   - GoReleaser has no write token and publishing is disabled in both config and
     command.
@@ -390,6 +413,13 @@ goreleaser release --snapshot --clean
   migration proven.
 - If Phase 2 fails, restore only the previous matrix build job. No runtime code,
   release publication protocol, or Homebrew template needs to change.
+- Re-dispatching the workflow for a pre-migration version (v1.0.0–v3.0.0) will
+  fail asset verification by design; do not "fix" this by relaxing the `cmp`
+  check.
+- Any future GoReleaser or Go bump in `.mise.toml` can change archive bytes and
+  will therefore break byte-match verification on reruns of releases built with
+  the older pin. Treat tool bumps as a new byte-reproducibility baseline, not a
+  regression.
 
 ---
 
@@ -403,3 +433,6 @@ These are explicitly outside this migration and should receive separate designs:
 - Generating SBOMs or GitHub artifact attestations.
 - Adding Linux packages, Scoop, Winget, or other distribution channels.
 - Replacing manual dispatch with tag-push releases.
+- Cross-checking the hashes rendered into `Formula/jwtd.rb` against
+  `checksums.txt` in `update-homebrew` (a cheap extra invariant, but it would
+  modify a job this migration declares structurally unchanged).
