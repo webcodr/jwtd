@@ -6,15 +6,20 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
@@ -25,6 +30,8 @@ import (
 )
 
 var timestampKeyNames = []string{"iat", "exp", "nbf"}
+
+var errInvalidSignature = errors.New("invalid signature")
 
 // version is set at build time via -ldflags.
 var version = "dev"
@@ -48,20 +55,35 @@ func newFormatter() *prettyjson.Formatter {
 }
 
 func main() {
+	rootCmd := newRootCommand()
+	if err := rootCmd.Execute(); err != nil {
+		_ = printExecutionError(rootCmd.ErrOrStderr(), err)
+		os.Exit(1)
+	}
+}
+
+func newRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:     "jwtd [token]",
-		Short:   "Decode and pretty-print JSON Web Tokens",
-		Long:    "jwtd decodes JWTs and JWEs and displays their contents with syntax-highlighted JSON output.",
-		Args:    cobra.MaximumNArgs(1),
-		Version: version,
-		RunE:    run,
+		Use:           "jwtd [token]",
+		Short:         "Decode and pretty-print JSON Web Tokens",
+		Long:          "jwtd decodes JWTs and JWEs and displays their contents with syntax-highlighted JSON output.",
+		Args:          cobra.MaximumNArgs(1),
+		Version:       version,
+		RunE:          run,
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
 	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification (file path, base64, JWK, or raw:<secret> for a literal symmetric key)")
+	return rootCmd
+}
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+func printExecutionError(w io.Writer, err error) error {
+	if errors.Is(err, errInvalidSignature) {
+		return nil
 	}
+	_, writeErr := fmt.Fprintf(w, "Error: %v\n", err)
+	return writeErr
 }
 
 func run(cmd *cobra.Command, args []string) error {
@@ -141,15 +163,9 @@ func isJWE(token string) bool {
 // decodeAndPrint parses the JWT and prints header, payload, and signature.
 // If keyStr is provided, the signature is verified against the given key.
 func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
-	parser := jwt.NewParser()
-	token, parts, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
+	token, parts, claims, err := parseUnverifiedJWT(tokenStr)
 	if err != nil {
-		return fmt.Errorf("parsing JWT: %w", err)
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return fmt.Errorf("unexpected claims type")
+		return err
 	}
 
 	f := newFormatter()
@@ -183,6 +199,25 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 	return nil
 }
 
+func parseUnverifiedJWT(tokenStr string) (*jwt.Token, []string, jwt.MapClaims, error) {
+	parser := jwt.NewParser(jwt.WithJSONNumber())
+	token, parts, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("parsing JWT: %w", err)
+	}
+
+	payload, err := parser.DecodeSegment(parts[1])
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("parsing JWT claims: decoding payload: %w", err)
+	}
+
+	claims := jwt.MapClaims{}
+	if err := decodeJSON(payload, &claims); err != nil {
+		return nil, nil, nil, fmt.Errorf("parsing JWT claims: %w", err)
+	}
+	return token, parts, claims, nil
+}
+
 // verifySignature verifies a JWT signature using the provided key and prints the result.
 func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	key, err := loadKey(keyStr)
@@ -192,12 +227,15 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 
 	// Extract the public key from private keys for verification.
 	key = publicKeyForVerification(key)
+	if _, _, _, err := parseUnverifiedJWT(tokenStr); err != nil {
+		return fmt.Errorf("signature verification: %w", err)
+	}
 
 	// Claims validation is disabled so the result reflects only the
 	// cryptographic signature, not token expiry. Accepted algorithms are
 	// restricted to those compatible with the key type to rule out
 	// algorithm confusion.
-	opts := []jwt.ParserOption{jwt.WithoutClaimsValidation()}
+	opts := []jwt.ParserOption{jwt.WithoutClaimsValidation(), jwt.WithJSONNumber()}
 	if methods := validMethodsForKey(key); methods != nil {
 		opts = append(opts, jwt.WithValidMethods(methods))
 	}
@@ -210,8 +248,10 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 		if _, werr := color.New(color.FgRed, color.Bold).Fprintln(w, "Signature: INVALID"); werr != nil {
 			return werr
 		}
-		_, werr := dimColor.Fprintf(w, "  %v\n", err)
-		return werr
+		if _, werr := dimColor.Fprintf(w, "  %v\n", err); werr != nil {
+			return werr
+		}
+		return fmt.Errorf("%w: %v", errInvalidSignature, err)
 	}
 	_, werr := color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
 	return werr
@@ -260,7 +300,10 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 
 	f := newFormatter()
 
-	header := jweHeaderMap(jwe)
+	header, err := jweProtectedHeaderMap(tokenStr)
+	if err != nil {
+		return err
+	}
 	if err := printSection(w, f, "Protected Header", header); err != nil {
 		return err
 	}
@@ -288,26 +331,27 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	return printDecryptedPayload(w, f, plaintext)
 }
 
-// jweHeaderMap extracts the protected header from a JWE object as a map.
-func jweHeaderMap(jwe *jose.JSONWebEncryption) map[string]any {
-	h := jwe.Header
-	result := map[string]any{}
-
-	if h.Algorithm != "" {
-		result["alg"] = h.Algorithm
-	}
-	if h.KeyID != "" {
-		result["kid"] = h.KeyID
-	}
-	if h.JSONWebKey != nil {
-		result["jwk"] = h.JSONWebKey
+// jweProtectedHeaderMap decodes every field in the compact JWE protected header
+// for display. go-jose remains authoritative for parsing and cryptography.
+func jweProtectedHeaderMap(token string) (map[string]any, error) {
+	protected, _, ok := strings.Cut(token, ".")
+	if !ok {
+		return nil, fmt.Errorf("JWE has no protected header segment")
 	}
 
-	for k, v := range h.ExtraHeaders {
-		result[string(k)] = v
+	data, err := base64.RawURLEncoding.DecodeString(protected)
+	if err != nil {
+		return nil, fmt.Errorf("decoding JWE protected header: %w", err)
 	}
 
-	return result
+	var header map[string]any
+	if err := decodeJSON(data, &header); err != nil {
+		return nil, fmt.Errorf("parsing JWE protected header: %w", err)
+	}
+	if header == nil {
+		return nil, fmt.Errorf("parsing JWE protected header: expected JSON object")
+	}
+	return header, nil
 }
 
 // printEncryptedParts displays metadata about the encrypted JWE parts.
@@ -375,14 +419,14 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 
 	// Try to parse as JSON object and pretty-print.
 	var data map[string]any
-	if err := json.Unmarshal(plaintext, &data); err == nil {
+	if err := decodeJSON(plaintext, &data); err == nil {
 		formatTimestamps(data)
 		return printSection(w, f, "Decrypted Payload", data)
 	}
 
 	// Try to parse as JSON array and pretty-print.
 	var arr []any
-	if err := json.Unmarshal(plaintext, &arr); err == nil {
+	if err := decodeJSON(plaintext, &arr); err == nil {
 		if _, err := labelColor.Fprintln(w, "Decrypted Payload"); err != nil {
 			return err
 		}
@@ -390,7 +434,7 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 		if err != nil {
 			return fmt.Errorf("formatting Decrypted Payload: %w", err)
 		}
-		_, err = fmt.Fprintln(w, string(pretty))
+		_, err = fmt.Fprintln(w, escapeFormattedJSONControls(pretty))
 		return err
 	}
 
@@ -398,8 +442,71 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 	if _, err := labelColor.Fprintln(w, "Decrypted Payload"); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(w, text)
+	_, err := fmt.Fprintln(w, escapeTerminalText(plaintext))
 	return err
+}
+
+func escapeTerminalText(text []byte) string {
+	var escaped strings.Builder
+	for len(text) > 0 {
+		r, size := utf8.DecodeRune(text)
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&escaped, `\x%02x`, text[0])
+			text = text[1:]
+			continue
+		}
+
+		switch {
+		case r == '\n' || r == '\t':
+			escaped.WriteRune(r)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&escaped, `\x%02x`, r)
+		case r >= 0x80 && r <= 0x9f:
+			fmt.Fprintf(&escaped, `\u%04x`, r)
+		case isBidiControl(r):
+			fmt.Fprintf(&escaped, `\u%04x`, r)
+		default:
+			escaped.WriteRune(r)
+		}
+		text = text[size:]
+	}
+	return escaped.String()
+}
+
+func escapeFormattedJSONControls(text []byte) string {
+	var escaped strings.Builder
+	for len(text) > 0 {
+		r, size := utf8.DecodeRune(text)
+		if r == 0x7f || (r >= 0x80 && r <= 0x9f) || isBidiControl(r) {
+			fmt.Fprintf(&escaped, `\u%04x`, r)
+		} else {
+			escaped.Write(text[:size])
+		}
+		text = text[size:]
+	}
+	return escaped.String()
+}
+
+func isBidiControl(r rune) bool {
+	return r == 0x061c || r == 0x200e || r == 0x200f ||
+		(r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
+}
+
+func decodeJSON(data []byte, value any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return fmt.Errorf("invalid trailing JSON data: %w", err)
+	}
+	return nil
 }
 
 // printNestedPayload outputs a buffered, successfully decoded nested token
@@ -428,8 +535,12 @@ func loadKey(keyStr string) (any, error) {
 
 	// Try as file path first.
 	if data, err := os.ReadFile(keyStr); err == nil {
-		if key, err := parseKeyData(data); err == nil {
+		key, parseErr := parseKeyData(data)
+		if parseErr == nil {
 			return key, nil
+		}
+		if isStructuredKeyData(data) {
+			return nil, fmt.Errorf("parsing key file %q: %w", keyStr, parseErr)
 		}
 		// File exists but doesn't parse as PEM/DER; use raw bytes as a
 		// symmetric key. Text secrets get the trailing newline editors
@@ -451,12 +562,146 @@ func loadKey(keyStr string) (any, error) {
 	}
 
 	// Try parsing decoded bytes as PEM/DER key.
-	if key, err := parseKeyData(decoded); err == nil {
+	key, parseErr := parseKeyData(decoded)
+	if parseErr == nil {
 		return key, nil
+	}
+	if isStructuredKeyData(decoded) {
+		return nil, fmt.Errorf("parsing base64-encoded key: %w", parseErr)
 	}
 
 	// Use raw bytes as a symmetric key.
 	return decoded, nil
+}
+
+func isStructuredKeyData(data []byte) bool {
+	data = bytes.TrimSpace(data)
+	if hasPEMMarker(data) {
+		return true
+	}
+	jsonData := bytes.TrimSpace(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}))
+	if len(jsonData) > 0 && jsonData[0] == '{' {
+		objectBody := bytes.TrimLeft(jsonData[1:], " \t\r\n")
+		if json.Valid(jsonData) || len(objectBody) > 0 && objectBody[0] == '"' || hasJWKMember(jsonData) {
+			return true
+		}
+	}
+
+	var value asn1.RawValue
+	rest, err := asn1.Unmarshal(data, &value)
+	return err == nil && len(rest) == 0 && value.Tag == asn1.TagSequence && value.IsCompound && isCompleteDER(value.Bytes)
+}
+
+func hasPEMMarker(data []byte) bool {
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		line = bytes.TrimPrefix(line, []byte{0xef, 0xbb, 0xbf})
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, []byte("-----BEGIN ")) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasJWKMember(data []byte) bool {
+	const (
+		expectsMember = iota
+		expectsValue
+		afterValue
+	)
+	type container struct {
+		kind  byte
+		state int
+	}
+
+	var stack []container
+	for i := 0; i < len(data); {
+		switch data[i] {
+		case ' ', '\t', '\r', '\n':
+			i++
+		case '"':
+			end, ok := jsonStringEnd(data, i)
+			if !ok {
+				return false
+			}
+
+			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
+				state := stack[len(stack)-1].state
+				next := end
+				for next < len(data) && (data[next] == ' ' || data[next] == '\t' || data[next] == '\r' || data[next] == '\n') {
+					next++
+				}
+				isRootMember := len(stack) == 1 && state == expectsMember
+				isMissingCommaMember := len(stack) == 1 && state == afterValue && (next == len(data) || data[next] == ':')
+				if isRootMember || isMissingCommaMember {
+					var name string
+					if err := json.Unmarshal(data[i:end], &name); err == nil && (name == "kty" || name == "keys") {
+						return true
+					}
+				}
+				stack[len(stack)-1].state = afterValue
+			}
+			i = end
+		case '{', '[':
+			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
+				stack[len(stack)-1].state = afterValue
+			}
+			stack = append(stack, container{kind: data[i], state: expectsMember})
+			i++
+		case '}', ']':
+			if len(stack) > 0 && ((data[i] == '}' && stack[len(stack)-1].kind == '{') || (data[i] == ']' && stack[len(stack)-1].kind == '[')) {
+				stack = stack[:len(stack)-1]
+			}
+			i++
+		case ',':
+			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
+				stack[len(stack)-1].state = expectsMember
+			}
+			i++
+		case ':':
+			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
+				stack[len(stack)-1].state = expectsValue
+			}
+			i++
+		default:
+			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
+				stack[len(stack)-1].state = afterValue
+			}
+			i++
+		}
+	}
+	return false
+}
+
+func jsonStringEnd(data []byte, start int) (int, bool) {
+	for i := start + 1; i < len(data); i++ {
+		switch data[i] {
+		case '\\':
+			i++
+			if i >= len(data) {
+				return 0, false
+			}
+		case '"':
+			return i + 1, true
+		}
+	}
+	return 0, false
+}
+
+func isCompleteDER(data []byte) bool {
+	for len(data) > 0 {
+		var value asn1.RawValue
+		rest, err := asn1.Unmarshal(data, &value)
+		if err != nil {
+			return false
+		}
+		if value.IsCompound && !isCompleteDER(value.Bytes) {
+			return false
+		}
+		data = rest
+	}
+	return true
 }
 
 // isTextKey reports whether key file content looks like a text secret
@@ -502,6 +747,9 @@ func parseKeyData(data []byte) (any, error) {
 	if key, err := x509.ParsePKCS1PublicKey(data); err == nil {
 		return key, nil
 	}
+	if cert, err := x509.ParseCertificate(data); err == nil {
+		return cert.PublicKey, nil
+	}
 
 	return nil, fmt.Errorf("unrecognized key format")
 }
@@ -520,6 +768,12 @@ func parseDERKey(der []byte, blockType string) (any, error) {
 		return x509.ParsePKIXPublicKey(der)
 	case "RSA PUBLIC KEY":
 		return x509.ParsePKCS1PublicKey(der)
+	case "CERTIFICATE":
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		return cert.PublicKey, nil
 	default:
 		// Try all parsers (private keys first, then public).
 		if key, err := x509.ParsePKCS8PrivateKey(der); err == nil {
@@ -536,6 +790,9 @@ func parseDERKey(der []byte, blockType string) (any, error) {
 		}
 		if key, err := x509.ParsePKCS1PublicKey(der); err == nil {
 			return key, nil
+		}
+		if cert, err := x509.ParseCertificate(der); err == nil {
+			return cert.PublicKey, nil
 		}
 		return nil, fmt.Errorf("unable to parse key from PEM block type %q", blockType)
 	}
@@ -599,13 +856,41 @@ func formatTimestamps(data map[string]any) {
 			continue
 		}
 
-		num, ok := val.(float64)
+		var text string
+		switch num := val.(type) {
+		case json.Number:
+			text = num.String()
+		case float64:
+			text = strconv.FormatFloat(num, 'f', -1, 64)
+		default:
+			continue
+		}
+
+		if len(text) == 0 || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) || !json.Valid([]byte(text)) {
+			continue
+		}
+		epoch, ok := new(big.Rat).SetString(text)
 		if !ok {
 			continue
 		}
-		epoch := int64(num)
-		t := time.Unix(epoch, 0).UTC()
-		data[key] = fmt.Sprintf("%s (%d)", t.Format(time.RFC3339), epoch)
+
+		seconds := new(big.Int).Quo(epoch.Num(), epoch.Denom())
+		if !seconds.IsInt64() {
+			continue
+		}
+
+		remainder := new(big.Rat).Sub(epoch, new(big.Rat).SetInt(seconds))
+		nanoseconds := new(big.Rat).Mul(remainder, big.NewRat(int64(time.Second), 1))
+		nanos := new(big.Int).Quo(nanoseconds.Num(), nanoseconds.Denom())
+		if !nanos.IsInt64() {
+			continue
+		}
+
+		t := time.Unix(seconds.Int64(), nanos.Int64()).UTC()
+		if t.Year() < 0 || t.Year() > 9999 {
+			continue
+		}
+		data[key] = fmt.Sprintf("%s (%s)", t.Format(time.RFC3339Nano), text)
 	}
 }
 
@@ -619,7 +904,7 @@ func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[s
 	if err != nil {
 		return fmt.Errorf("formatting %s: %w", label, err)
 	}
-	_, err = fmt.Fprintln(w, string(pretty))
+	_, err = fmt.Fprintln(w, escapeFormattedJSONControls(pretty))
 	return err
 }
 

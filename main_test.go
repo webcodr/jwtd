@@ -8,19 +8,25 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 // helper to build a JWT from raw JSON header/payload and a signature string.
@@ -28,6 +34,18 @@ func makeJWT(headerJSON, payloadJSON, sig string) string {
 	h := base64.RawURLEncoding.EncodeToString([]byte(headerJSON))
 	p := base64.RawURLEncoding.EncodeToString([]byte(payloadJSON))
 	return h + "." + p + "." + sig
+}
+
+func makeHMACJWTWithRawPayload(t *testing.T, payload string, key []byte) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	encodedPayload := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	signingString := header + "." + encodedPayload
+	signature, err := jwt.SigningMethodHS256.Sign(signingString, key)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+	return signingString + "." + base64.RawURLEncoding.EncodeToString(signature)
 }
 
 // stripANSI removes ANSI escape sequences from a string for easier assertion.
@@ -46,6 +64,108 @@ func stripANSI(s string) string {
 		i++
 	}
 	return b.String()
+}
+
+func assertEscapedControlRunes(t *testing.T, output []byte, controls ...rune) {
+	t.Helper()
+	for _, control := range controls {
+		visible := fmt.Sprintf(`\u%04x`, control)
+		if !bytes.Contains(output, []byte(visible)) {
+			t.Errorf("output missing visible escape %q:\n%q", visible, output)
+		}
+		if encoded := []byte(string(control)); bytes.Contains(output, encoded) {
+			t.Errorf("output contains literal UTF-8 control U+%04X (% x):\n%q", control, encoded, output)
+		}
+	}
+}
+
+func TestEscapeTerminalText(t *testing.T) {
+	allC0 := make([]byte, 0x20)
+	var escapedC0 strings.Builder
+	for b := byte(0); b < 0x20; b++ {
+		allC0[b] = b
+		if b == '\t' || b == '\n' {
+			escapedC0.WriteByte(b)
+		} else {
+			fmt.Fprintf(&escapedC0, `\x%02x`, b)
+		}
+	}
+
+	var allC1 strings.Builder
+	var escapedC1 strings.Builder
+	for r := rune(0x80); r <= 0x9f; r++ {
+		allC1.WriteRune(r)
+		fmt.Fprintf(&escapedC1, `\u%04x`, r)
+	}
+
+	tests := []struct {
+		name  string
+		input []byte
+		want  string
+	}{
+		{name: "safe UTF-8", input: []byte("plain cafe\u0301 世界"), want: "plain cafe\u0301 世界"},
+		{name: "newline and tab", input: []byte("first\n\tsecond"), want: "first\n\tsecond"},
+		{name: "carriage return", input: []byte("first\rsecond"), want: `first\x0dsecond`},
+		{name: "all C0 controls", input: allC0, want: escapedC0.String()},
+		{name: "DEL", input: []byte{'a', 0x7f, 'b'}, want: `a\x7fb`},
+		{name: "all C1 controls", input: []byte(allC1.String()), want: escapedC1.String()},
+		{name: "invalid UTF-8 bytes", input: []byte{'a', 0xff, 0x80, 0xc2, 'b'}, want: `a\xff\x80\xc2b`},
+		{name: "invalid UTF-8 sequence", input: []byte{0xe2, '(', 0xa1}, want: `\xe2(\xa1`},
+		{name: "overlong UTF-8", input: []byte{0xc0, 0xaf}, want: `\xc0\xaf`},
+		{name: "zero width joiner remains safe", input: []byte("a\u200db"), want: "a\u200db"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := escapeTerminalText(tt.input); got != tt.want {
+				t.Errorf("escapeTerminalText(% x) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTextEscapersEscapeBidiControls(t *testing.T) {
+	controls := []rune{
+		'\u061c', '\u200e', '\u200f',
+		'\u202a', '\u202b', '\u202c', '\u202d', '\u202e',
+		'\u2066', '\u2067', '\u2068', '\u2069',
+	}
+	for _, control := range controls {
+		t.Run(fmt.Sprintf("U+%04X", control), func(t *testing.T) {
+			input := []byte("a" + string(control) + "b")
+			want := fmt.Sprintf(`a\u%04xb`, control)
+			if got := escapeTerminalText(input); got != want {
+				t.Errorf("escapeTerminalText(%q) = %q, want %q", input, got, want)
+			}
+			if got := escapeFormattedJSONControls(input); got != want {
+				t.Errorf("escapeFormattedJSONControls(%q) = %q, want %q", input, got, want)
+			}
+		})
+	}
+}
+
+func TestEscapeFormattedJSONControls(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "trusted ANSI and C1",
+			input: "\x1b[32mkey: value\u009b\u009d\u009c\x1b[0m",
+			want:  "\x1b[32mkey: value\\u009b\\u009d\\u009c\x1b[0m",
+		},
+		{name: "DEL", input: "a\x7fb", want: `a\u007fb`},
+		{name: "safe Unicode and zero width joiner", input: "cafe\u0301 \u200d 世界", want: "cafe\u0301 \u200d 世界"},
+		{name: "already escaped controls", input: `\u007f \u009b \u061c \u202e \u2066`, want: `\u007f \u009b \u061c \u202e \u2066`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := escapeFormattedJSONControls([]byte(tt.input)); got != tt.want {
+				t.Errorf("escapeFormattedJSONControls(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
 }
 
 // --- decodeAndPrint ----------------------------------------------------------
@@ -165,6 +285,73 @@ func TestDecodeAndPrint_TokenWithNestedObject(t *testing.T) {
 	}
 }
 
+func TestDecodeAndPrint_EscapesFormattedDELAndBidiControls(t *testing.T) {
+	token := makeJWT(
+		`{"alg":"none"}`,
+		`{"key\u007f":"del","del":"\u007f","key\u061c":"bidi","lrm":"\u200e","rlm":"\u200f","override":"\u202e","isolate":"\u2066"}`,
+		"",
+	)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrint(&buf, token, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.Bytes()
+	assertEscapedControlRunes(t, output, '\x7f', '\u061c', '\u200e', '\u200f', '\u202e', '\u2066')
+	for _, visible := range []string{`key\u007f`, `key\u061c`} {
+		if !bytes.Contains(output, []byte(visible)) {
+			t.Errorf("output missing escaped key %q:\n%q", visible, output)
+		}
+	}
+}
+
+func TestDecodeAndPrint_PreservesLargeJSONNumber(t *testing.T) {
+	token := makeJWT(
+		`{"alg":"HS256"}`,
+		`{"value":9007199254740993}`,
+		"sig",
+	)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrint(&buf, token, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	plain := stripANSI(buf.String())
+	if !strings.Contains(plain, "9007199254740993") {
+		t.Errorf("output did not preserve large JSON number:\n%s", plain)
+	}
+}
+
+func TestDecodeAndPrint_RejectsTrailingJWTClaimsData(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "trailing junk", payload: `{"value":9007199254740993} trailing-junk`},
+		{name: "second JSON value", payload: `{"value":9007199254740993} {"second":true}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := makeJWT(`{"alg":"HS256"}`, tt.payload, "sig")
+
+			var buf bytes.Buffer
+			err := decodeAndPrint(&buf, token, "")
+			if err == nil {
+				t.Fatal("expected malformed JWT claims error")
+			}
+			if !strings.Contains(err.Error(), "parsing JWT claims") {
+				t.Errorf("expected JWT claims parsing error, got: %v", err)
+			}
+			if output := stripANSI(buf.String()); strings.Contains(output, "Payload") {
+				t.Errorf("malformed claims rendered as a normal payload:\n%s", output)
+			}
+		})
+	}
+}
+
 // --- formatTimestamps --------------------------------------------------------
 
 func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
@@ -276,6 +463,104 @@ func TestFormatTimestamps_OutputFormat(t *testing.T) {
 
 	if val != "2018-01-18T01:30:22Z (1516239022)" {
 		t.Errorf("expected '2018-01-18T01:30:22Z (1516239022)', got %s", val)
+	}
+}
+
+func TestFormatTimestamps_JSONNumber(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    json.Number
+		expected any
+	}{
+		{
+			name:     "fractional",
+			value:    json.Number("1516239022.75"),
+			expected: "2018-01-18T01:30:22.75Z (1516239022.75)",
+		},
+		{
+			name:     "negative fractional",
+			value:    json.Number("-0.25"),
+			expected: "1969-12-31T23:59:59.75Z (-0.25)",
+		},
+		{
+			name:     "exponent",
+			value:    json.Number("1.51623902275e9"),
+			expected: "2018-01-18T01:30:22.75Z (1.51623902275e9)",
+		},
+		{
+			name:     "out of RFC3339 range",
+			value:    json.Number("253402300800"),
+			expected: json.Number("253402300800"),
+		},
+		{
+			name:     "overflows int64 seconds",
+			value:    json.Number("1000000000000000000000000000000"),
+			expected: json.Number("1000000000000000000000000000000"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := map[string]any{"iat": tt.value}
+
+			formatTimestamps(data)
+
+			if data["iat"] != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, data["iat"])
+			}
+		})
+	}
+}
+
+func TestFormatTimestamps_InvalidJSONNumbersUnchanged(t *testing.T) {
+	tests := []struct {
+		name  string
+		value json.Number
+	}{
+		{name: "fraction", value: json.Number("1/2")},
+		{name: "hexadecimal", value: json.Number("0x10")},
+		{name: "binary exponent", value: json.Number("1p2")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := map[string]any{"iat": tt.value}
+
+			formatTimestamps(data)
+
+			got, ok := data["iat"].(json.Number)
+			if !ok {
+				t.Fatalf("expected unchanged json.Number, got %T (%v)", data["iat"], data["iat"])
+			}
+			if !bytes.Equal([]byte(got), []byte(tt.value)) {
+				t.Errorf("expected unchanged text %q, got %q", tt.value, got)
+			}
+		})
+	}
+}
+
+func TestFormatTimestamps_FractionalFloat64(t *testing.T) {
+	data := map[string]any{"iat": float64(1516239022.75)}
+
+	formatTimestamps(data)
+
+	const expected = "2018-01-18T01:30:22.75Z (1516239022.75)"
+	if data["iat"] != expected {
+		t.Errorf("expected %q, got %q", expected, data["iat"])
+	}
+}
+
+func TestDecodeJSON_UsesJSONNumberAndRejectsTrailingValues(t *testing.T) {
+	var data map[string]any
+	if err := decodeJSON([]byte(`{"value":9007199254740993}`), &data); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := data["value"]; got != json.Number("9007199254740993") {
+		t.Errorf("expected preserved json.Number, got %v (%T)", got, got)
+	}
+
+	if err := decodeJSON([]byte(`{"first":1} {"second":2}`), &data); err == nil {
+		t.Fatal("expected trailing JSON value to be rejected")
 	}
 }
 
@@ -783,6 +1068,50 @@ func TestDecodeAndPrintJWE_HeaderOnly(t *testing.T) {
 	}
 }
 
+func TestDecodeAndPrintJWE_DisplaysCompleteProtectedHeader(t *testing.T) {
+	key := generateRSAKey(t)
+	_, derPath, _ := writeRSACertificateFiles(t, key)
+	certificateDER, err := os.ReadFile(derPath)
+	if err != nil {
+		t.Fatalf("reading certificate: %v", err)
+	}
+	certificate := base64.StdEncoding.EncodeToString(certificateDER)
+	custom := "custom-value\u009b\x7f\u061c\u202e\u2066"
+	options := new(jose.EncrypterOptions).
+		WithHeader(jose.HeaderKey("x5c"), []string{certificate}).
+		WithHeader(jose.HeaderKey("custom"), custom).
+		WithHeader(jose.HeaderKey("key\u200e"), "safe")
+	encrypter, err := jose.NewEncrypter(
+		jose.A256GCM,
+		jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: &key.PublicKey},
+		options,
+	)
+	if err != nil {
+		t.Fatalf("creating encrypter: %v", err)
+	}
+	encrypted, err := encrypter.Encrypt([]byte(`{"sub":"test"}`))
+	if err != nil {
+		t.Fatalf("encrypting payload: %v", err)
+	}
+	token, err := encrypted.CompactSerialize()
+	if err != nil {
+		t.Fatalf("serializing JWE: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, ""); err != nil {
+		t.Fatalf("decoding JWE: %v", err)
+	}
+
+	output := buf.Bytes()
+	for _, want := range []string{`"x5c"`, certificate, `"custom"`, `custom-value\u009b\u007f\u061c\u202e\u2066`, `key\u200e`} {
+		if !bytes.Contains(output, []byte(want)) {
+			t.Errorf("protected header output missing %q:\n%q", want, output)
+		}
+	}
+	assertEscapedControlRunes(t, output, '\u009b', '\x7f', '\u061c', '\u200e', '\u202e', '\u2066')
+}
+
 func TestDecodeAndPrintJWE_WithDecryption(t *testing.T) {
 	key := generateRSAKey(t)
 	token := encryptJWE(t, key, []byte(`{"sub":"user1","name":"Jane Doe"}`))
@@ -831,6 +1160,22 @@ func TestDecodeAndPrintJWE_WithTimestampFormatting(t *testing.T) {
 	}
 }
 
+func TestDecodeAndPrintJWE_PreservesLargeJSONNumberInObject(t *testing.T) {
+	key := generateRSAKey(t)
+	token := encryptJWE(t, key, []byte(`{"value":9007199254740993}`))
+	keyPath := writeKeyFile(t, key)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, keyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	plain := stripANSI(buf.String())
+	if !strings.Contains(plain, "9007199254740993") {
+		t.Errorf("output did not preserve large JSON number:\n%s", plain)
+	}
+}
+
 func TestDecodeAndPrintJWE_InvalidToken(t *testing.T) {
 	var buf bytes.Buffer
 	err := decodeAndPrintJWE(&buf, "a.b.c.d.e", "")
@@ -876,6 +1221,36 @@ func TestDecodeAndPrintJWE_NonJSONPayload(t *testing.T) {
 	}
 	if !strings.Contains(plain, "plain text content") {
 		t.Error("output missing plaintext content")
+	}
+}
+
+func TestDecodeAndPrintJWE_NonJSONPayloadEscapesTerminalControls(t *testing.T) {
+	key := generateRSAKey(t)
+	plaintext := []byte("before\x1b]0;unsafe title\x07after\rline\x1b[31mred c1:\u009d\u009c invalid:")
+	plaintext = append(plaintext, 0xff, 0xc0, 0xaf)
+	plaintext = append(plaintext, []byte(" bidi:\u061c\u200e\u200f\u202e\u2066 join:\u200d")...)
+	token := encryptJWE(t, key, plaintext)
+	keyPath := writeKeyFile(t, key)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, keyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.Bytes()
+	escaped := `before\x1b]0;unsafe title\x07after\x0dline\x1b[31mred c1:\u009d\u009c invalid:\xff\xc0\xaf bidi:\u061c\u200e\u200f\u202e\u2066 join:` + "\u200d"
+	if !bytes.Contains(output, []byte(escaped)) {
+		t.Errorf("output missing visibly escaped plaintext %q:\n%q", escaped, output)
+	}
+	for _, control := range []byte{'\x1b', '\x07', '\r'} {
+		if bytes.Contains(output, []byte{control}) {
+			t.Errorf("output contains literal terminal control 0x%02x:\n%q", control, output)
+		}
+	}
+	for _, unsafe := range [][]byte{[]byte("\u009d"), []byte("\u009c"), {0xff}, {0xc0, 0xaf}} {
+		if bytes.Contains(output, unsafe) {
+			t.Errorf("output contains literal unsafe bytes % x:\n%q", unsafe, output)
+		}
 	}
 }
 
@@ -929,6 +1304,62 @@ func TestDecodeAndPrintJWE_JSONArrayPayload(t *testing.T) {
 	// Should be pretty-printed, not raw.
 	if !strings.Contains(plain, `"id"`) {
 		t.Error("output missing pretty-printed key")
+	}
+}
+
+func TestDecodeAndPrintJWE_JSONObjectEscapesControls(t *testing.T) {
+	key := generateRSAKey(t)
+	plaintext := []byte(`{"csi":"\u009b","osc":"\u009d","st":"\u009c","del":"\u007f","bidi":"\u061c\u200e\u202e\u2066","key\u009b":"safe","key\u200f":"safe"}`)
+	token := encryptJWE(t, key, plaintext)
+	keyPath := writeKeyFile(t, key)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, keyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.Bytes()
+	assertEscapedControlRunes(t, output, '\u009b', '\u009d', '\u009c', '\x7f', '\u061c', '\u200e', '\u200f', '\u202e', '\u2066')
+	for _, visible := range []string{`key\u009b`, `key\u200f`} {
+		if !bytes.Contains(output, []byte(visible)) {
+			t.Errorf("output missing visibly escaped control in object key %q:\n%q", visible, output)
+		}
+	}
+}
+
+func TestDecodeAndPrintJWE_JSONArrayEscapesControls(t *testing.T) {
+	key := generateRSAKey(t)
+	plaintext := []byte(`["\u009b","\u009d","\u009c","\u007f","\u061c","\u202e","\u2066",{"key\u009d":"value\u009c","key\u200e":"value\u200f"}]`)
+	token := encryptJWE(t, key, plaintext)
+	keyPath := writeKeyFile(t, key)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, keyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.Bytes()
+	assertEscapedControlRunes(t, output, '\u009b', '\u009d', '\u009c', '\x7f', '\u061c', '\u200e', '\u200f', '\u202e', '\u2066')
+	for _, visible := range []string{`key\u009d`, `value\u009c`, `key\u200e`, `value\u200f`} {
+		if !bytes.Contains(output, []byte(visible)) {
+			t.Errorf("output missing %q from array object:\n%q", visible, output)
+		}
+	}
+}
+
+func TestDecodeAndPrintJWE_PreservesLargeJSONNumberInArray(t *testing.T) {
+	key := generateRSAKey(t)
+	token := encryptJWE(t, key, []byte(`[9007199254740993]`))
+	keyPath := writeKeyFile(t, key)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, keyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	plain := stripANSI(buf.String())
+	if !strings.Contains(plain, "9007199254740993") {
+		t.Errorf("output did not preserve large JSON number:\n%s", plain)
 	}
 }
 
@@ -1055,23 +1486,64 @@ func TestPartSize_Empty(t *testing.T) {
 	}
 }
 
-// --- jweHeaderMap ------------------------------------------------------------
+// --- jweProtectedHeaderMap ---------------------------------------------------
 
-func TestJweHeaderMap_ExtractsAlgorithm(t *testing.T) {
-	key := generateRSAKey(t)
-	token := encryptJWE(t, key, []byte(`{"sub":"test"}`))
+func TestJWEProtectedHeaderMap_PreservesAllFields(t *testing.T) {
+	headerJSON := []byte(`{"alg":"dir","enc":"A256GCM","x5c":["certificate"],"custom":"custom-value","large":9007199254740993}`)
+	token := base64.RawURLEncoding.EncodeToString(headerJSON) + ".a.b.c.d"
 
-	jwe, err := jose.ParseEncrypted(token, allKeyAlgorithms, allContentEncryptions)
+	header, err := jweProtectedHeaderMap(token)
 	if err != nil {
-		t.Fatalf("parsing JWE: %v", err)
+		t.Fatalf("decoding protected header: %v", err)
+	}
+	if got := header["alg"]; got != "dir" {
+		t.Errorf("alg = %v (%T), want dir", got, got)
+	}
+	if got := header["enc"]; got != "A256GCM" {
+		t.Errorf("enc = %v (%T), want A256GCM", got, got)
+	}
+	x5c, ok := header["x5c"].([]any)
+	if !ok || len(x5c) != 1 || x5c[0] != "certificate" {
+		t.Errorf("x5c = %v (%T), want [certificate]", header["x5c"], header["x5c"])
+	}
+	if got := header["custom"]; got != "custom-value" {
+		t.Errorf("custom = %v (%T), want custom-value", got, got)
+	}
+	large, ok := header["large"].(json.Number)
+	if !ok {
+		t.Fatalf("large = %v (%T), want json.Number", header["large"], header["large"])
+	}
+	if got := large.String(); got != "9007199254740993" {
+		t.Errorf("large = %q, want 9007199254740993", got)
+	}
+}
+
+func TestJWEProtectedHeaderMap_RejectsMalformedHeaders(t *testing.T) {
+	encoded := func(data string) string {
+		return base64.RawURLEncoding.EncodeToString([]byte(data)) + ".a.b.c.d"
+	}
+	tests := []struct {
+		name      string
+		token     string
+		wantError string
+	}{
+		{name: "missing dot", token: "protected", wantError: "no protected header segment"},
+		{name: "invalid base64url", token: "%%%.a.b.c.d", wantError: "decoding JWE protected header"},
+		{name: "non-object JSON", token: encoded(`["not","an","object"]`), wantError: "parsing JWE protected header"},
+		{name: "null JSON", token: encoded(`null`), wantError: "parsing JWE protected header"},
+		{name: "trailing JSON data", token: encoded(`{"alg":"dir"} {"enc":"A256GCM"}`), wantError: "parsing JWE protected header"},
 	}
 
-	m := jweHeaderMap(jwe)
-	if m["alg"] != "RSA-OAEP-256" {
-		t.Errorf("expected alg RSA-OAEP-256, got %v", m["alg"])
-	}
-	if m["enc"] != "A256GCM" {
-		t.Errorf("expected enc A256GCM, got %v", m["enc"])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := jweProtectedHeaderMap(tt.token)
+			if err == nil {
+				t.Fatal("expected protected header error")
+			}
+			if !strings.Contains(err.Error(), tt.wantError) {
+				t.Errorf("error = %q, want context %q", err, tt.wantError)
+			}
+		})
 	}
 }
 
@@ -1804,6 +2276,32 @@ func writeECPublicKeyFile(t *testing.T, key *ecdsa.PublicKey) string {
 	return path
 }
 
+func writeRSACertificateFiles(t *testing.T, key *rsa.PrivateKey) (pemPath, derPath string, pemBytes []byte) {
+	t.Helper()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "jwtd test certificate"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("creating certificate: %v", err)
+	}
+
+	dir := t.TempDir()
+	pemPath = filepath.Join(dir, "test-cert.pem")
+	derPath = filepath.Join(dir, "test-cert.der")
+	pemBytes = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := os.WriteFile(pemPath, pemBytes, 0600); err != nil {
+		t.Fatalf("writing PEM certificate: %v", err)
+	}
+	if err := os.WriteFile(derPath, der, 0600); err != nil {
+		t.Fatalf("writing DER certificate: %v", err)
+	}
+	return pemPath, derPath, pemBytes
+}
+
 func TestLoadKey_RSAPublicKeyFromPEMFile(t *testing.T) {
 	priv := generateRSAKey(t)
 	keyPath := writeRSAPublicKeyFile(t, &priv.PublicKey)
@@ -1884,6 +2382,169 @@ func TestLoadKey_PKCS1RSAPublicKeyFromPEMFile(t *testing.T) {
 	}
 	if rsaPub.N.Cmp(priv.PublicKey.N) != 0 {
 		t.Error("loaded PKCS1 RSA public key does not match original")
+	}
+}
+
+func TestLoadKey_X509Certificate(t *testing.T) {
+	priv := generateRSAKey(t)
+	pemPath, derPath, pemBytes := writeRSACertificateFiles(t, priv)
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "PEM file", input: pemPath},
+		{name: "DER file", input: derPath},
+		{name: "base64 PEM", input: base64.StdEncoding.EncodeToString(pemBytes)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loaded, err := loadKey(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			publicKey, ok := loaded.(*rsa.PublicKey)
+			if !ok {
+				t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+			}
+			if publicKey.N.Cmp(priv.PublicKey.N) != 0 || publicKey.E != priv.PublicKey.E {
+				t.Error("loaded certificate public key does not match original")
+			}
+		})
+	}
+}
+
+func TestLoadKey_RejectsMalformedStructuredData(t *testing.T) {
+	unsupportedDER, err := asn1.Marshal(struct{ Value int }{Value: 1})
+	if err != nil {
+		t.Fatalf("marshaling unsupported DER: %v", err)
+	}
+	publicKey := generateRSAKey(t)
+	publicJWK, err := json.Marshal(jose.JSONWebKey{Key: &publicKey.PublicKey})
+	if err != nil {
+		t.Fatalf("marshaling public JWK: %v", err)
+	}
+	publicJWKSet, err := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &publicKey.PublicKey}}})
+	if err != nil {
+		t.Fatalf("marshaling public JWK Set: %v", err)
+	}
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "malformed PEM", data: []byte("-----BEGIN PUBLIC KEY-----\nnot-base64\n-----END PUBLIC KEY-----\n")},
+		{name: "malformed PEM after preamble", data: []byte("Bag Attributes\n    localKeyID: 01 00\n-----BEGIN PUBLIC KEY-----\nnot-base64\n-----END PUBLIC KEY-----\n")},
+		{name: "indented malformed PEM after preamble", data: []byte("Bag Attributes\n    -----BEGIN PUBLIC KEY-----\nnot-base64\n-----END PUBLIC KEY-----\n")},
+		{name: "malformed PEM after BOM and preamble", data: []byte("\xef\xbb\xbfBag Attributes\n-----BEGIN PUBLIC KEY-----\nnot-base64\n-----END PUBLIC KEY-----\n")},
+		{name: "malformed JWK JSON", data: []byte(`{"kty":"RSA","n":`)},
+		{name: "malformed JWK with escaped kty", data: []byte(`{"\u006bty":"oct","k":`)},
+		{name: "malformed JWK Set with escaped keys", data: []byte(`{"\u006b\u0065\u0079\u0073":[`)},
+		{name: "escaped strings before escaped kty", data: []byte(`{"note":"escaped quote: \" and slash: \\","\u006bty":"oct","k":`)},
+		{name: "literal kty after malformed value", data: []byte(`{"bad":truX,"kty":"RSA","n":"public"}`)},
+		{name: "escaped kty after malformed value", data: []byte(`{"bad":truX,"\u006bty":"RSA","n":"public"}`)},
+		{name: "literal kty after missing comma", data: []byte(`{"note":"x" "kty":"RSA","n":"public"}`)},
+		{name: "escaped kty after missing comma", data: []byte(`{"note":"x" "\u006bty":"RSA","n":"public"}`)},
+		{name: "literal keys after malformed value", data: []byte(`{"bad":truX,"keys":[`)},
+		{name: "escaped keys after malformed value", data: []byte(`{"bad":truX,"\u006b\u0065\u0079\u0073":[`)},
+		{name: "literal kty truncated before colon", data: []byte(`{"bad":truX,"kty"`)},
+		{name: "escaped kty truncated before colon", data: []byte(`{"bad":truX,"\u006bty"`)},
+		{name: "literal kty at EOF after missing comma", data: []byte(`{"note":"x" "kty"`)},
+		{name: "escaped kty at EOF after malformed value", data: []byte(`{"bad":truX "\u006bty"`)},
+		{name: "literal keys at EOF after missing comma", data: []byte(`{"note":"x" "keys"`)},
+		{name: "escaped keys at EOF after malformed value", data: []byte(`{"bad":truX "\u006b\u0065\u0079\u0073"`)},
+		{name: "literal kty with missing colon", data: []byte(`{"kty" "RSA","n":"public"}`)},
+		{name: "escaped kty with missing colon", data: []byte(`{"\u006bty" "RSA","n":"public"}`)},
+		{name: "literal keys with missing colon", data: []byte(`{"keys" [{"kty":"RSA"}]}`)},
+		{name: "escaped keys with missing colon", data: []byte(`{"\u006b\u0065\u0079\u0073" [{"kty":"RSA"}]}`)},
+		{name: "literal kty with replaced colon", data: []byte(`{"kty";"RSA","n":"public"}`)},
+		{name: "escaped kty with replaced colon", data: []byte(`{"\u006bty";"RSA","n":"public"}`)},
+		{name: "literal keys with replaced colon", data: []byte(`{"keys"=[{"kty":"RSA"}]}`)},
+		{name: "escaped keys with replaced colon", data: []byte(`{"\u006b\u0065\u0079\u0073"=[{"kty":"RSA"}]}`)},
+		{name: "truncated first member name", data: []byte(`{"kty`)},
+		{name: "BOM-prefixed escaped truncated first member name", data: []byte("\xef\xbb\xbf \n{\t\"\\u006b")},
+		{name: "malformed JWK fields without kty", data: []byte(`{"n":"public","e":"AQAB",`)},
+		{name: "marker-like value followed by colon", data: []byte(`{"label":"kty":`)},
+		{name: "escaped marker-like value followed by colon", data: []byte(`{"label":"\u006bty":`)},
+		{name: "marker-like value followed by missing separator", data: []byte(`{"label":"keys" "opaque"`)},
+		{name: "escaped marker-like value followed by replaced separator", data: []byte(`{"label":"\u006bty";opaque`)},
+		{name: "escaped quote and backslash value", data: []byte(`{"label":"escaped quote: \" and slash: \\":`)},
+		{name: "marker-like object value at EOF", data: []byte(`{"label":"kty"`)},
+		{name: "marker-like nested array value", data: []byte(`{"values":["keys":`)},
+		{name: "nested metadata kty member", data: []byte(`{"meta":{"kty":"custom"},"bad":truX}`)},
+		{name: "marker in truncated value string", data: []byte(`{"label":"truncated kty`)},
+		{name: "BOM-prefixed malformed JWK JSON", data: []byte("\xef\xbb\xbf{\"kty\":\"RSA\",\"n\":")},
+		{name: "BOM-prefixed malformed JWK with escaped kty", data: []byte("\xef\xbb\xbf{\"\\u006bty\":\"oct\",\"k\":")},
+		{name: "BOM-prefixed public JWK", data: append([]byte{0xef, 0xbb, 0xbf}, publicJWK...)},
+		{name: "BOM-prefixed public JWK Set", data: append([]byte{0xef, 0xbb, 0xbf}, publicJWKSet...)},
+		{name: "valid unsupported JSON object", data: []byte(`{"secret":"value"}`)},
+		{name: "unsupported ASN.1 DER sequence", data: unsupportedDER},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("file", func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "structured-key")
+				if err := os.WriteFile(path, tt.data, 0600); err != nil {
+					t.Fatalf("writing structured key data: %v", err)
+				}
+				if loaded, err := loadKey(path); err == nil {
+					t.Fatalf("expected parsing error, got %T", loaded)
+				} else if !strings.Contains(err.Error(), path) {
+					t.Fatalf("expected error to contain key path %q, got %v", path, err)
+				}
+			})
+
+			t.Run("base64", func(t *testing.T) {
+				encoded := base64.StdEncoding.EncodeToString(tt.data)
+				if loaded, err := loadKey(encoded); err == nil {
+					t.Fatalf("expected parsing error, got %T", loaded)
+				}
+			})
+		})
+	}
+}
+
+func TestLoadKey_OpaqueStructuredPrefixesRemainRaw(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "leading object brace", data: []byte("{opaque-symmetric-key")},
+		{name: "lone object brace", data: []byte("{")},
+		{name: "object brace followed by whitespace", data: []byte("{ \t")},
+		{name: "BOM-prefixed object brace followed by opaque bytes", data: []byte("\xef\xbb\xbf \n{opaque-symmetric-key")},
+		{name: "leading array bracket", data: []byte("[opaque-symmetric-key")},
+		{name: "valid JSON array", data: []byte(`["opaque","symmetric","key"]`)},
+		{name: "ASN.1 sequence with incomplete contents", data: []byte{0x30, 0x03, 0x02, 0x02, 0x01}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, mode := range []string{"file", "base64"} {
+				t.Run(mode, func(t *testing.T) {
+					input := base64.StdEncoding.EncodeToString(tt.data)
+					if mode == "file" {
+						input = filepath.Join(t.TempDir(), "opaque-key")
+						if err := os.WriteFile(input, tt.data, 0600); err != nil {
+							t.Fatalf("writing opaque key: %v", err)
+						}
+					}
+
+					loaded, err := loadKey(input)
+					if err != nil {
+						t.Fatalf("unexpected error: %v", err)
+					}
+					key, ok := loaded.([]byte)
+					if !ok {
+						t.Fatalf("expected []byte, got %T", loaded)
+					}
+					if !bytes.Equal(key, tt.data) {
+						t.Fatalf("opaque key modified: expected % x, got % x", tt.data, key)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -2047,6 +2708,42 @@ func signJWTWithHMAC(t *testing.T, key []byte, claims jwt.MapClaims) string {
 	return signed
 }
 
+func TestVerifySignature_RejectsTrailingJWTClaimsData(t *testing.T) {
+	key := []byte("a-random-looking-test-key-with-32b")
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "trailing junk", payload: `{"sub":"test"} trailing-junk`},
+		{name: "second JSON value", payload: `{"sub":"test"} {"second":true}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := makeHMACJWTWithRawPayload(t, tt.payload, key)
+
+			var buf bytes.Buffer
+			err := verifySignature(&buf, token, "raw:"+string(key))
+			if err == nil {
+				t.Fatal("expected malformed JWT claims error")
+			}
+			if errors.Is(err, errInvalidSignature) {
+				t.Fatalf("malformed claims reported as an invalid signature: %v", err)
+			}
+			if !strings.Contains(err.Error(), "parsing JWT claims") {
+				t.Errorf("expected JWT claims parsing error, got: %v", err)
+			}
+			output := stripANSI(buf.String())
+			if strings.Contains(output, "Signature: VALID") {
+				t.Errorf("malformed claims reported a valid signature:\n%s", output)
+			}
+			if strings.Contains(output, "Signature: INVALID") {
+				t.Errorf("malformed claims reported an invalid signature:\n%s", output)
+			}
+		})
+	}
+}
+
 func TestDecodeAndPrint_SignatureValid_RSA(t *testing.T) {
 	key := generateRSAKey(t)
 	keyPath := writeKeyFile(t, key)
@@ -2092,14 +2789,57 @@ func TestDecodeAndPrint_SignatureInvalid_WrongKey(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := decodeAndPrint(&buf, token, wrongKeyPath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("expected invalid signature error, got: %v", err)
 	}
 
 	output := stripANSI(buf.String())
 	if !strings.Contains(output, "Signature: INVALID") {
 		t.Errorf("expected invalid signature message, got:\n%s", output)
 	}
+}
+
+func TestVerifySignature_InvalidOutputWriterErrors(t *testing.T) {
+	signingKey := generateRSAKey(t)
+	wrongKeyPath := writeKeyFile(t, generateRSAKey(t))
+	token := signJWT(t, signingKey, jwt.MapClaims{"sub": "test"})
+
+	tests := []struct {
+		name        string
+		failedWrite int
+	}{
+		{name: "INVALID line", failedWrite: 1},
+		{name: "reason", failedWrite: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writerErr := errors.New("writer failed")
+			writer := &failOnWriteWriter{failedWrite: tt.failedWrite, err: writerErr}
+
+			err := verifySignature(writer, token, wrongKeyPath)
+			if !errors.Is(err, writerErr) {
+				t.Fatalf("expected writer error, got: %v", err)
+			}
+			if errors.Is(err, errInvalidSignature) {
+				t.Fatalf("expected writer error instead of invalid signature error, got: %v", err)
+			}
+		})
+	}
+}
+
+type failOnWriteWriter struct {
+	failedWrite int
+	writes      int
+	err         error
+}
+
+func (w *failOnWriteWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failedWrite {
+		return 0, w.err
+	}
+	return len(p), nil
 }
 
 func TestDecodeAndPrint_SignatureInvalid_AlgKeyMismatch(t *testing.T) {
@@ -2111,8 +2851,8 @@ func TestDecodeAndPrint_SignatureInvalid_AlgKeyMismatch(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := decodeAndPrint(&buf, token, pubKeyPath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("expected invalid signature error, got: %v", err)
 	}
 
 	output := stripANSI(buf.String())
@@ -2121,6 +2861,195 @@ func TestDecodeAndPrint_SignatureInvalid_AlgKeyMismatch(t *testing.T) {
 	}
 	if !strings.Contains(output, "signing method HS256 is invalid") {
 		t.Errorf("expected signing method rejection reason, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_CertificateCannotBecomeHMACSecret(t *testing.T) {
+	privateKey := generateRSAKey(t)
+	certificatePath, _, certificatePEM := writeRSACertificateFiles(t, privateKey)
+	token := signJWTWithHMAC(t, bytes.TrimSpace(certificatePEM), jwt.MapClaims{"sub": "test"})
+
+	var buf bytes.Buffer
+	err := decodeAndPrint(&buf, token, certificatePath)
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("expected invalid signature error, got: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	if !strings.Contains(output, "Signature: INVALID") {
+		t.Errorf("expected invalid signature for certificate/HMAC confusion, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrint_RejectsBOMPrefixedPublicJWKAsHMACSecret(t *testing.T) {
+	rsaKey := generateRSAKey(t)
+	jwkData, err := json.Marshal(jose.JSONWebKey{Key: &rsaKey.PublicKey})
+	if err != nil {
+		t.Fatalf("marshaling public JWK: %v", err)
+	}
+	jwkData = append([]byte{0xef, 0xbb, 0xbf}, jwkData...)
+	keyPath := filepath.Join(t.TempDir(), "public.jwk")
+	if err := os.WriteFile(keyPath, jwkData, 0600); err != nil {
+		t.Fatalf("writing public JWK: %v", err)
+	}
+	token := signJWTWithHMAC(t, jwkData, jwt.MapClaims{"sub": "test"})
+
+	var buf bytes.Buffer
+	if err := decodeAndPrint(&buf, token, keyPath); err == nil {
+		t.Fatalf("expected BOM-prefixed public JWK to be rejected, got output:\n%s", stripANSI(buf.String()))
+	}
+	if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
+		t.Fatalf("public JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
+	}
+}
+
+func TestDecodeAndPrint_RejectsEscapedJWKMemberAsHMACSecret(t *testing.T) {
+	jwkData := []byte(`{"\u006bty":"oct","k":`)
+	keyPath := filepath.Join(t.TempDir(), "malformed.jwk")
+	if err := os.WriteFile(keyPath, jwkData, 0600); err != nil {
+		t.Fatalf("writing malformed JWK: %v", err)
+	}
+	token := signJWTWithHMAC(t, jwkData, jwt.MapClaims{"sub": "test"})
+
+	var buf bytes.Buffer
+	if err := decodeAndPrint(&buf, token, keyPath); err == nil {
+		t.Fatalf("expected escaped JWK member to be rejected, got output:\n%s", stripANSI(buf.String()))
+	}
+	if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
+		t.Fatalf("malformed JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
+	}
+}
+
+func TestDecodeAndPrint_RejectsLaterMalformedJWKMembersAsHMACSecrets(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "literal kty after malformed value", data: []byte(`{"bad":truX,"kty":"RSA","n":"public"}`)},
+		{name: "escaped kty after malformed value", data: []byte(`{"bad":truX,"\u006bty":"RSA","n":"public"}`)},
+		{name: "later keys", data: []byte(`{"bad":truX,"keys":[`)},
+		{name: "kty truncated before colon", data: []byte(`{"bad":truX,"kty"`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyPath := filepath.Join(t.TempDir(), "malformed.jwk")
+			if err := os.WriteFile(keyPath, tt.data, 0600); err != nil {
+				t.Fatalf("writing malformed JWK: %v", err)
+			}
+			token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
+
+			var buf bytes.Buffer
+			if err := decodeAndPrint(&buf, token, keyPath); err == nil {
+				t.Fatalf("expected malformed JWK to be rejected, got output:\n%s", stripANSI(buf.String()))
+			}
+			if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
+				t.Fatalf("malformed JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
+			}
+		})
+	}
+}
+
+func TestDecodeAndPrint_RejectsMissingCommaJWKMembersAsHMACSecrets(t *testing.T) {
+	tests := []struct {
+		name      string
+		data      []byte
+		useBase64 bool
+	}{
+		{name: "literal kty", data: []byte(`{"note":"x" "kty":"RSA","n":"public"}`)},
+		{name: "escaped kty", data: []byte(`{"note":"x" "\u006bty":"RSA","n":"public"}`)},
+		{name: "literal kty at EOF", data: []byte(`{"note":"x" "kty"`)},
+		{name: "escaped keys at EOF after malformed value via base64", data: []byte(`{"bad":truX "\u006b\u0065\u0079\u0073"`), useBase64: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyInput := base64.StdEncoding.EncodeToString(tt.data)
+			if !tt.useBase64 {
+				keyInput = filepath.Join(t.TempDir(), "malformed.jwk")
+				if err := os.WriteFile(keyInput, tt.data, 0600); err != nil {
+					t.Fatalf("writing malformed JWK: %v", err)
+				}
+			}
+			token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
+
+			var buf bytes.Buffer
+			if err := decodeAndPrint(&buf, token, keyInput); err == nil {
+				t.Fatalf("expected malformed JWK to be rejected, got output:\n%s", stripANSI(buf.String()))
+			}
+			if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
+				t.Fatalf("malformed JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
+			}
+		})
+	}
+}
+
+func TestDecodeAndPrint_RejectsMalformedJWKMemberSeparatorsAsHMACSecrets(t *testing.T) {
+	tests := []struct {
+		name      string
+		data      []byte
+		useBase64 bool
+	}{
+		{name: "literal kty with missing colon", data: []byte(`{"kty" "RSA","n":"public"}`)},
+		{name: "escaped kty with replaced colon via base64", data: []byte(`{"\u006bty";"RSA","n":"public"}`), useBase64: true},
+		{name: "literal keys with replaced colon", data: []byte(`{"keys"=[{"kty":"RSA"}]}`)},
+		{name: "escaped keys with missing colon via base64", data: []byte(`{"\u006b\u0065\u0079\u0073" [{"kty":"RSA"}]}`), useBase64: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyInput := base64.StdEncoding.EncodeToString(tt.data)
+			if !tt.useBase64 {
+				keyInput = filepath.Join(t.TempDir(), "malformed.jwk")
+				if err := os.WriteFile(keyInput, tt.data, 0600); err != nil {
+					t.Fatalf("writing malformed JWK: %v", err)
+				}
+			}
+			token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
+
+			var buf bytes.Buffer
+			if err := decodeAndPrint(&buf, token, keyInput); err == nil {
+				t.Fatalf("expected malformed JWK to be rejected, got output:\n%s", stripANSI(buf.String()))
+			}
+			if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
+				t.Fatalf("malformed JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
+			}
+		})
+	}
+}
+
+func TestDecodeAndPrint_RejectsIncompleteJSONObjectKeysAsHMACSecrets(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "truncated kty member", data: []byte(`{"kty`)},
+		{name: "malformed JWK fields without kty", data: []byte(`{"n":"public","e":"AQAB",`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, mode := range []string{"file", "base64"} {
+				t.Run(mode, func(t *testing.T) {
+					keyInput := base64.StdEncoding.EncodeToString(tt.data)
+					if mode == "file" {
+						keyInput = filepath.Join(t.TempDir(), "malformed.jwk")
+						if err := os.WriteFile(keyInput, tt.data, 0600); err != nil {
+							t.Fatalf("writing malformed JWK: %v", err)
+						}
+					}
+					token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
+
+					var buf bytes.Buffer
+					if err := decodeAndPrint(&buf, token, keyInput); err == nil {
+						t.Fatalf("expected malformed JSON object key to be rejected, got output:\n%s", stripANSI(buf.String()))
+					}
+					if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
+						t.Fatalf("malformed JSON object key was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -2272,8 +3201,8 @@ func TestDecodeAndPrint_SignatureInvalid_WrongEd25519Key(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := decodeAndPrint(&buf, token, wrongKeyPath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("expected invalid signature error, got: %v", err)
 	}
 
 	output := stripANSI(buf.String())
@@ -2341,12 +3270,7 @@ func TestRun_JWTDKeyEnvVar_JWEDecryption(t *testing.T) {
 
 	t.Setenv("JWTD_KEY", keyPath)
 
-	rootCmd := &cobra.Command{
-		Use:  "jwtd [token]",
-		Args: cobra.MaximumNArgs(1),
-		RunE: run,
-	}
-	rootCmd.Flags().StringP("key", "k", "", "key")
+	rootCmd := newRootCommand()
 
 	var buf bytes.Buffer
 	rootCmd.SetOut(&buf)
@@ -2371,12 +3295,7 @@ func TestRun_JWTDKeyEnvVar_JWSVerification(t *testing.T) {
 
 	t.Setenv("JWTD_KEY", keyPath)
 
-	rootCmd := &cobra.Command{
-		Use:  "jwtd [token]",
-		Args: cobra.MaximumNArgs(1),
-		RunE: run,
-	}
-	rootCmd.Flags().StringP("key", "k", "", "key")
+	rootCmd := newRootCommand()
 
 	var buf bytes.Buffer
 	rootCmd.SetOut(&buf)
@@ -2404,12 +3323,7 @@ func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 	// Set env var to the wrong key.
 	t.Setenv("JWTD_KEY", wrongKeyPath)
 
-	rootCmd := &cobra.Command{
-		Use:  "jwtd [token]",
-		Args: cobra.MaximumNArgs(1),
-		RunE: run,
-	}
-	rootCmd.Flags().StringP("key", "k", "", "key")
+	rootCmd := newRootCommand()
 
 	var buf bytes.Buffer
 	rootCmd.SetOut(&buf)
@@ -2424,6 +3338,62 @@ func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 	// --key flag should take precedence over JWTD_KEY env var.
 	if !strings.Contains(output, "Signature: VALID") {
 		t.Errorf("expected --key flag to override env var, got:\n%s", output)
+	}
+}
+
+func TestRun_InvalidSignatureReturnsErrorWithoutUsage(t *testing.T) {
+	signingKey := generateRSAKey(t)
+	wrongKeyPath := writeKeyFile(t, generateRSAKey(t))
+	token := signJWT(t, signingKey, jwt.MapClaims{"sub": "test"})
+
+	rootCmd := newRootCommand()
+
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{token, "--key", wrongKeyPath})
+
+	err := rootCmd.Execute()
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("expected invalid signature error, got: %v", err)
+	}
+	if !rootCmd.SilenceUsage || !rootCmd.SilenceErrors {
+		t.Fatalf("expected usage and error rendering to be silenced")
+	}
+	if strings.Contains(stderr.String(), "Usage:") {
+		t.Fatalf("unexpected usage output:\n%s", stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected duplicate error output:\n%s", stderr.String())
+	}
+	output := stripANSI(stdout.String())
+	if !strings.Contains(output, "Signature: INVALID") {
+		t.Fatalf("expected invalid signature output, got:\n%s", output)
+	}
+	if got := strings.Count(output, "crypto/rsa: verification error"); got != 1 {
+		t.Fatalf("expected verification reason exactly once, got %d occurrences:\n%s", got, output)
+	}
+}
+
+func TestPrintExecutionError_PrintsOrdinaryErrorOnce(t *testing.T) {
+	var stderr bytes.Buffer
+	err := printExecutionError(&stderr, errors.New("ordinary failure"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := stderr.String(); got != "Error: ordinary failure\n" {
+		t.Fatalf("expected one ordinary error, got %q", got)
+	}
+}
+
+func TestPrintExecutionError_SuppressesInvalidSignature(t *testing.T) {
+	var stderr bytes.Buffer
+	err := printExecutionError(&stderr, fmt.Errorf("%w: verification details", errInvalidSignature))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no duplicate invalid signature error, got %q", stderr.String())
 	}
 }
 
@@ -2471,5 +3441,123 @@ func TestDecodeAndPrintJWE_NestedJWT(t *testing.T) {
 	// Should display the inner JWT signature.
 	if !strings.Contains(output, "Signature") {
 		t.Errorf("expected inner JWT signature section, got:\n%s", output)
+	}
+}
+
+func TestDecodeAndPrintJWE_NestedJWTEscapesC1Controls(t *testing.T) {
+	innerJWT := makeJWT(
+		`{"alg":"none"}`,
+		`{"claim":"before\u009bafter","osc":"\u009d","st":"\u009c"}`,
+		"",
+	)
+	encKey := generateRSAKey(t)
+	jweToken := encryptJWE(t, encKey, []byte(innerJWT))
+	encKeyPath := writeKeyFile(t, encKey)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, jweToken, encKeyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.Bytes()
+	if !bytes.Contains(output, []byte("nested JWT")) {
+		t.Fatalf("expected nested JWT output, got:\n%q", output)
+	}
+	assertEscapedControlRunes(t, output, '\u009b', '\u009d', '\u009c')
+}
+
+// releaseWorkflow models the subset of .github/workflows/release.yml needed
+// to check the release security invariants.
+type releaseWorkflow struct {
+	Permissions map[string]string `yaml:"permissions"`
+	Env         map[string]string `yaml:"env"`
+	Jobs        map[string]struct {
+		Needs yaml.Node `yaml:"needs"`
+		Steps []struct {
+			Name string `yaml:"name"`
+			Uses string `yaml:"uses"`
+			Run  string `yaml:"run"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+// workflowNeeds returns a job's needs as a list, accepting both the scalar
+// and sequence YAML forms.
+func workflowNeeds(t *testing.T, node yaml.Node) []string {
+	t.Helper()
+	switch node.Kind {
+	case 0:
+		return nil
+	case yaml.ScalarNode:
+		return []string{node.Value}
+	case yaml.SequenceNode:
+		var needs []string
+		if err := node.Decode(&needs); err != nil {
+			t.Fatalf("decoding needs list: %v", err)
+		}
+		return needs
+	default:
+		t.Fatalf("unexpected needs node kind %d", node.Kind)
+		return nil
+	}
+}
+
+// TestReleaseWorkflowSecurityInvariants checks the durable security
+// properties of the release workflow: actions pinned to commit SHAs,
+// least-privilege default permissions, workflow inputs reaching shell
+// scripts only through environment variables, and every release job gated
+// on the validate job.
+func TestReleaseWorkflowSecurityInvariants(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("reading release workflow: %v", err)
+	}
+
+	var wf releaseWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("parsing release workflow: %v", err)
+	}
+	if len(wf.Jobs) == 0 {
+		t.Fatal("release workflow defines no jobs")
+	}
+
+	shaPinned := regexp.MustCompile(`@[0-9a-f]{40}$`)
+	expression := regexp.MustCompile(`\$\{\{([^}]*)\}\}`)
+
+	for jobName, job := range wf.Jobs {
+		for _, step := range job.Steps {
+			stepName := step.Name
+			if stepName == "" {
+				stepName = step.Uses
+			}
+			if step.Uses != "" && !shaPinned.MatchString(step.Uses) {
+				t.Errorf("job %q step %q: action %q must be pinned to a full commit SHA", jobName, stepName, step.Uses)
+			}
+			for _, match := range expression.FindAllStringSubmatch(step.Run, -1) {
+				if expr := strings.TrimSpace(match[1]); !strings.HasPrefix(expr, "matrix.") {
+					t.Errorf("job %q step %q: run script interpolates %q; pass untrusted values through env instead", jobName, stepName, match[0])
+				}
+			}
+		}
+	}
+
+	if len(wf.Permissions) != 1 || wf.Permissions["contents"] != "read" {
+		t.Errorf("workflow permissions must be exactly {contents: read}, got %v", wf.Permissions)
+	}
+
+	if got, want := wf.Env["VERSION"], "${{ inputs.version }}"; got != want {
+		t.Errorf("root env.VERSION must be %q so scripts read the version via env, got %q", want, got)
+	}
+
+	if _, ok := wf.Jobs["validate"]; !ok {
+		t.Error("release workflow must define a validate job")
+	}
+	for jobName, job := range wf.Jobs {
+		if jobName == "validate" {
+			continue
+		}
+		if !slices.Contains(workflowNeeds(t, job.Needs), "validate") {
+			t.Errorf("job %q must depend on the validate job", jobName)
+		}
 	}
 }

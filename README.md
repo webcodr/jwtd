@@ -8,8 +8,9 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 - Decode and decrypt JWE tokens with automatic format detection
 - JWS signature verification with `--key` flag
 - Supports RSA, ECDSA, Ed25519, and HMAC signature algorithms
-- Key loading from PEM files, DER files, JWK/JWK Set, or base64-encoded input
+- Key loading from PEM/DER keys, X.509 certificates, JWK/JWK Sets, or base64-encoded input
 - Supports both private and public keys (private keys are auto-converted for verification)
+- Invalid signatures produce a nonzero exit status when `--key`/`JWTD_KEY` is used
 - Nested token detection: JWT-inside-JWE and JWE-inside-JWE are decoded recursively
 - `JWTD_KEY` environment variable for default key configuration
 - Syntax-highlighted JSON output with a consistent color scheme
@@ -89,17 +90,19 @@ Use the same `--key` flag to verify JWS signatures:
 jwtd --key /path/to/public-key.pem eyJhbGciOiJSUzI1NiIs...
 ```
 
+An invalid signature prints `Signature: INVALID` and exits with a nonzero status. Claim validity, including expiry, is not part of this cryptographic signature check.
+
 ### Key formats
 
 The `--key` flag accepts:
 
-- **PEM files**: RSA, EC, or Ed25519 keys (private or public)
-- **DER files**: PKCS#1, PKCS#8, or PKIX encoded keys
+- **PEM files**: RSA, EC, or Ed25519 keys (private or public), and X.509 certificates
+- **DER files**: PKCS#1, PKCS#8, SEC 1, or PKIX encoded keys, and X.509 certificates
 - **JWK files**: Single JSON Web Key or JWK Set (first key is used)
-- **Base64 strings**: Base64 or base64url encoded key material (PEM, DER, JWK, or raw symmetric key)
+- **Base64 strings**: Base64 or base64url encoded key material (PEM, DER, certificate, JWK, or raw symmetric key)
 - **Literal secrets**: `raw:<secret>` uses the text after the prefix as a symmetric key verbatim
 
-The format is auto-detected in that order: an inline value that is not an existing file path is base64-decoded, so pass plain-text secrets with the `raw:` prefix (or base64-encode them) to avoid misinterpretation. Key files that are neither PEM, DER, nor JWK are used as raw symmetric keys; for text content the trailing newline is trimmed.
+Key detection first honors the `raw:` prefix, then tries an existing file path, then standard base64 followed by base64url. File contents and decoded inline data are parsed as JWK/JWK Set, then PEM, then DER keys or X.509 certificates. For signature verification, jwtd extracts the public key from X.509 certificates. Recognizable structured data must parse successfully or jwtd returns an error; opaque unstructured data falls back to raw symmetric bytes. For key files, trailing newlines are trimmed only when the content is printable ASCII text (with tab, CR, and LF allowed). UTF-8/non-ASCII and other binary files remain byte-exact.
 
 ```sh
 jwtd --key raw:my-hmac-secret eyJhbGciOiJIUzI1NiIs...
