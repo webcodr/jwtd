@@ -42,6 +42,8 @@ Download a prebuilt binary from the [Releases](https://github.com/webcodr/jwtd/r
 - macOS (amd64, arm64)
 - Windows (amd64, arm64)
 
+Each release also includes a `checksums.txt` with SHA-256 hashes for every archive; verify a download with `sha256sum --check checksums.txt`.
+
 ## Usage
 
 ### Decode a JWT
@@ -146,6 +148,18 @@ go build -o jwtd .
 ```sh
 go test -v ./...
 ```
+
+### Release packaging
+
+Releases are cross-compiled and archived with [GoReleaser](https://goreleaser.com/), pinned in `.mise.toml`. Validate the configuration and produce a local snapshot build without publishing anything:
+
+```sh
+mise install
+goreleaser check
+goreleaser release --snapshot --clean
+```
+
+Snapshot artifacts are written to the git-ignored `dist/` directory. Production releases remain a manually dispatched GitHub Actions workflow; GoReleaser only builds and packages, it never publishes GitHub releases or Homebrew metadata.
 
 ## License
 
