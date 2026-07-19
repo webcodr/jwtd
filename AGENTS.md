@@ -6,22 +6,35 @@ jwtd is a CLI tool written in Go that decodes and pretty-prints JSON Web Tokens 
 
 ## Architecture
 
-Single-file Go program (`main.go`) with all functionality in package `main`:
+All functionality lives in package `main`, split across four source files:
+
+### `main.go` - CLI, token input, and the JWT/JWS path
 
 - `main()` / `newRootCommand()` - Build and execute the Cobra root command with the `--key`/`-k` flag; suppress Cobra's automatic usage/error output so runtime errors are rendered once, while invalid-signature details are not duplicated
 - `run()` / `readToken()` - Resolves the token from arguments, stdin pipe, or interactive readline prompt; falls back to `JWTD_KEY` when `--key` is not set; dispatches to JWT or JWE handling
 - `readInteractive()` - Prompts for a token interactively using `chzyer/readline`
-- `isJWE()` - Detects JWE compact serialization (5 dot-separated parts vs. 3 for a JWT)
 - `decodeAndPrint()` - Parses the JWT with `golang-jwt/jwt` (`ParseUnverified`) and orchestrates output; verifies the signature when a key is provided
 - `parseUnverifiedJWT()` / `decodeJSON()` - Strictly decode the header, claims, and other displayed JSON with exact `json.Number` values and reject malformed or trailing JSON data
 - `verifySignature()` - Verifies a JWS signature with `jwt.WithoutClaimsValidation()` so the result reflects only the cryptographic signature, not expiry; prints `Signature: VALID`/`INVALID` and returns an `errInvalidSignature` sentinel on failure so the CLI exits nonzero
 - `publicKeyForVerification()` - Extracts the public key from RSA/ECDSA/Ed25519 private keys
+
+### `jwe.go` - JWE parsing and decryption
+
+- `isJWE()` - Detects JWE compact serialization (5 dot-separated parts vs. 3 for a JWT)
 - `decodeAndPrintJWE()` / `jweProtectedHeaderMap()` - Parse a JWE with `go-jose` and decode every field in the compact protected header for display; without a key print encrypted part metadata, with a key decrypt and print the payload
-- `printDecryptedPayload()` / `escapeTerminalText()` / `escapeFormattedJSONControls()` - Recursively decode nested JWTs/JWEs and pretty-print JSON objects or arrays; raw plaintext escapes C0 controls except newline/tab, DEL, C1 controls, invalid UTF-8 bytes, and targeted bidi controls, while formatted JSON sanitizes C1, DEL, and the same targeted bidi controls
+- `printEncryptedParts()` / `partSize()` - Encrypted part metadata shown when no key is provided
+
+### `keys.go` - Key loading and format detection
+
 - `loadKey()` / `parseKeyData()` / `parseDERKey()` / `parseJWK()` - Resolve `raw:<secret>`, then an existing file path, then base64/base64url; parse loaded data as JWK/JWK Set, PEM, or DER (PKCS#1/PKCS#8/SEC 1/PKIX) keys and X.509 certificates; reject recognizable structured parse failures and otherwise allow opaque raw symmetric bytes; trim trailing newlines only for ASCII text key files limited to printable bytes plus tab/CR/LF, while UTF-8/non-ASCII and other binary files remain byte-exact
+- `isStructuredKeyData()` / `hasPEMMarker()` / `hasJWKMember()` / `isCompleteDER()` / `isTextKey()` - Heuristics distinguishing structured key material (PEM/JWK/DER) from opaque symmetric secrets
+
+### `output.go` - Formatting, escaping, and colored printing
+
+- `printDecryptedPayload()` / `escapeTerminalText()` / `escapeFormattedJSONControls()` - Recursively decode nested JWTs/JWEs and pretty-print JSON objects or arrays; raw plaintext escapes C0 controls except newline/tab, DEL, C1 controls, invalid UTF-8 bytes, and targeted bidi controls, while formatted JSON sanitizes C1, DEL, and the same targeted bidi controls
 - `formatTimestamps()` - Converts exact `iat`, `exp`, `nbf` Unix numeric values, including fractions, to RFC3339 strings (original value shown in parentheses)
 - `newFormatter()` - Creates a `go-prettyjson` formatter with the project color scheme
-- `printSection()` / `printSignature()` / `printEncryptedParts()` - Formatted output using `fatih/color`
+- `printSection()` / `printSignature()` - Formatted output using `fatih/color`
 
 ## Dependencies
 
@@ -60,8 +73,8 @@ JWTD_KEY=key.pem jwtd <token> # same, via environment variable
 
 ## Conventions
 
-- **Single package.** All code stays in package `main` unless complexity warrants splitting.
-- **Tests live in `main_test.go`** alongside `main.go`. Use table-driven tests where multiple cases share the same structure.
+- **Single package.** All code stays in package `main`, split across topical files (`main.go`, `jwe.go`, `keys.go`, `output.go`).
+- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` and release-workflow invariants in `workflow_test.go`. Use table-driven tests where multiple cases share the same structure.
 - **Color scheme** is configured in `newFormatter()` via `go-prettyjson` and `fatih/color`. Colors auto-disable when stdout is not a TTY.
 - **Error handling:** Return errors up the call stack with `fmt.Errorf` wrapping (`%w`). The root command suppresses Cobra's automatic error and usage output; `main()` renders non-signature errors and exits nonzero, while invalid signatures print their own details and return `errInvalidSignature`.
 - **Formatting:** Use `gofmt`/`goimports` standard formatting. No special linter configuration.
