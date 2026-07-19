@@ -352,6 +352,54 @@ func TestDecodeAndPrint_RejectsTrailingJWTClaimsData(t *testing.T) {
 	}
 }
 
+func TestDecodeAndPrint_PreservesLargeJSONNumberInHeader(t *testing.T) {
+	token := makeJWT(
+		`{"alg":"HS256","custom":9007199254740993}`,
+		`{"sub":"header-precision"}`,
+		"sig",
+	)
+
+	var buf bytes.Buffer
+	if err := decodeAndPrint(&buf, token, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	plain := stripANSI(buf.String())
+	if !strings.Contains(plain, "9007199254740993") {
+		t.Errorf("output did not preserve large JSON number in header:\n%s", plain)
+	}
+}
+
+func TestDecodeAndPrint_RejectsTrailingJWTHeaderData(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{name: "trailing junk", header: `{"alg":"HS256"} trailing-junk`},
+		{name: "second JSON value", header: `{"alg":"HS256"} {"second":true}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := makeJWT(tt.header, `{"sub":"trailing-header"}`, "sig")
+
+			var buf bytes.Buffer
+			err := decodeAndPrint(&buf, token, "")
+			if err == nil {
+				t.Fatal("expected malformed JWT header error")
+			}
+			// golang-jwt rejects trailing header data during parsing;
+			// the strict re-decode in parseUnverifiedJWT is the backstop.
+			if !strings.Contains(err.Error(), "header") {
+				t.Errorf("expected JWT header parsing error, got: %v", err)
+			}
+			if output := stripANSI(buf.String()); strings.Contains(output, "Payload") {
+				t.Errorf("malformed header rendered as a normal token:\n%s", output)
+			}
+		})
+	}
+}
+
 // --- formatTimestamps --------------------------------------------------------
 
 func TestFormatTimestamps_AllTimestampFields(t *testing.T) {

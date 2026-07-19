@@ -13,7 +13,7 @@ Single-file Go program (`main.go`) with all functionality in package `main`:
 - `readInteractive()` - Prompts for a token interactively using `chzyer/readline`
 - `isJWE()` - Detects JWE compact serialization (5 dot-separated parts vs. 3 for a JWT)
 - `decodeAndPrint()` - Parses the JWT with `golang-jwt/jwt` (`ParseUnverified`) and orchestrates output; verifies the signature when a key is provided
-- `parseUnverifiedJWT()` / `decodeJSON()` - Strictly decode claims and other displayed JSON with exact `json.Number` values and reject malformed or trailing JSON data
+- `parseUnverifiedJWT()` / `decodeJSON()` - Strictly decode the header, claims, and other displayed JSON with exact `json.Number` values and reject malformed or trailing JSON data
 - `verifySignature()` - Verifies a JWS signature with `jwt.WithoutClaimsValidation()` so the result reflects only the cryptographic signature, not expiry; prints `Signature: VALID`/`INVALID` and returns an `errInvalidSignature` sentinel on failure so the CLI exits nonzero
 - `publicKeyForVerification()` - Extracts the public key from RSA/ECDSA/Ed25519 private keys
 - `decodeAndPrintJWE()` / `jweProtectedHeaderMap()` - Parse a JWE with `go-jose` and decode every field in the compact protected header for display; without a key print encrypted part metadata, with a key decrypt and print the payload

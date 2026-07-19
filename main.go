@@ -206,6 +206,20 @@ func parseUnverifiedJWT(tokenStr string) (*jwt.Token, []string, jwt.MapClaims, e
 		return nil, nil, nil, fmt.Errorf("parsing JWT: %w", err)
 	}
 
+	headerData, err := parser.DecodeSegment(parts[0])
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("parsing JWT header: decoding header: %w", err)
+	}
+
+	// Re-decode the header for display with the same strictness as the
+	// claims: exact json.Number values and no trailing data. ParseUnverified
+	// decodes it with plain json.Unmarshal, which loses number precision.
+	header := map[string]any{}
+	if err := decodeJSON(headerData, &header); err != nil {
+		return nil, nil, nil, fmt.Errorf("parsing JWT header: %w", err)
+	}
+	token.Header = header
+
 	payload, err := parser.DecodeSegment(parts[1])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("parsing JWT claims: decoding payload: %w", err)
