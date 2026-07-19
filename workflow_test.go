@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -150,19 +151,32 @@ func TestGoReleaserConfigurationInvariants(t *testing.T) {
 	}
 }
 
-// releaseWorkflow models the subset of .github/workflows/release.yml needed
-// to check the release security invariants.
-type releaseWorkflow struct {
+// releaseWorkflowStep models one step of a job in
+// .github/workflows/release.yml.
+type releaseWorkflowStep struct {
+	Name string            `yaml:"name"`
+	Uses string            `yaml:"uses"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
+	With map[string]any    `yaml:"with"`
+}
+
+// releaseWorkflowJob models one job in .github/workflows/release.yml.
+type releaseWorkflowJob struct {
+	Needs       yaml.Node         `yaml:"needs"`
 	Permissions map[string]string `yaml:"permissions"`
-	Env         map[string]string `yaml:"env"`
-	Jobs        map[string]struct {
-		Needs yaml.Node `yaml:"needs"`
-		Steps []struct {
-			Name string `yaml:"name"`
-			Uses string `yaml:"uses"`
-			Run  string `yaml:"run"`
-		} `yaml:"steps"`
-	} `yaml:"jobs"`
+	Strategy    *struct {
+		Matrix map[string]any `yaml:"matrix"`
+	} `yaml:"strategy"`
+	Steps []releaseWorkflowStep `yaml:"steps"`
+}
+
+// releaseWorkflow models the subset of .github/workflows/release.yml needed
+// to check the release security and GoReleaser migration invariants.
+type releaseWorkflow struct {
+	Permissions map[string]string             `yaml:"permissions"`
+	Env         map[string]string             `yaml:"env"`
+	Jobs        map[string]releaseWorkflowJob `yaml:"jobs"`
 }
 
 // workflowNeeds returns a job's needs as a list, accepting both the scalar
@@ -218,9 +232,7 @@ func TestReleaseWorkflowSecurityInvariants(t *testing.T) {
 				t.Errorf("job %q step %q: action %q must be pinned to a full commit SHA", jobName, stepName, step.Uses)
 			}
 			for _, match := range expression.FindAllStringSubmatch(step.Run, -1) {
-				if expr := strings.TrimSpace(match[1]); !strings.HasPrefix(expr, "matrix.") {
-					t.Errorf("job %q step %q: run script interpolates %q; pass untrusted values through env instead", jobName, stepName, match[0])
-				}
+				t.Errorf("job %q step %q: run script interpolates %q; pass untrusted values through env instead", jobName, stepName, match[0])
 			}
 		}
 	}
@@ -243,5 +255,169 @@ func TestReleaseWorkflowSecurityInvariants(t *testing.T) {
 		if !slices.Contains(workflowNeeds(t, job.Needs), "validate") {
 			t.Errorf("job %q must depend on the validate job", jobName)
 		}
+	}
+}
+
+// findStepByUsesPrefix returns the first step whose uses value starts with
+// prefix, or nil if none matches.
+func findStepByUsesPrefix(steps []releaseWorkflowStep, prefix string) *releaseWorkflowStep {
+	for i := range steps {
+		if strings.HasPrefix(steps[i].Uses, prefix) {
+			return &steps[i]
+		}
+	}
+	return nil
+}
+
+// findStepContainingRun returns the first step whose run script contains
+// substr, or nil if none matches.
+func findStepContainingRun(steps []releaseWorkflowStep, substr string) *releaseWorkflowStep {
+	for i := range steps {
+		if strings.Contains(steps[i].Run, substr) {
+			return &steps[i]
+		}
+	}
+	return nil
+}
+
+// findStepByExactRun returns the first step whose trimmed run script exactly
+// equals run, or nil if none matches.
+func findStepByExactRun(steps []releaseWorkflowStep, run string) *releaseWorkflowStep {
+	for i := range steps {
+		if strings.TrimSpace(steps[i].Run) == run {
+			return &steps[i]
+		}
+	}
+	return nil
+}
+
+// extractBashArray extracts the double-quoted elements of a
+// `name=(...)` bash array literal from a run script.
+func extractBashArray(t *testing.T, script, name string) []string {
+	t.Helper()
+	arrayRe := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(name) + `=\((.*?)\)`)
+	match := arrayRe.FindStringSubmatch(script)
+	if match == nil {
+		t.Fatalf("could not find bash array %q in script", name)
+	}
+	itemRe := regexp.MustCompile(`"([^"]*)"`)
+	var items []string
+	for _, m := range itemRe.FindAllStringSubmatch(match[1], -1) {
+		items = append(items, m[1])
+	}
+	return items
+}
+
+// TestGoReleaserReleaseWorkflowMigrationInvariants checks that the release
+// workflow's build job packages archives with GoReleaser instead of a
+// hand-written matrix, without granting GoReleaser a write-capable token or
+// letting it publish anything itself.
+func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("reading release workflow: %v", err)
+	}
+	var wf releaseWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("parsing release workflow: %v", err)
+	}
+
+	goreleaserData, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("reading .goreleaser.yaml: %v", err)
+	}
+	var cfg goReleaserConfig
+	if err := yaml.Unmarshal(goreleaserData, &cfg); err != nil {
+		t.Fatalf("parsing .goreleaser.yaml: %v", err)
+	}
+	if !cfg.Release.Disable {
+		t.Error(".goreleaser.yaml release.disable must remain true throughout the migration")
+	}
+
+	buildJob, ok := wf.Jobs["build"]
+	if !ok {
+		t.Fatal("release workflow must define a build job")
+	}
+
+	if !slices.Contains(workflowNeeds(t, buildJob.Needs), "validate") {
+		t.Error("build job must depend on the validate job")
+	}
+	if buildJob.Strategy != nil && len(buildJob.Strategy.Matrix) > 0 {
+		t.Errorf("build job must not use a build matrix; GoReleaser owns cross-compilation, got matrix %v", buildJob.Strategy.Matrix)
+	}
+	if len(buildJob.Permissions) != 0 {
+		t.Errorf("build job must not elevate permissions beyond the workflow default {contents: read}, got %v", buildJob.Permissions)
+	}
+
+	checkoutStep := findStepByUsesPrefix(buildJob.Steps, "actions/checkout")
+	if checkoutStep == nil {
+		t.Error("build job must check out the repository")
+	} else if fd := checkoutStep.With["fetch-depth"]; fmt.Sprint(fd) != "0" {
+		t.Errorf("build job checkout must set fetch-depth: 0 for GoReleaser's version discovery, got %v", fd)
+	}
+
+	if findStepByUsesPrefix(buildJob.Steps, "jdx/mise-action") == nil {
+		t.Error("build job must install the mise-pinned GoReleaser version")
+	}
+
+	tagStep := findStepContainingRun(buildJob.Steps, "git tag --force")
+	if tagStep == nil {
+		t.Error("build job must establish a local version tag at GITHUB_SHA for GoReleaser's version discovery")
+	} else {
+		if !strings.Contains(tagStep.Run, "GITHUB_SHA") {
+			t.Error("local tag must be created at GITHUB_SHA")
+		}
+		if strings.Contains(tagStep.Run, "git push") {
+			t.Error("local tag step must never push to the remote")
+		}
+	}
+
+	goreleaserStep := findStepByExactRun(buildJob.Steps, "goreleaser release --clean --skip=publish")
+	if goreleaserStep == nil {
+		t.Error(`build job must run exactly "goreleaser release --clean --skip=publish"`)
+	} else {
+		if want := "v${{ env.VERSION }}"; goreleaserStep.Env["GORELEASER_CURRENT_TAG"] != want {
+			t.Errorf("GoReleaser step must set GORELEASER_CURRENT_TAG to %q, got %q", want, goreleaserStep.Env["GORELEASER_CURRENT_TAG"])
+		}
+		for key := range goreleaserStep.Env {
+			if strings.Contains(strings.ToUpper(key), "TOKEN") {
+				t.Errorf("GoReleaser step must not receive a token env var %q; the workflow, not GoReleaser, publishes releases", key)
+			}
+		}
+	}
+
+	if findStepByUsesPrefix(buildJob.Steps, "actions/upload-artifact") == nil {
+		t.Error("build job must upload the GoReleaser archives and checksums for the release job")
+	}
+
+	for _, step := range buildJob.Steps {
+		if strings.Contains(step.Run, "go build ") {
+			t.Error("build job must not contain hand-written go build commands; GoReleaser owns compilation")
+		}
+		if strings.Contains(step.Run, "tar --sort") {
+			t.Error("build job must not contain hand-written tar packaging commands; GoReleaser owns archiving")
+		}
+	}
+
+	releaseJob, ok := wf.Jobs["release"]
+	if !ok {
+		t.Fatal("release workflow must define a release job")
+	}
+	assetsStep := findStepContainingRun(releaseJob.Steps, "expected_assets=(")
+	if assetsStep == nil {
+		t.Fatal("release job must define the expected_assets allowlist")
+	}
+	assets := extractBashArray(t, assetsStep.Run, "expected_assets")
+	wantAssets := []string{
+		"jwtd-linux-amd64.tar.gz",
+		"jwtd-linux-arm64.tar.gz",
+		"jwtd-darwin-amd64.tar.gz",
+		"jwtd-darwin-arm64.tar.gz",
+		"jwtd-windows-amd64.tar.gz",
+		"jwtd-windows-arm64.tar.gz",
+		"checksums.txt",
+	}
+	if !slices.Equal(slices.Sorted(slices.Values(assets)), slices.Sorted(slices.Values(wantAssets))) {
+		t.Errorf("release job expected_assets must be exactly %v, got %v", wantAssets, assets)
 	}
 }
