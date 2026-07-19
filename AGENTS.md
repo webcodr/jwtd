@@ -36,6 +36,10 @@ All functionality lives in package `main`, split across four source files:
 - `newFormatter()` - Creates a `go-prettyjson` formatter with the project color scheme
 - `printSection()` / `printSignature()` - Formatted output using `fatih/color`
 
+### Release packaging
+
+Cross-compilation, archive naming, and checksums are owned by `.goreleaser.yaml` (pinned in `.mise.toml`); it selects the six linux/darwin/windows × amd64/arm64 targets, bakes `main.version` via ldflags, and produces binary-only `tar.gz` archives plus a `checksums.txt`. `.github/workflows/release.yml` owns everything GoReleaser does not: version/ref validation, tag provenance (a local, unpushed tag drives GoReleaser's version discovery), draft release creation and reconciliation, byte-for-byte asset verification, semantic latest-release handling, and Homebrew tap publication via `Formula/jwtd.rb`. GoReleaser never publishes: `release.disable: true` in the config and `--skip=publish`/`--snapshot` at every invocation site both enforce this, and the GoReleaser build step never receives a write-capable token.
+
 ## Dependencies
 
 | Package | Purpose |
@@ -61,6 +65,16 @@ go build -o jwtd .
 go test -v ./...
 ```
 
+### Release packaging
+
+```sh
+mise install
+goreleaser check
+goreleaser release --snapshot --clean
+```
+
+`goreleaser check` validates `.goreleaser.yaml`; the snapshot build writes to the git-ignored `dist/` directory and publishes nothing. CI runs the same two commands on every push/PR and verifies the resulting `dist/artifacts.json` against the six-archive/one-checksum contract.
+
 ### Usage
 
 ```sh
@@ -74,7 +88,7 @@ JWTD_KEY=key.pem jwtd <token> # same, via environment variable
 ## Conventions
 
 - **Single package.** All code stays in package `main`, split across topical files (`main.go`, `jwe.go`, `keys.go`, `output.go`).
-- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` and release-workflow invariants in `workflow_test.go`. Use table-driven tests where multiple cases share the same structure.
+- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` and GoReleaser/release-workflow invariants in `workflow_test.go`. Use table-driven tests where multiple cases share the same structure.
 - **Color scheme** is configured in `newFormatter()` via `go-prettyjson` and `fatih/color`. Colors auto-disable when stdout is not a TTY.
 - **Error handling:** Return errors up the call stack with `fmt.Errorf` wrapping (`%w`). The root command suppresses Cobra's automatic error and usage output; `main()` renders non-signature errors and exits nonzero, while invalid signatures print their own details and return `errInvalidSignature`.
 - **Formatting:** Use `gofmt`/`goimports` standard formatting. No special linter configuration.

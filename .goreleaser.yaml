@@ -1,0 +1,45 @@
+version: 2
+project_name: jwtd
+
+builds:
+  - id: jwtd
+    main: .
+    binary: jwtd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: jwtd
+    ids:
+      - jwtd
+    formats:
+      - tar.gz
+    name_template: "jwtd-{{ .Os }}-{{ .Arch }}"
+    files:
+      - none*
+    builds_info:
+      owner: root
+      group: root
+      mtime: "1970-01-01T00:00:00Z"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  disable: true
+
+release:
+  disable: true
