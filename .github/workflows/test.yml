@@ -9,9 +9,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
 
       - name: Check formatting
         run: |
@@ -27,3 +29,50 @@ jobs:
 
       - name: Run tests
         run: go test -v ./...
+
+      - name: Check GoReleaser configuration
+        run: goreleaser check
+
+      - name: Build GoReleaser snapshot
+        run: goreleaser release --snapshot --clean
+
+      - name: Verify GoReleaser artifact contract
+        run: |
+          expected_archives=(
+            "jwtd-linux-amd64.tar.gz"
+            "jwtd-linux-arm64.tar.gz"
+            "jwtd-darwin-amd64.tar.gz"
+            "jwtd-darwin-arm64.tar.gz"
+            "jwtd-windows-amd64.tar.gz"
+            "jwtd-windows-arm64.tar.gz"
+          )
+
+          actual_archives=$(jq -r '[.[] | select(.type == "Archive") | .name] | sort | .[]' dist/artifacts.json)
+          expected_sorted=$(printf '%s\n' "${expected_archives[@]}" | sort)
+          if [ "$actual_archives" != "$expected_sorted" ]; then
+            echo "Unexpected archive set in dist/artifacts.json:" >&2
+            echo "$actual_archives" >&2
+            exit 1
+          fi
+
+          checksum_names=$(jq -r '[.[] | select(.type == "Checksum") | .name] | .[]' dist/artifacts.json)
+          if [ "$checksum_names" != "checksums.txt" ]; then
+            echo "Expected exactly one checksums.txt Checksum artifact, got:" >&2
+            echo "$checksum_names" >&2
+            exit 1
+          fi
+
+          for archive in "${expected_archives[@]}"; do
+            case "$archive" in
+              *windows*) expected_entry="jwtd.exe" ;;
+              *) expected_entry="jwtd" ;;
+            esac
+            entries=$(tar -tzf "dist/$archive")
+            if [ "$entries" != "$expected_entry" ]; then
+              echo "Archive $archive must contain only $expected_entry, got:" >&2
+              echo "$entries" >&2
+              exit 1
+            fi
+          done
+
+          (cd dist && sha256sum --check checksums.txt)
