@@ -42,7 +42,7 @@ nfpms:
     formats:
       - deb
       - rpm
-    maintainer: David Henning <david@webcodr.io>
+    maintainer: David Henning <dev@webcodr.io>
     description: Decode and pretty-print JSON Web Tokens with syntax highlighting
     license: MIT
     homepage: https://github.com/webcodr/jwtd
