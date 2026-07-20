@@ -760,6 +760,19 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 		t.Errorf("release job must download only the %q artifact so manifests cannot leak into the release, got %q", releaseAssetsArtifact, got)
 	}
 
+	// Auto-generated notes list only PR titles, so hand-written prose reaches
+	// the published release only if RELEASE_NOTES.md is prepended at creation.
+	createStep := findStepContainingRun(releaseJob.Steps, "gh release create")
+	if createStep == nil {
+		t.Fatal("release job must create the release")
+	}
+	if !strings.Contains(createStep.Run, "RELEASE_NOTES.md") {
+		t.Error("release create must prepend RELEASE_NOTES.md so hand-written notes are not lost")
+	}
+	if !strings.Contains(createStep.Run, "--generate-notes") {
+		t.Error("release create must keep --generate-notes")
+	}
+
 	brewJob, ok := wf.Jobs["update-homebrew"]
 	if !ok {
 		t.Fatal("release workflow must define an update-homebrew job")

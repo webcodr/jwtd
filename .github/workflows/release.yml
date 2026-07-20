@@ -348,12 +348,21 @@ jobs:
             rm -rf "$verified_assets"
           }
 
+          # RELEASE_NOTES.md holds hand-written prose for the next release; when
+          # present and non-empty it is prepended to the auto-generated notes.
+          # Clear it after a release so its contents do not repeat.
+          notes_flag=()
+          if [ -s RELEASE_NOTES.md ]; then
+            notes_flag+=(--notes-file RELEASE_NOTES.md)
+          fi
+
           if ! gh release view "$tag" >/dev/null 2>&1; then
             create_succeeded=true
             gh release create "v$VERSION" \
               --verify-tag \
               --title "$tag" \
               --generate-notes \
+              "${notes_flag[@]}" \
               --draft \
               --prerelease="$PRERELEASE" \
               "${latest_flag[@]}" || create_succeeded=false

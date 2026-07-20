@@ -50,6 +50,8 @@ Scoop works the same way: `scoops` renders `jwtd.json` with `skip_upload: true`,
 
 Artifacts cross the build/release job boundary as two separate uploads: `jwtd-release-assets` (everything published to the GitHub release) and `jwtd-manifests` (the cask and Scoop manifest). The release job downloads only the former, so a downstream manifest can never become a release asset.
 
+Release notes are auto-generated (`--generate-notes`), which lists only merged PR titles. `RELEASE_NOTES.md` holds hand-written prose for the next release: when present and non-empty it is prepended to the generated notes at release creation. Clear it after a release so its contents do not repeat on the following one.
+
 ## Dependencies
 
 | Package | Purpose |
