@@ -33,8 +33,11 @@ jobs:
       - name: Check GoReleaser configuration
         run: goreleaser check
 
+      # Keyless signing needs an OIDC identity that pull requests from forks
+      # cannot obtain, and snapshots are never published, so signing is skipped
+      # here. The release workflow exercises the signing path.
       - name: Build GoReleaser snapshot
-        run: goreleaser release --snapshot --clean
+        run: goreleaser release --snapshot --clean --skip=sign
 
       - name: Verify GoReleaser artifact contract
         run: |
@@ -59,6 +62,58 @@ jobs:
           if [ "$checksum_names" != "checksums.txt" ]; then
             echo "Expected exactly one checksums.txt Checksum artifact, got:" >&2
             echo "$checksum_names" >&2
+            exit 1
+          fi
+
+          expected_sboms=()
+          for archive in "${expected_archives[@]}"; do
+            expected_sboms+=("$archive.sbom.json")
+          done
+          actual_sboms=$(jq -r '[.[] | select(.type == "SBOM") | .name] | sort | .[]' dist/artifacts.json)
+          expected_sboms_sorted=$(printf '%s\n' "${expected_sboms[@]}" | sort)
+          if [ "$actual_sboms" != "$expected_sboms_sorted" ]; then
+            echo "Unexpected SBOM set in dist/artifacts.json:" >&2
+            echo "$actual_sboms" >&2
+            exit 1
+          fi
+
+          expected_packages=(
+            "jwtd-linux-amd64.deb"
+            "jwtd-linux-arm64.deb"
+            "jwtd-linux-amd64.rpm"
+            "jwtd-linux-arm64.rpm"
+          )
+          actual_packages=$(jq -r '[.[] | select(.type == "Linux Package") | .name] | sort | .[]' dist/artifacts.json)
+          expected_packages_sorted=$(printf '%s\n' "${expected_packages[@]}" | sort)
+          if [ "$actual_packages" != "$expected_packages_sorted" ]; then
+            echo "Unexpected Linux package set in dist/artifacts.json:" >&2
+            echo "$actual_packages" >&2
+            exit 1
+          fi
+
+          cask_names=$(jq -r '[.[] | select(.type == "Homebrew Cask") | .name] | .[]' dist/artifacts.json)
+          if [ "$cask_names" != "jwtd.rb" ]; then
+            echo "Expected exactly one jwtd.rb Homebrew Cask artifact, got:" >&2
+            echo "$cask_names" >&2
+            exit 1
+          fi
+
+          scoop_names=$(jq -r '[.[] | select(.type == "Scoop Manifest") | .name] | .[]' dist/artifacts.json)
+          if [ "$scoop_names" != "jwtd.json" ]; then
+            echo "Expected exactly one jwtd.json Scoop Manifest artifact, got:" >&2
+            echo "$scoop_names" >&2
+            exit 1
+          fi
+
+          # checksums.txt must cover the reproducible artifacts only: the
+          # archives and the Linux packages. Including the non-reproducible
+          # SBOMs would make the signed checksum file differ on every run and
+          # break byte-for-byte release verification.
+          checksummed=$(cut -c 67- dist/checksums.txt | sort)
+          expected_checksummed=$(printf '%s\n' "${expected_archives[@]}" "${expected_packages[@]}" | sort)
+          if [ "$checksummed" != "$expected_checksummed" ]; then
+            echo "checksums.txt must cover exactly the archives and Linux packages, got:" >&2
+            echo "$checksummed" >&2
             exit 1
           fi
 

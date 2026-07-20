@@ -60,6 +60,12 @@ jobs:
   build:
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Keyless Cosign exchanges this OIDC token for a short-lived
+      # certificate. It grants no repository write access, so GoReleaser still
+      # cannot publish anything.
+      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -75,18 +81,37 @@ jobs:
         run: goreleaser release --clean --skip=publish
       - name: Verify and stage GoReleaser artifacts
         run: |
-          expected_assets=(
+          expected_archives=(
             "jwtd-linux-amd64.tar.gz"
             "jwtd-linux-arm64.tar.gz"
             "jwtd-darwin-amd64.tar.gz"
             "jwtd-darwin-arm64.tar.gz"
             "jwtd-windows-amd64.tar.gz"
             "jwtd-windows-arm64.tar.gz"
+          )
+
+          expected_sboms=()
+          for archive in "${expected_archives[@]}"; do
+            expected_sboms+=("$archive.sbom.json")
+          done
+
+          expected_packages=(
+            "jwtd-linux-amd64.deb"
+            "jwtd-linux-arm64.deb"
+            "jwtd-linux-amd64.rpm"
+            "jwtd-linux-arm64.rpm"
+          )
+
+          expected_assets=(
+            "${expected_archives[@]}"
             "checksums.txt"
+            "checksums.txt.sigstore.json"
+            "${expected_sboms[@]}"
+            "${expected_packages[@]}"
           )
 
           actual_archives=$(jq -r '[.[] | select(.type == "Archive") | .name] | sort | .[]' dist/artifacts.json)
-          expected_archives_sorted=$(printf '%s\n' "${expected_assets[@]}" | grep -v '^checksums.txt$' | sort)
+          expected_archives_sorted=$(printf '%s\n' "${expected_archives[@]}" | sort)
           if [ "$actual_archives" != "$expected_archives_sorted" ]; then
             echo "Unexpected archive set in dist/artifacts.json:" >&2
             echo "$actual_archives" >&2
@@ -100,7 +125,44 @@ jobs:
             exit 1
           fi
 
-          mkdir -p staging
+          actual_sboms=$(jq -r '[.[] | select(.type == "SBOM") | .name] | sort | .[]' dist/artifacts.json)
+          expected_sboms_sorted=$(printf '%s\n' "${expected_sboms[@]}" | sort)
+          if [ "$actual_sboms" != "$expected_sboms_sorted" ]; then
+            echo "Unexpected SBOM set in dist/artifacts.json:" >&2
+            echo "$actual_sboms" >&2
+            exit 1
+          fi
+
+          signature_names=$(jq -r '[.[] | select(.type == "Signature") | .name] | .[]' dist/artifacts.json)
+          if [ "$signature_names" != "checksums.txt.sigstore.json" ]; then
+            echo "Expected exactly one checksums.txt.sigstore.json Signature artifact, got:" >&2
+            echo "$signature_names" >&2
+            exit 1
+          fi
+
+          actual_packages=$(jq -r '[.[] | select(.type == "Linux Package") | .name] | sort | .[]' dist/artifacts.json)
+          expected_packages_sorted=$(printf '%s\n' "${expected_packages[@]}" | sort)
+          if [ "$actual_packages" != "$expected_packages_sorted" ]; then
+            echo "Unexpected Linux package set in dist/artifacts.json:" >&2
+            echo "$actual_packages" >&2
+            exit 1
+          fi
+
+          cask_names=$(jq -r '[.[] | select(.type == "Homebrew Cask") | .name] | .[]' dist/artifacts.json)
+          if [ "$cask_names" != "jwtd.rb" ]; then
+            echo "Expected exactly one jwtd.rb Homebrew Cask artifact, got:" >&2
+            echo "$cask_names" >&2
+            exit 1
+          fi
+
+          scoop_names=$(jq -r '[.[] | select(.type == "Scoop Manifest") | .name] | .[]' dist/artifacts.json)
+          if [ "$scoop_names" != "jwtd.json" ]; then
+            echo "Expected exactly one jwtd.json Scoop Manifest artifact, got:" >&2
+            echo "$scoop_names" >&2
+            exit 1
+          fi
+
+          mkdir -p staging/release staging/manifests
           for asset in "${expected_assets[@]}"; do
             case "$asset" in
               *windows*.tar.gz) expected_entry="jwtd.exe" ;;
@@ -115,15 +177,30 @@ jobs:
                 exit 1
               fi
             fi
-            cp "dist/$asset" "staging/$asset"
+            cp "dist/$asset" "staging/release/$asset"
           done
 
-          (cd staging && sha256sum --check checksums.txt)
-      - name: Upload artifact
+          # Manifests are downstream inputs, never release assets. They are
+          # staged separately so the release job cannot upload them.
+          cask_path=$(jq -r '.[] | select(.type == "Homebrew Cask") | .path' dist/artifacts.json)
+          cp "$cask_path" staging/manifests/jwtd.rb
+          scoop_path=$(jq -r '.[] | select(.type == "Scoop Manifest") | .path' dist/artifacts.json)
+          cp "$scoop_path" staging/manifests/jwtd.json
+
+          # checksums.txt covers the archives and Linux packages, so it must
+          # verify cleanly even though the directory also holds SBOMs and the
+          # signature bundle.
+          (cd staging/release && sha256sum --check checksums.txt)
+      - name: Upload release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: jwtd-artifacts
-          path: staging/*
+          name: jwtd-release-assets
+          path: staging/release/*
+      - name: Upload manifests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jwtd-manifests
+          path: staging/manifests/*
   release:
     needs: [validate, build]
     runs-on: ubuntu-latest
@@ -133,11 +210,16 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-      - name: Download all artifacts
+      # Provides the mise-pinned cosign used to verify the published bundle.
+      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+      # Only the release assets are downloaded here. Downstream manifests such
+      # as the Homebrew cask travel in a separate artifact and must never be
+      # uploaded to the GitHub release.
+      - name: Download release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: jwtd-release-assets
           path: artifacts
-          merge-multiple: true
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -183,7 +265,46 @@ jobs:
             "jwtd-windows-amd64.tar.gz"
             "jwtd-windows-arm64.tar.gz"
             "checksums.txt"
+            "checksums.txt.sigstore.json"
+            "jwtd-linux-amd64.tar.gz.sbom.json"
+            "jwtd-linux-arm64.tar.gz.sbom.json"
+            "jwtd-darwin-amd64.tar.gz.sbom.json"
+            "jwtd-darwin-arm64.tar.gz.sbom.json"
+            "jwtd-windows-amd64.tar.gz.sbom.json"
+            "jwtd-windows-arm64.tar.gz.sbom.json"
+            "jwtd-linux-amd64.deb"
+            "jwtd-linux-arm64.deb"
+            "jwtd-linux-amd64.rpm"
+            "jwtd-linux-arm64.rpm"
           )
+
+          # Keyless Cosign bundles carry a fresh certificate and timestamp, and
+          # Syft SBOMs embed a random documentNamespace UUID and creation
+          # timestamp. Neither is byte-reproducible, so they are verified by
+          # presence, exact count, and (for the bundle) cryptographic validity
+          # rather than byte equality. The six archives and checksums.txt stay
+          # in the strict cmp tier, keeping published releases provably
+          # immutable.
+          nonreproducible_assets=(
+            "checksums.txt.sigstore.json"
+            "jwtd-linux-amd64.tar.gz.sbom.json"
+            "jwtd-linux-arm64.tar.gz.sbom.json"
+            "jwtd-darwin-amd64.tar.gz.sbom.json"
+            "jwtd-darwin-arm64.tar.gz.sbom.json"
+            "jwtd-windows-amd64.tar.gz.sbom.json"
+            "jwtd-windows-arm64.tar.gz.sbom.json"
+          )
+
+          is_nonreproducible() {
+            local candidate="$1"
+            local asset
+            for asset in "${nonreproducible_assets[@]}"; do
+              if [ "$asset" = "$candidate" ]; then
+                return 0
+              fi
+            done
+            return 1
+          }
 
           verify_release_assets() {
             local verified_assets
@@ -196,12 +317,28 @@ jobs:
                 rm -rf "$verified_assets"
                 exit 1
               fi
+              if is_nonreproducible "$asset"; then
+                continue
+              fi
               if ! cmp -- "$verified_assets/$asset" "artifacts/$asset"; then
                 echo "Release $tag asset $asset does not match the build artifact" >&2
                 rm -rf "$verified_assets"
                 exit 1
               fi
             done
+
+            # The published checksums.txt is byte-identical to the build
+            # artifact above, so verifying the published bundle against it
+            # proves the signature covers exactly the archives being shipped.
+            if ! cosign verify-blob \
+              --bundle "$verified_assets/checksums.txt.sigstore.json" \
+              --certificate-identity-regexp "^https://github.com/$GH_REPO/\.github/workflows/release\.yml@" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$verified_assets/checksums.txt"; then
+              echo "Release $tag Cosign bundle does not verify against checksums.txt" >&2
+              rm -rf "$verified_assets"
+              exit 1
+            fi
             downloaded_count=$(find "$verified_assets" -maxdepth 1 -type f | wc -l)
             if [ "$downloaded_count" -ne "${#expected_assets[@]}" ]; then
               echo "Release $tag has unexpected assets" >&2
@@ -211,12 +348,21 @@ jobs:
             rm -rf "$verified_assets"
           }
 
+          # RELEASE_NOTES.md holds hand-written prose for the next release; when
+          # present and non-empty it is prepended to the auto-generated notes.
+          # Clear it after a release so its contents do not repeat.
+          notes_flag=()
+          if [ -s RELEASE_NOTES.md ]; then
+            notes_flag+=(--notes-file RELEASE_NOTES.md)
+          fi
+
           if ! gh release view "$tag" >/dev/null 2>&1; then
             create_succeeded=true
             gh release create "v$VERSION" \
               --verify-tag \
               --title "$tag" \
               --generate-notes \
+              "${notes_flag[@]}" \
               --draft \
               --prerelease="$PRERELEASE" \
               "${latest_flag[@]}" || create_succeeded=false
@@ -271,37 +417,68 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Download all artifacts
+      - name: Download release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: jwtd-release-assets
           path: artifacts
-          merge-multiple: true
-      - name: Generate formula
+      - name: Download manifests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: jwtd-manifests
+          path: manifests
+      - name: Verify cask against checksums
         run: |
-          SHA256_DARWIN_AMD64=$(sha256sum artifacts/jwtd-darwin-amd64.tar.gz | cut -d ' ' -f 1)
-          SHA256_DARWIN_ARM64=$(sha256sum artifacts/jwtd-darwin-arm64.tar.gz | cut -d ' ' -f 1)
-          SHA256_LINUX_AMD64=$(sha256sum artifacts/jwtd-linux-amd64.tar.gz | cut -d ' ' -f 1)
-          SHA256_LINUX_ARM64=$(sha256sum artifacts/jwtd-linux-arm64.tar.gz | cut -d ' ' -f 1)
+          cp manifests/jwtd.rb jwtd.rb
 
-          sed \
-            -e "s/VERSION/$VERSION/g" \
-            -e "s/SHA256_DARWIN_ARM64/$SHA256_DARWIN_ARM64/g" \
-            -e "s/SHA256_DARWIN_AMD64/$SHA256_DARWIN_AMD64/g" \
-            -e "s/SHA256_LINUX_ARM64/$SHA256_LINUX_ARM64/g" \
-            -e "s/SHA256_LINUX_AMD64/$SHA256_LINUX_AMD64/g" \
-            Formula/jwtd.rb > jwtd.rb
+          # Cross-check every hash GoReleaser baked into the cask against the
+          # signed checksums.txt, so the tap can only ever point at the exact
+          # archives this release published.
+          pairs=$(awk '
+            match($0, /sha256 "[0-9a-f]{64}"/) {
+              sha = substr($0, RSTART + 8, 64)
+            }
+            match($0, /jwtd-[a-z0-9]+-[a-z0-9]+\.tar\.gz/) {
+              if (sha != "") {
+                print sha "  " substr($0, RSTART, RLENGTH)
+                sha = ""
+              }
+            }
+          ' jwtd.rb | sort)
+
+          if [ -z "$pairs" ]; then
+            echo "Cask contains no sha256/archive pairs to verify" >&2
+            exit 1
+          fi
+
+          pair_count=$(printf '%s\n' "$pairs" | wc -l)
+          if [ "$pair_count" -ne 4 ]; then
+            echo "Expected 4 sha256/archive pairs in the cask, got $pair_count:" >&2
+            printf '%s\n' "$pairs" >&2
+            exit 1
+          fi
+
+          while IFS= read -r pair; do
+            if ! grep -qxF "$pair" artifacts/checksums.txt; then
+              echo "Cask entry does not match checksums.txt: $pair" >&2
+              exit 1
+            fi
+          done <<< "$pairs"
+
+          echo "Cask hashes match checksums.txt:"
+          printf '%s\n' "$pairs"
       - name: Push to homebrew-tap
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           gh auth setup-git
           git clone "https://github.com/webcodr/homebrew-tap.git" tap
-          mkdir -p tap/Formula
-          current_formula="tap/Formula/jwtd.rb"
+          mkdir -p tap/Casks
+          current_formula="tap/Casks/jwtd.rb"
           if [ -f "$current_formula" ]; then
             current_version=$(ruby -e 'ARGF.each_line { |line| puts Regexp.last_match(1) if line =~ /^\s*version\s+"([^"]+)"/ }' "$current_formula")
             if [ -z "$current_version" ]; then
-              echo "Could not determine current Homebrew formula version" >&2
+              echo "Could not determine current Homebrew cask version" >&2
               exit 1
             fi
             if ruby -rrubygems -e 'current = Gem::Version.new(ARGV[0].split("+", 2).first); requested = Gem::Version.new(ARGV[1].split("+", 2).first); exit(current > requested ? 0 : 1)' "$current_version" "$VERSION"; then
@@ -309,11 +486,89 @@ jobs:
               exit 0
             fi
           fi
-          cp jwtd.rb tap/Formula/jwtd.rb
+          cp jwtd.rb tap/Casks/jwtd.rb
           cd tap
-          git add Formula/jwtd.rb
+          # Remove the superseded formula so the tap does not expose both a
+          # formula and a cask named jwtd.
+          if [ -f Formula/jwtd.rb ]; then
+            git rm --quiet Formula/jwtd.rb
+          fi
+          git add Casks/jwtd.rb
           if git diff --cached --quiet; then
-            echo "Homebrew formula is already current"
+            echo "Homebrew cask is already current"
+            exit 0
+          else
+            diff_status=$?
+            if [ "$diff_status" -ne 1 ]; then
+              exit "$diff_status"
+            fi
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "jwtd $VERSION"
+          git push
+  update-scoop:
+    needs: [validate, release]
+    if: needs.validate.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: jwtd-release-assets
+          path: artifacts
+      - name: Download manifests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: jwtd-manifests
+          path: manifests
+      - name: Verify manifest against checksums
+        run: |
+          # Cross-check every hash in the Scoop manifest against the signed
+          # checksums.txt, so the bucket can only point at the exact archives
+          # this release published.
+          pairs=$(jq -r '.architecture | to_entries[] | "\(.value.hash)  \(.value.url | split("/") | last)"' manifests/jwtd.json | sort)
+
+          pair_count=$(printf '%s\n' "$pairs" | grep -c .)
+          if [ "$pair_count" -ne 2 ]; then
+            echo "Expected 2 hash/archive pairs in the Scoop manifest, got $pair_count:" >&2
+            printf '%s\n' "$pairs" >&2
+            exit 1
+          fi
+
+          while IFS= read -r pair; do
+            if ! grep -qxF "$pair" artifacts/checksums.txt; then
+              echo "Scoop manifest entry does not match checksums.txt: $pair" >&2
+              exit 1
+            fi
+          done <<< "$pairs"
+
+          echo "Scoop manifest hashes match checksums.txt:"
+          printf '%s\n' "$pairs"
+      - name: Push to scoop-bucket
+        env:
+          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          gh auth setup-git
+          git clone "https://github.com/webcodr/scoop-bucket.git" bucket
+          current_manifest="bucket/jwtd.json"
+          if [ -f "$current_manifest" ]; then
+            current_version=$(jq -r '.version // empty' "$current_manifest")
+            if [ -z "$current_version" ]; then
+              echo "Could not determine current Scoop manifest version" >&2
+              exit 1
+            fi
+            if ruby -rrubygems -e 'current = Gem::Version.new(ARGV[0].split("+", 2).first); requested = Gem::Version.new(ARGV[1].split("+", 2).first); exit(current > requested ? 0 : 1)' "$current_version" "$VERSION"; then
+              echo "Scoop bucket version $current_version is newer than requested $VERSION; skipping"
+              exit 0
+            fi
+          fi
+          cp manifests/jwtd.json bucket/jwtd.json
+          cd bucket
+          git add jwtd.json
+          if git diff --cached --quiet; then
+            echo "Scoop manifest is already current"
             exit 0
           else
             diff_status=$?

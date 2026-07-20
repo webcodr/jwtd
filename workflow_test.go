@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,15 +43,118 @@ type goReleaserConfig struct {
 		} `yaml:"builds_info"`
 	} `yaml:"archives"`
 	Checksum struct {
-		NameTemplate string `yaml:"name_template"`
-		Algorithm    string `yaml:"algorithm"`
+		NameTemplate string   `yaml:"name_template"`
+		Algorithm    string   `yaml:"algorithm"`
+		IDs          []string `yaml:"ids"`
 	} `yaml:"checksum"`
+	Nfpms []struct {
+		ID               string   `yaml:"id"`
+		PackageName      string   `yaml:"package_name"`
+		IDs              []string `yaml:"ids"`
+		Formats          []string `yaml:"formats"`
+		Maintainer       string   `yaml:"maintainer"`
+		Description      string   `yaml:"description"`
+		License          string   `yaml:"license"`
+		Homepage         string   `yaml:"homepage"`
+		Bindir           string   `yaml:"bindir"`
+		FileNameTemplate string   `yaml:"file_name_template"`
+		Mtime            string   `yaml:"mtime"`
+	} `yaml:"nfpms"`
+	Sboms []struct {
+		ID        string   `yaml:"id"`
+		Artifacts string   `yaml:"artifacts"`
+		Cmd       string   `yaml:"cmd"`
+		Args      []string `yaml:"args"`
+		Documents []string `yaml:"documents"`
+	} `yaml:"sboms"`
+	Signs []struct {
+		ID        string   `yaml:"id"`
+		Cmd       string   `yaml:"cmd"`
+		Artifacts string   `yaml:"artifacts"`
+		Signature string   `yaml:"signature"`
+		Args      []string `yaml:"args"`
+	} `yaml:"signs"`
+	HomebrewCasks []struct {
+		Name        string   `yaml:"name"`
+		IDs         []string `yaml:"ids"`
+		Binaries    []string `yaml:"binaries"`
+		Directory   string   `yaml:"directory"`
+		SkipUpload  string   `yaml:"skip_upload"`
+		Homepage    string   `yaml:"homepage"`
+		Description string   `yaml:"description"`
+		License     string   `yaml:"license"`
+		Repository  struct {
+			Owner string `yaml:"owner"`
+			Name  string `yaml:"name"`
+		} `yaml:"repository"`
+		URL struct {
+			Template string `yaml:"template"`
+		} `yaml:"url"`
+	} `yaml:"homebrew_casks"`
+	Scoops []struct {
+		Name        string   `yaml:"name"`
+		IDs         []string `yaml:"ids"`
+		Directory   string   `yaml:"directory"`
+		SkipUpload  string   `yaml:"skip_upload"`
+		Homepage    string   `yaml:"homepage"`
+		Description string   `yaml:"description"`
+		License     string   `yaml:"license"`
+		URLTemplate string   `yaml:"url_template"`
+		Repository  struct {
+			Owner string `yaml:"owner"`
+			Name  string `yaml:"name"`
+		} `yaml:"repository"`
+	} `yaml:"scoops"`
 	Changelog struct {
 		Disable bool `yaml:"disable"`
 	} `yaml:"changelog"`
 	Release struct {
 		Disable bool `yaml:"disable"`
 	} `yaml:"release"`
+}
+
+// releaseArchiveNames are the six archives jwtd has always shipped.
+var releaseArchiveNames = []string{
+	"jwtd-linux-amd64.tar.gz",
+	"jwtd-linux-arm64.tar.gz",
+	"jwtd-darwin-amd64.tar.gz",
+	"jwtd-darwin-arm64.tar.gz",
+	"jwtd-windows-amd64.tar.gz",
+	"jwtd-windows-arm64.tar.gz",
+}
+
+// cosignBundleName is the keyless Cosign bundle covering checksums.txt.
+const cosignBundleName = "checksums.txt.sigstore.json"
+
+// Artifact names crossing the build/release job boundary. Release assets and
+// downstream manifests travel separately so the release job can only ever
+// upload the former.
+const (
+	releaseAssetsArtifact = "jwtd-release-assets"
+	manifestsArtifact     = "jwtd-manifests"
+)
+
+// sbomNames returns the per-archive SBOM document names GoReleaser emits for
+// the default "{{ .ArtifactName }}.sbom.json" document template.
+func sbomNames() []string {
+	names := make([]string, 0, len(releaseArchiveNames))
+	for _, archive := range releaseArchiveNames {
+		names = append(names, archive+".sbom.json")
+	}
+	return names
+}
+
+// linuxPackageNames returns the nfpm package names. They deliberately reuse
+// the version-free "jwtd-{os}-{arch}" scheme of the archives rather than
+// nfpm's conventional versioned file name, so every release asset follows one
+// naming convention and the workflow allowlists stay static.
+func linuxPackageNames() []string {
+	return []string{
+		"jwtd-linux-amd64.deb",
+		"jwtd-linux-arm64.deb",
+		"jwtd-linux-amd64.rpm",
+		"jwtd-linux-arm64.rpm",
+	}
 }
 
 // TestGoReleaserConfigurationInvariants checks that .goreleaser.yaml builds
@@ -151,6 +255,110 @@ func TestGoReleaserConfigurationInvariants(t *testing.T) {
 	}
 }
 
+// TestGoReleaserSupplyChainInvariants checks that .goreleaser.yaml produces a
+// per-archive SBOM set and a keyless Cosign bundle over checksums.txt.
+// Signing the checksum file transitively covers every artifact the checksum
+// file lists, so individual archives are deliberately not signed separately.
+func TestGoReleaserSupplyChainInvariants(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("reading .goreleaser.yaml: %v", err)
+	}
+	var cfg goReleaserConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parsing .goreleaser.yaml: %v", err)
+	}
+
+	if len(cfg.Sboms) != 1 {
+		t.Fatalf("expected exactly one sboms entry, got %d", len(cfg.Sboms))
+	}
+	if want := "archive"; cfg.Sboms[0].Artifacts != want {
+		t.Errorf("sboms artifacts must be %q so every shipped archive gets an SBOM, got %q", want, cfg.Sboms[0].Artifacts)
+	}
+
+	// Syft SBOMs embed a random documentNamespace UUID and a creation
+	// timestamp, so they are not byte-reproducible. Restricting the checksum
+	// file to the "jwtd" id keeps checksums.txt itself reproducible. Without
+	// this, every rerun would produce a different checksums.txt and the
+	// release job's byte-for-byte verification of the signed file would fail.
+	//
+	// The archives and the nfpm packages both carry the "jwtd" id, so both are
+	// covered by checksums.txt, while the SBOMs (id "archive") are excluded.
+	if want := []string{"jwtd"}; !slices.Equal(cfg.Checksum.IDs, want) {
+		t.Errorf("checksum.ids must be exactly %v so non-reproducible SBOMs stay out of checksums.txt, got %v", want, cfg.Checksum.IDs)
+	}
+	if cfg.Sboms[0].ID == "jwtd" {
+		t.Error(`sboms id must not be "jwtd"; that would pull non-reproducible SBOMs into checksums.txt`)
+	}
+
+	if len(cfg.Nfpms) != 1 {
+		t.Fatalf("expected exactly one nfpms entry, got %d", len(cfg.Nfpms))
+	}
+	nfpm := cfg.Nfpms[0]
+	if want := []string{"deb", "rpm"}; !slices.Equal(slices.Sorted(slices.Values(nfpm.Formats)), slices.Sorted(slices.Values(want))) {
+		t.Errorf("nfpms formats must be exactly %v, got %v", want, nfpm.Formats)
+	}
+	if want := []string{"jwtd"}; !slices.Equal(nfpm.IDs, want) {
+		t.Errorf("nfpms ids must be exactly %v so packages come from the audited build, got %v", want, nfpm.IDs)
+	}
+	// Sharing the "jwtd" id is what puts the packages inside checksums.txt,
+	// and therefore under the Cosign signature, alongside the archives.
+	if want := "jwtd"; nfpm.ID != want {
+		t.Errorf("nfpms id must be %q so packages are covered by checksum.ids, got %q", want, nfpm.ID)
+	}
+	// Packages must stay byte-reproducible to remain in the strict cmp tier,
+	// which requires a pinned mtime.
+	if want := "1970-01-01T00:00:00Z"; nfpm.Mtime != want {
+		t.Errorf("nfpms mtime must be the fixed epoch %q to keep packages reproducible, got %q", want, nfpm.Mtime)
+	}
+	if want := "/usr/bin"; nfpm.Bindir != want {
+		t.Errorf("nfpms bindir must be %q, got %q", want, nfpm.Bindir)
+	}
+	// Packages reuse the archives' version-free naming so every release asset
+	// follows one convention and the workflow allowlists stay static.
+	if want := "jwtd-{{ .Os }}-{{ .Arch }}"; nfpm.FileNameTemplate != want {
+		t.Errorf("nfpms file_name_template must be %q, got %q", want, nfpm.FileNameTemplate)
+	}
+	for field, value := range map[string]string{
+		"maintainer":  nfpm.Maintainer,
+		"description": nfpm.Description,
+		"license":     nfpm.License,
+		"homepage":    nfpm.Homepage,
+	} {
+		if strings.TrimSpace(value) == "" {
+			t.Errorf("nfpms %s must be set; package metadata is user-visible", field)
+		}
+	}
+
+	if len(cfg.Signs) != 1 {
+		t.Fatalf("expected exactly one signs entry, got %d", len(cfg.Signs))
+	}
+	sign := cfg.Signs[0]
+	if sign.Cmd != "cosign" {
+		t.Errorf("signs cmd must be %q, got %q", "cosign", sign.Cmd)
+	}
+	if want := "checksum"; sign.Artifacts != want {
+		t.Errorf("signs artifacts must be %q; signing the checksum file covers all listed artifacts, got %q", want, sign.Artifacts)
+	}
+	if want := "${artifact}.sigstore.json"; sign.Signature != want {
+		t.Errorf("signs signature template must be %q, got %q", want, sign.Signature)
+	}
+	if !slices.Contains(sign.Args, "sign-blob") {
+		t.Errorf("signs args must invoke sign-blob, got %v", sign.Args)
+	}
+	if !slices.Contains(sign.Args, "--bundle=${signature}") {
+		t.Errorf("signs args must write a sigstore bundle via --bundle=${signature}, got %v", sign.Args)
+	}
+	if !slices.Contains(sign.Args, "--yes") {
+		t.Errorf("signs args must pass --yes so keyless signing is non-interactive in CI, got %v", sign.Args)
+	}
+	for _, arg := range sign.Args {
+		if strings.Contains(arg, "--key") {
+			t.Errorf("signing must stay keyless (OIDC); found long-lived key argument %q", arg)
+		}
+	}
+}
+
 // releaseWorkflowStep models one step of a job in
 // .github/workflows/release.yml.
 type releaseWorkflowStep struct {
@@ -164,6 +372,7 @@ type releaseWorkflowStep struct {
 // releaseWorkflowJob models one job in .github/workflows/release.yml.
 type releaseWorkflowJob struct {
 	Needs       yaml.Node         `yaml:"needs"`
+	If          string            `yaml:"if"`
 	Permissions map[string]string `yaml:"permissions"`
 	Strategy    *struct {
 		Matrix map[string]any `yaml:"matrix"`
@@ -197,6 +406,102 @@ func workflowNeeds(t *testing.T, node yaml.Node) []string {
 	default:
 		t.Fatalf("unexpected needs node kind %d", node.Kind)
 		return nil
+	}
+}
+
+// TestHomebrewCaskInvariants checks that Homebrew metadata is generated by
+// GoReleaser rather than rendered by hand, and that GoReleaser still does not
+// publish it. The cask file is a downstream manifest: the release workflow
+// pushes it to the tap, and it must never become a GitHub release asset.
+func TestHomebrewCaskInvariants(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("reading .goreleaser.yaml: %v", err)
+	}
+	var cfg goReleaserConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parsing .goreleaser.yaml: %v", err)
+	}
+
+	if len(cfg.HomebrewCasks) != 1 {
+		t.Fatalf("expected exactly one homebrew_casks entry, got %d", len(cfg.HomebrewCasks))
+	}
+	cask := cfg.HomebrewCasks[0]
+
+	// skip_upload keeps GoReleaser from pushing to the tap; the release
+	// workflow publishes the cask itself, after the release is verified.
+	if cask.SkipUpload != "true" {
+		t.Errorf("homebrew_casks skip_upload must be %q so GoReleaser never pushes to the tap, got %q", "true", cask.SkipUpload)
+	}
+	if cask.Repository.Owner != "webcodr" || cask.Repository.Name != "homebrew-tap" {
+		t.Errorf("homebrew_casks repository must be webcodr/homebrew-tap, got %s/%s", cask.Repository.Owner, cask.Repository.Name)
+	}
+	if want := "Casks"; cask.Directory != want {
+		t.Errorf("homebrew_casks directory must be %q, got %q", want, cask.Directory)
+	}
+	if want := []string{"jwtd"}; !slices.Equal(cask.Binaries, want) {
+		t.Errorf("homebrew_casks binaries must be exactly %v, got %v", want, cask.Binaries)
+	}
+	// release.disable is true, so GoReleaser cannot derive the download URL
+	// itself and fails with "cannot use default url_template" unless an
+	// explicit template is supplied.
+	if !strings.Contains(cask.URL.Template, "releases/download") {
+		t.Errorf("homebrew_casks url.template must point at the release download URL; release.disable prevents deriving it, got %q", cask.URL.Template)
+	}
+	for field, value := range map[string]string{
+		"homepage":    cask.Homepage,
+		"description": cask.Description,
+		"license":     cask.License,
+	} {
+		if strings.TrimSpace(value) == "" {
+			t.Errorf("homebrew_casks %s must be set; cask metadata is user-visible", field)
+		}
+	}
+
+	// The hand-rolled formula template is superseded by the generated cask.
+	if _, err := os.Stat(filepath.Join("Formula", "jwtd.rb")); !os.IsNotExist(err) {
+		t.Error("Formula/jwtd.rb must be removed; GoReleaser now generates the Homebrew cask")
+	}
+}
+
+// TestScoopInvariants checks that the Scoop manifest is generated by
+// GoReleaser but published by the release workflow, on the same terms as the
+// Homebrew cask.
+func TestScoopInvariants(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("reading .goreleaser.yaml: %v", err)
+	}
+	var cfg goReleaserConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parsing .goreleaser.yaml: %v", err)
+	}
+
+	if len(cfg.Scoops) != 1 {
+		t.Fatalf("expected exactly one scoops entry, got %d", len(cfg.Scoops))
+	}
+	scoop := cfg.Scoops[0]
+
+	if scoop.SkipUpload != "true" {
+		t.Errorf("scoops skip_upload must be %q so GoReleaser never pushes to the bucket, got %q", "true", scoop.SkipUpload)
+	}
+	if scoop.Repository.Owner != "webcodr" || scoop.Repository.Name != "scoop-bucket" {
+		t.Errorf("scoops repository must be webcodr/scoop-bucket, got %s/%s", scoop.Repository.Owner, scoop.Repository.Name)
+	}
+	// Same root cause as the cask: release.disable prevents GoReleaser from
+	// deriving the download URL. Note scoop spells this url_template, while
+	// homebrew_casks uses a nested url.template.
+	if !strings.Contains(scoop.URLTemplate, "releases/download") {
+		t.Errorf("scoops url_template must point at the release download URL; release.disable prevents deriving it, got %q", scoop.URLTemplate)
+	}
+	for field, value := range map[string]string{
+		"homepage":    scoop.Homepage,
+		"description": scoop.Description,
+		"license":     scoop.License,
+	} {
+		if strings.TrimSpace(value) == "" {
+			t.Errorf("scoops %s must be set; manifest metadata is user-visible", field)
+		}
 	}
 }
 
@@ -345,8 +650,12 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 	if buildJob.Strategy != nil && len(buildJob.Strategy.Matrix) > 0 {
 		t.Errorf("build job must not use a build matrix; GoReleaser owns cross-compilation, got matrix %v", buildJob.Strategy.Matrix)
 	}
-	if len(buildJob.Permissions) != 0 {
-		t.Errorf("build job must not elevate permissions beyond the workflow default {contents: read}, got %v", buildJob.Permissions)
+	// Keyless Cosign needs an OIDC token, so the build job carries exactly
+	// contents: read plus id-token: write and nothing else. In particular it
+	// must never gain contents: write, which would let GoReleaser publish.
+	wantBuildPermissions := map[string]string{"contents": "read", "id-token": "write"}
+	if !maps.Equal(buildJob.Permissions, wantBuildPermissions) {
+		t.Errorf("build job permissions must be exactly %v, got %v", wantBuildPermissions, buildJob.Permissions)
 	}
 
 	checkoutStep := findStepByUsesPrefix(buildJob.Steps, "actions/checkout")
@@ -408,16 +717,125 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 		t.Fatal("release job must define the expected_assets allowlist")
 	}
 	assets := extractBashArray(t, assetsStep.Run, "expected_assets")
-	wantAssets := []string{
-		"jwtd-linux-amd64.tar.gz",
-		"jwtd-linux-arm64.tar.gz",
-		"jwtd-darwin-amd64.tar.gz",
-		"jwtd-darwin-arm64.tar.gz",
-		"jwtd-windows-amd64.tar.gz",
-		"jwtd-windows-arm64.tar.gz",
-		"checksums.txt",
-	}
+	wantAssets := append([]string{"checksums.txt", cosignBundleName}, releaseArchiveNames...)
+	wantAssets = append(wantAssets, sbomNames()...)
+	wantAssets = append(wantAssets, linuxPackageNames()...)
 	if !slices.Equal(slices.Sorted(slices.Values(assets)), slices.Sorted(slices.Values(wantAssets))) {
 		t.Errorf("release job expected_assets must be exactly %v, got %v", wantAssets, assets)
+	}
+
+	// Keyless Cosign bundles embed a fresh certificate and timestamp, and
+	// Syft SBOMs embed a random UUID and creation timestamp, so neither is
+	// byte-reproducible across reruns. They are verified by presence and
+	// exact count (and, for the bundle, by cryptographic validity) instead of
+	// byte equality. Every other asset keeps the strict cmp check, so the six
+	// archives and checksums.txt remain provably immutable.
+	nonReproducible := extractBashArray(t, assetsStep.Run, "nonreproducible_assets")
+	wantNonReproducible := append([]string{cosignBundleName}, sbomNames()...)
+	if !slices.Equal(slices.Sorted(slices.Values(nonReproducible)), slices.Sorted(slices.Values(wantNonReproducible))) {
+		t.Errorf("release job nonreproducible_assets must be exactly %v, got %v", wantNonReproducible, nonReproducible)
+	}
+	reproducible := append([]string{"checksums.txt"}, releaseArchiveNames...)
+	reproducible = append(reproducible, linuxPackageNames()...)
+	for _, asset := range reproducible {
+		if slices.Contains(nonReproducible, asset) {
+			t.Errorf("asset %q must stay in the byte-comparison tier; it is reproducible and its immutability is load-bearing", asset)
+		}
+	}
+	if !strings.Contains(assetsStep.Run, "cosign verify-blob") {
+		t.Error("release job must verify the Cosign bundle against checksums.txt with cosign verify-blob")
+	}
+
+	// The generated cask is a downstream manifest, not a release asset. It
+	// reaches update-homebrew through a separate artifact so the release job
+	// cannot upload it to the GitHub release even by accident.
+	if slices.Contains(assets, "jwtd.rb") {
+		t.Error("the Homebrew cask must not be a release asset; it belongs in the manifests artifact")
+	}
+	releaseDownload := findStepByUsesPrefix(releaseJob.Steps, "actions/download-artifact")
+	if releaseDownload == nil {
+		t.Fatal("release job must download the build artifact")
+	}
+	if got := fmt.Sprint(releaseDownload.With["name"]); got != releaseAssetsArtifact {
+		t.Errorf("release job must download only the %q artifact so manifests cannot leak into the release, got %q", releaseAssetsArtifact, got)
+	}
+
+	// Auto-generated notes list only PR titles, so hand-written prose reaches
+	// the published release only if RELEASE_NOTES.md is prepended at creation.
+	createStep := findStepContainingRun(releaseJob.Steps, "gh release create")
+	if createStep == nil {
+		t.Fatal("release job must create the release")
+	}
+	if !strings.Contains(createStep.Run, "RELEASE_NOTES.md") {
+		t.Error("release create must prepend RELEASE_NOTES.md so hand-written notes are not lost")
+	}
+	if !strings.Contains(createStep.Run, "--generate-notes") {
+		t.Error("release create must keep --generate-notes")
+	}
+
+	brewJob, ok := wf.Jobs["update-homebrew"]
+	if !ok {
+		t.Fatal("release workflow must define an update-homebrew job")
+	}
+	if !slices.Contains(workflowNeeds(t, brewJob.Needs), "release") {
+		t.Error("update-homebrew must run only after a successfully published release")
+	}
+	for _, step := range brewJob.Steps {
+		if strings.Contains(step.Run, "sed \\") || strings.Contains(step.Run, "SHA256_DARWIN") {
+			t.Error("update-homebrew must not hand-render the formula; GoReleaser generates the cask")
+		}
+	}
+	caskStep := findStepContainingRun(brewJob.Steps, "checksums.txt")
+	if caskStep == nil {
+		t.Error("update-homebrew must cross-check the cask's embedded hashes against checksums.txt")
+	}
+	pushStep := findStepContainingRun(brewJob.Steps, "git push")
+	if pushStep == nil {
+		t.Fatal("update-homebrew must push the cask to the tap")
+	}
+	if !strings.Contains(pushStep.Run, "Casks/jwtd.rb") {
+		t.Error("update-homebrew must publish the cask to Casks/jwtd.rb in the tap")
+	}
+	if !strings.Contains(pushStep.Run, "Gem::Version") {
+		t.Error("update-homebrew must keep the version-downgrade guard")
+	}
+
+	scoopJob, ok := wf.Jobs["update-scoop"]
+	if !ok {
+		t.Fatal("release workflow must define an update-scoop job")
+	}
+	if !slices.Contains(workflowNeeds(t, scoopJob.Needs), "release") {
+		t.Error("update-scoop must run only after a successfully published release")
+	}
+	scoopPush := findStepContainingRun(scoopJob.Steps, "git push")
+	if scoopPush == nil {
+		t.Fatal("update-scoop must push the manifest to the bucket")
+	}
+	if !strings.Contains(scoopPush.Run, "bucket/jwtd.json") {
+		t.Error("update-scoop must publish the manifest to bucket/jwtd.json")
+	}
+	if !strings.Contains(scoopPush.Run, "Gem::Version") {
+		t.Error("update-scoop must keep the version-downgrade guard")
+	}
+	if got := scoopPush.Env["GH_TOKEN"]; !strings.Contains(got, "SCOOP_BUCKET_TOKEN") {
+		t.Errorf("update-scoop must push with the dedicated SCOOP_BUCKET_TOKEN, got %q", got)
+	}
+
+	// Both downstream channels publish only for stable releases, and both
+	// consume the manifests artifact rather than release assets.
+	for _, name := range []string{"update-homebrew", "update-scoop"} {
+		job := wf.Jobs[name]
+		if want := "needs.validate.outputs.prerelease == 'false'"; !strings.Contains(job.If, want) {
+			t.Errorf("job %q must be gated on %q so prereleases never update a channel, got %q", name, want, job.If)
+		}
+		var found bool
+		for _, step := range job.Steps {
+			if strings.HasPrefix(step.Uses, "actions/download-artifact") && fmt.Sprint(step.With["name"]) == manifestsArtifact {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("job %q must download the %q artifact", name, manifestsArtifact)
+		}
 	}
 }

@@ -20,10 +20,19 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 
 ## Installation
 
-### Homebrew (macOS and Linux)
+### Homebrew (macOS)
 
 ```sh
-brew install webcodr/tap/jwtd
+brew install --cask webcodr/tap/jwtd
+```
+
+jwtd is distributed as a Homebrew cask, which Homebrew supports on macOS only. On Linux, use the `.deb`/`.rpm` packages or the release archives below.
+
+### Scoop (Windows)
+
+```sh
+scoop bucket add webcodr https://github.com/webcodr/scoop-bucket
+scoop install jwtd
 ```
 
 ### From source
@@ -42,7 +51,26 @@ Download a prebuilt binary from the [Releases](https://github.com/webcodr/jwtd/r
 - macOS (amd64, arm64)
 - Windows (amd64, arm64)
 
-Each release also includes a `checksums.txt` with SHA-256 hashes for every archive; verify a download with `sha256sum --check checksums.txt`.
+Linux users can also install a `.deb` or `.rpm` package, which places the binary at `/usr/bin/jwtd`:
+
+```sh
+sudo dpkg -i jwtd-linux-amd64.deb    # Debian, Ubuntu
+sudo rpm -i jwtd-linux-amd64.rpm     # Fedora, RHEL, openSUSE
+```
+
+Each release also includes a `checksums.txt` with SHA-256 hashes for every archive and Linux package; verify a download with `sha256sum --check checksums.txt`.
+
+`checksums.txt` is signed with [Cosign](https://docs.sigstore.dev/) keyless signing. To verify that the checksums really came from this project's release workflow, download `checksums.txt.sigstore.json` alongside it and run:
+
+```sh
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/webcodr/jwtd/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+Every archive also ships a [Syft](https://github.com/anchore/syft) SPDX SBOM named `<archive>.sbom.json`.
 
 ## Usage
 
@@ -156,10 +184,10 @@ Releases are cross-compiled and archived with [GoReleaser](https://goreleaser.co
 ```sh
 mise install
 goreleaser check
-goreleaser release --snapshot --clean
+goreleaser release --snapshot --clean --skip=sign
 ```
 
-Snapshot artifacts are written to the git-ignored `dist/` directory. Production releases remain a manually dispatched GitHub Actions workflow; GoReleaser only builds and packages, it never publishes GitHub releases or Homebrew metadata.
+Snapshot artifacts are written to the git-ignored `dist/` directory. `--skip=sign` is required locally because signing is keyless and needs a GitHub Actions OIDC identity; the release workflow exercises the signing path. Production releases remain a manually dispatched GitHub Actions workflow; GoReleaser only builds, packages, and signs — it never publishes GitHub releases or Homebrew metadata.
 
 ## License
 

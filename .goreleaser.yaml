@@ -34,9 +34,90 @@ archives:
       group: root
       mtime: "1970-01-01T00:00:00Z"
 
+nfpms:
+  - id: jwtd
+    ids:
+      - jwtd
+    package_name: jwtd
+    formats:
+      - deb
+      - rpm
+    maintainer: David Henning <dev@webcodr.io>
+    description: Decode and pretty-print JSON Web Tokens with syntax highlighting
+    license: MIT
+    homepage: https://github.com/webcodr/jwtd
+    section: utils
+    priority: optional
+    bindir: /usr/bin
+    # Reuse the archives' version-free naming so every release asset follows
+    # one convention and the workflow allowlists stay static.
+    file_name_template: "jwtd-{{ .Os }}-{{ .Arch }}"
+    mtime: "1970-01-01T00:00:00Z"
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  # Restrict the checksum file to the archives. Syft SBOMs embed a random
+  # documentNamespace UUID and a creation timestamp, so including them would
+  # make checksums.txt itself non-reproducible and break the release job's
+  # byte-for-byte rerun verification of the file Cosign signs.
+  ids:
+    - jwtd
+
+sboms:
+  - id: archive
+    artifacts: archive
+
+# Signing the checksum file transitively covers every artifact it lists.
+# Keyless (OIDC) signing works in CI only; local runs use --skip=sign.
+signs:
+  - id: checksum
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+
+homebrew_casks:
+  - name: jwtd
+    ids:
+      - jwtd
+    binaries:
+      - jwtd
+    repository:
+      owner: webcodr
+      name: homebrew-tap
+    directory: Casks
+    # GoReleaser renders the cask into dist/ but never pushes it. The release
+    # workflow publishes it to the tap only after the release is verified.
+    skip_upload: true
+    homepage: https://github.com/webcodr/jwtd
+    description: Decode and pretty-print JSON Web Tokens with syntax highlighting
+    license: MIT
+    # release.disable is true, so GoReleaser cannot derive the download URL
+    # itself; without this it fails with "cannot use default url_template".
+    url:
+      template: "https://github.com/webcodr/jwtd/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+
+scoops:
+  - name: jwtd
+    ids:
+      - jwtd
+    repository:
+      owner: webcodr
+      name: scoop-bucket
+    # As with the cask, GoReleaser renders the manifest into dist/ but never
+    # pushes it; the release workflow publishes it after verifying the release.
+    skip_upload: true
+    homepage: https://github.com/webcodr/jwtd
+    description: Decode and pretty-print JSON Web Tokens with syntax highlighting
+    license: MIT
+    # release.disable prevents GoReleaser from deriving the download URL.
+    # Scoop spells this url_template; homebrew_casks uses a nested url.template.
+    url_template: "https://github.com/webcodr/jwtd/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
 
 changelog:
   disable: true
