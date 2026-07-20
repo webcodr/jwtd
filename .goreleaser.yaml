@@ -81,6 +81,27 @@ signs:
       - "${artifact}"
       - "--yes"
 
+homebrew_casks:
+  - name: jwtd
+    ids:
+      - jwtd
+    binaries:
+      - jwtd
+    repository:
+      owner: webcodr
+      name: homebrew-tap
+    directory: Casks
+    # GoReleaser renders the cask into dist/ but never pushes it. The release
+    # workflow publishes it to the tap only after the release is verified.
+    skip_upload: true
+    homepage: https://github.com/webcodr/jwtd
+    description: Decode and pretty-print JSON Web Tokens with syntax highlighting
+    license: MIT
+    # release.disable is true, so GoReleaser cannot derive the download URL
+    # itself; without this it fails with "cannot use default url_template".
+    url:
+      template: "https://github.com/webcodr/jwtd/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+
 changelog:
   disable: true
 

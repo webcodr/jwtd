@@ -148,7 +148,14 @@ jobs:
             exit 1
           fi
 
-          mkdir -p staging
+          cask_names=$(jq -r '[.[] | select(.type == "Homebrew Cask") | .name] | .[]' dist/artifacts.json)
+          if [ "$cask_names" != "jwtd.rb" ]; then
+            echo "Expected exactly one jwtd.rb Homebrew Cask artifact, got:" >&2
+            echo "$cask_names" >&2
+            exit 1
+          fi
+
+          mkdir -p staging/release staging/manifests
           for asset in "${expected_assets[@]}"; do
             case "$asset" in
               *windows*.tar.gz) expected_entry="jwtd.exe" ;;
@@ -163,17 +170,28 @@ jobs:
                 exit 1
               fi
             fi
-            cp "dist/$asset" "staging/$asset"
+            cp "dist/$asset" "staging/release/$asset"
           done
 
-          # checksums.txt covers the archives only, so it must verify cleanly
-          # even though the staging directory also holds SBOMs and the bundle.
-          (cd staging && sha256sum --check checksums.txt)
-      - name: Upload artifact
+          # The cask is a downstream manifest, never a release asset. It is
+          # staged separately so the release job cannot upload it.
+          cask_path=$(jq -r '.[] | select(.type == "Homebrew Cask") | .path' dist/artifacts.json)
+          cp "$cask_path" staging/manifests/jwtd.rb
+
+          # checksums.txt covers the archives and Linux packages, so it must
+          # verify cleanly even though the directory also holds SBOMs and the
+          # signature bundle.
+          (cd staging/release && sha256sum --check checksums.txt)
+      - name: Upload release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: jwtd-artifacts
-          path: staging/*
+          name: jwtd-release-assets
+          path: staging/release/*
+      - name: Upload manifests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jwtd-manifests
+          path: staging/manifests/*
   release:
     needs: [validate, build]
     runs-on: ubuntu-latest
@@ -185,11 +203,14 @@ jobs:
           fetch-depth: 0
       # Provides the mise-pinned cosign used to verify the published bundle.
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
-      - name: Download all artifacts
+      # Only the release assets are downloaded here. Downstream manifests such
+      # as the Homebrew cask travel in a separate artifact and must never be
+      # uploaded to the GitHub release.
+      - name: Download release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: jwtd-release-assets
           path: artifacts
-          merge-multiple: true
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -378,37 +399,68 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Download all artifacts
+      - name: Download release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: jwtd-release-assets
           path: artifacts
-          merge-multiple: true
-      - name: Generate formula
+      - name: Download manifests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: jwtd-manifests
+          path: manifests
+      - name: Verify cask against checksums
         run: |
-          SHA256_DARWIN_AMD64=$(sha256sum artifacts/jwtd-darwin-amd64.tar.gz | cut -d ' ' -f 1)
-          SHA256_DARWIN_ARM64=$(sha256sum artifacts/jwtd-darwin-arm64.tar.gz | cut -d ' ' -f 1)
-          SHA256_LINUX_AMD64=$(sha256sum artifacts/jwtd-linux-amd64.tar.gz | cut -d ' ' -f 1)
-          SHA256_LINUX_ARM64=$(sha256sum artifacts/jwtd-linux-arm64.tar.gz | cut -d ' ' -f 1)
+          cp manifests/jwtd.rb jwtd.rb
 
-          sed \
-            -e "s/VERSION/$VERSION/g" \
-            -e "s/SHA256_DARWIN_ARM64/$SHA256_DARWIN_ARM64/g" \
-            -e "s/SHA256_DARWIN_AMD64/$SHA256_DARWIN_AMD64/g" \
-            -e "s/SHA256_LINUX_ARM64/$SHA256_LINUX_ARM64/g" \
-            -e "s/SHA256_LINUX_AMD64/$SHA256_LINUX_AMD64/g" \
-            Formula/jwtd.rb > jwtd.rb
+          # Cross-check every hash GoReleaser baked into the cask against the
+          # signed checksums.txt, so the tap can only ever point at the exact
+          # archives this release published.
+          pairs=$(awk '
+            match($0, /sha256 "[0-9a-f]{64}"/) {
+              sha = substr($0, RSTART + 8, 64)
+            }
+            match($0, /jwtd-[a-z0-9]+-[a-z0-9]+\.tar\.gz/) {
+              if (sha != "") {
+                print sha "  " substr($0, RSTART, RLENGTH)
+                sha = ""
+              }
+            }
+          ' jwtd.rb | sort)
+
+          if [ -z "$pairs" ]; then
+            echo "Cask contains no sha256/archive pairs to verify" >&2
+            exit 1
+          fi
+
+          pair_count=$(printf '%s\n' "$pairs" | wc -l)
+          if [ "$pair_count" -ne 4 ]; then
+            echo "Expected 4 sha256/archive pairs in the cask, got $pair_count:" >&2
+            printf '%s\n' "$pairs" >&2
+            exit 1
+          fi
+
+          while IFS= read -r pair; do
+            if ! grep -qxF "$pair" artifacts/checksums.txt; then
+              echo "Cask entry does not match checksums.txt: $pair" >&2
+              exit 1
+            fi
+          done <<< "$pairs"
+
+          echo "Cask hashes match checksums.txt:"
+          printf '%s\n' "$pairs"
       - name: Push to homebrew-tap
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           gh auth setup-git
           git clone "https://github.com/webcodr/homebrew-tap.git" tap
-          mkdir -p tap/Formula
-          current_formula="tap/Formula/jwtd.rb"
+          mkdir -p tap/Casks
+          current_formula="tap/Casks/jwtd.rb"
           if [ -f "$current_formula" ]; then
             current_version=$(ruby -e 'ARGF.each_line { |line| puts Regexp.last_match(1) if line =~ /^\s*version\s+"([^"]+)"/ }' "$current_formula")
             if [ -z "$current_version" ]; then
-              echo "Could not determine current Homebrew formula version" >&2
+              echo "Could not determine current Homebrew cask version" >&2
               exit 1
             fi
             if ruby -rrubygems -e 'current = Gem::Version.new(ARGV[0].split("+", 2).first); requested = Gem::Version.new(ARGV[1].split("+", 2).first); exit(current > requested ? 0 : 1)' "$current_version" "$VERSION"; then
@@ -416,11 +468,16 @@ jobs:
               exit 0
             fi
           fi
-          cp jwtd.rb tap/Formula/jwtd.rb
+          cp jwtd.rb tap/Casks/jwtd.rb
           cd tap
-          git add Formula/jwtd.rb
+          # Remove the superseded formula so the tap does not expose both a
+          # formula and a cask named jwtd.
+          if [ -f Formula/jwtd.rb ]; then
+            git rm --quiet Formula/jwtd.rb
+          fi
+          git add Casks/jwtd.rb
           if git diff --cached --quiet; then
-            echo "Homebrew formula is already current"
+            echo "Homebrew cask is already current"
             exit 0
           else
             diff_status=$?

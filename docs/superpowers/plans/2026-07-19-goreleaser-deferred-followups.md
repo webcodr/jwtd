@@ -326,7 +326,38 @@ description, section, priority, and architecture.
 
 ---
 
-## Phase 3: Homebrew cask migration (+ deferred cross-check)
+## Phase 3: Homebrew cask migration (+ deferred cross-check) — **implemented**
+
+Landed on branch `goreleaser-signing-sbom`. Full verification suite passes.
+
+**D1 resolved.** The cask pipe runs in the Run phase, so it renders under both
+`--skip=publish` and `--snapshot` — `--skip=publish` stays and the
+belt-and-suspenders posture is intact. One prerequisite the plan did not
+anticipate: because `release.disable: true`, GoReleaser cannot derive the
+download URL and fails with `release is disabled, cannot use default
+url_template`. An explicit `url.template` is required. (The field is
+`url.template`, not `url_template`; `binary` is deprecated in favour of
+`binaries`.) Cask output: `dist/homebrew/Casks/jwtd.rb`, artifact type
+`Homebrew Cask`, name `jwtd.rb`.
+
+**Accepted regression: Homebrew casks are macOS-only.** Installing a cask on
+Linux fails with "Installing casks is supported only on macOS", so the previous
+formula's working Linux support is dropped. This was confirmed before
+implementing and accepted deliberately: Linux users now have the Phase 2
+`.deb`/`.rpm` packages and the archives. GoReleaser still emits `on_linux`
+blocks in the cask; they are inert on Linux and harmless. Using GoReleaser's
+`brews` (formula) generator instead is not viable — it is deprecated and
+`goreleaser check` fails on it, which would break CI.
+
+**D2 implemented as two named artifacts** rather than staging subdirectories:
+`jwtd-release-assets` and `jwtd-manifests`. The release job downloads only the
+former, so the cask cannot become a release asset even by accident.
+
+**Deferred item #7 folded in:** `update-homebrew` extracts every
+sha256/archive pair from the generated cask and requires each to appear
+verbatim in `checksums.txt`, failing closed on any mismatch or on a pair count
+other than four. Verified against real generated files, including a negative
+test with a tampered cask.
 
 ### Task 3.1 — Failing invariants
 
