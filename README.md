@@ -28,6 +28,13 @@ brew install --cask webcodr/tap/jwtd
 
 jwtd is distributed as a Homebrew cask, which Homebrew supports on macOS only. On Linux, use the `.deb`/`.rpm` packages or the release archives below.
 
+### Scoop (Windows)
+
+```sh
+scoop bucket add webcodr https://github.com/webcodr/scoop-bucket
+scoop install jwtd
+```
+
 ### From source
 
 Requires Go 1.26+.

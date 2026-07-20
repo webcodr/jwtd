@@ -403,7 +403,37 @@ test with a tampered cask.
 
 ---
 
-## Phase 4: Scoop channel
+## Phase 4: Scoop channel — **implemented (blocked on infrastructure)**
+
+Landed on branch `goreleaser-signing-sbom`. Full verification suite passes.
+
+Same shape as the cask: `scoops` with `skip_upload: true`, rendered to
+`dist/scoop/jwtd.json` (artifact type `Scoop Manifest`), staged into the
+`jwtd-manifests` artifact, and published by a new `update-scoop` job gated on a
+successful stable release. It needs `url_template` for the same `release.disable`
+reason as the cask — note scoop spells it `url_template` while `homebrew_casks`
+uses a nested `url.template`.
+
+The manifest is JSON, so its cross-check uses `jq` rather than the cask's awk
+parsing: every hash must appear verbatim in `checksums.txt`, with exactly two
+pairs expected. Verified against real generated files including a negative
+tamper test.
+
+**BLOCKED — prerequisites do not exist yet:**
+
+- `webcodr/scoop-bucket` does **not** exist (confirmed via `gh repo view`;
+  `webcodr/homebrew-tap` does). It must be created before the next stable
+  release.
+- The `SCOOP_BUCKET_TOKEN` secret must be configured.
+
+Until both exist, `update-scoop` will fail on the next stable release. This is
+fail-loud and does not affect the release itself, which completes before any
+downstream channel job runs — but the workflow run will report failure.
+
+**Known quirk:** the Windows archives are `.tar.gz` rather than `.zip`, which is
+unusual for Scoop. Scoop handles it via 7-Zip, so this works, but switching the
+Windows archive format was deliberately left alone: it would change the
+established, already-released archive naming/format contract.
 
 ### Task 4.1 — Failing invariants
 

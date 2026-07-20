@@ -102,6 +102,23 @@ homebrew_casks:
     url:
       template: "https://github.com/webcodr/jwtd/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
 
+scoops:
+  - name: jwtd
+    ids:
+      - jwtd
+    repository:
+      owner: webcodr
+      name: scoop-bucket
+    # As with the cask, GoReleaser renders the manifest into dist/ but never
+    # pushes it; the release workflow publishes it after verifying the release.
+    skip_upload: true
+    homepage: https://github.com/webcodr/jwtd
+    description: Decode and pretty-print JSON Web Tokens with syntax highlighting
+    license: MIT
+    # release.disable prevents GoReleaser from deriving the download URL.
+    # Scoop spells this url_template; homebrew_casks uses a nested url.template.
+    url_template: "https://github.com/webcodr/jwtd/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+
 changelog:
   disable: true
 

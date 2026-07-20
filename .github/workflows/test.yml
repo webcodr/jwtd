@@ -98,6 +98,13 @@ jobs:
             exit 1
           fi
 
+          scoop_names=$(jq -r '[.[] | select(.type == "Scoop Manifest") | .name] | .[]' dist/artifacts.json)
+          if [ "$scoop_names" != "jwtd.json" ]; then
+            echo "Expected exactly one jwtd.json Scoop Manifest artifact, got:" >&2
+            echo "$scoop_names" >&2
+            exit 1
+          fi
+
           # checksums.txt must cover the reproducible artifacts only: the
           # archives and the Linux packages. Including the non-reproducible
           # SBOMs would make the signed checksum file differ on every run and
