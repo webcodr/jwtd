@@ -95,11 +95,19 @@ jobs:
             expected_sboms+=("$archive.sbom.json")
           done
 
+          expected_packages=(
+            "jwtd-linux-amd64.deb"
+            "jwtd-linux-arm64.deb"
+            "jwtd-linux-amd64.rpm"
+            "jwtd-linux-arm64.rpm"
+          )
+
           expected_assets=(
             "${expected_archives[@]}"
             "checksums.txt"
             "checksums.txt.sigstore.json"
             "${expected_sboms[@]}"
+            "${expected_packages[@]}"
           )
 
           actual_archives=$(jq -r '[.[] | select(.type == "Archive") | .name] | sort | .[]' dist/artifacts.json)
@@ -129,6 +137,14 @@ jobs:
           if [ "$signature_names" != "checksums.txt.sigstore.json" ]; then
             echo "Expected exactly one checksums.txt.sigstore.json Signature artifact, got:" >&2
             echo "$signature_names" >&2
+            exit 1
+          fi
+
+          actual_packages=$(jq -r '[.[] | select(.type == "Linux Package") | .name] | sort | .[]' dist/artifacts.json)
+          expected_packages_sorted=$(printf '%s\n' "${expected_packages[@]}" | sort)
+          if [ "$actual_packages" != "$expected_packages_sorted" ]; then
+            echo "Unexpected Linux package set in dist/artifacts.json:" >&2
+            echo "$actual_packages" >&2
             exit 1
           fi
 
@@ -226,6 +242,10 @@ jobs:
             "jwtd-darwin-arm64.tar.gz.sbom.json"
             "jwtd-windows-amd64.tar.gz.sbom.json"
             "jwtd-windows-arm64.tar.gz.sbom.json"
+            "jwtd-linux-amd64.deb"
+            "jwtd-linux-arm64.deb"
+            "jwtd-linux-amd64.rpm"
+            "jwtd-linux-arm64.rpm"
           )
 
           # Keyless Cosign bundles carry a fresh certificate and timestamp, and

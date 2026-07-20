@@ -274,7 +274,24 @@ signs:
 
 ---
 
-## Phase 2: Linux packages (nfpm deb/rpm)
+## Phase 2: Linux packages (nfpm deb/rpm) — **implemented**
+
+Landed on branch `goreleaser-signing-sbom` (committed). Full verification suite
+passes.
+
+**Outcome of the D4 question this phase had to answer:** nfpm output **is**
+byte-reproducible once `mtime` is pinned to the epoch, verified by diffing two
+snapshot runs. The packages therefore stay in the strict `cmp` tier. Because the
+nfpm block shares the `jwtd` build id with the archives, the existing
+`checksum.ids: [jwtd]` covers them automatically — `checksums.txt` now lists ten
+entries (six archives + four packages) and remains byte-identical across runs,
+so the Cosign signature covers the packages too. No tier change was needed.
+
+Packages use the archives' version-free naming (`jwtd-linux-amd64.deb`) rather
+than nfpm's conventional versioned file name, so all release assets share one
+convention and the workflow allowlists stay static. Verified package internals:
+payload installs to `/usr/bin/jwtd`, with correct maintainer, homepage,
+description, section, priority, and architecture.
 
 ### Task 2.1 — Failing invariants
 

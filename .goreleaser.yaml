@@ -34,6 +34,26 @@ archives:
       group: root
       mtime: "1970-01-01T00:00:00Z"
 
+nfpms:
+  - id: jwtd
+    ids:
+      - jwtd
+    package_name: jwtd
+    formats:
+      - deb
+      - rpm
+    maintainer: David Henning <david@webcodr.io>
+    description: Decode and pretty-print JSON Web Tokens with syntax highlighting
+    license: MIT
+    homepage: https://github.com/webcodr/jwtd
+    section: utils
+    priority: optional
+    bindir: /usr/bin
+    # Reuse the archives' version-free naming so every release asset follows
+    # one convention and the workflow allowlists stay static.
+    file_name_template: "jwtd-{{ .Os }}-{{ .Arch }}"
+    mtime: "1970-01-01T00:00:00Z"
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256

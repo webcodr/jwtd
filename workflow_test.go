@@ -47,6 +47,19 @@ type goReleaserConfig struct {
 		Algorithm    string   `yaml:"algorithm"`
 		IDs          []string `yaml:"ids"`
 	} `yaml:"checksum"`
+	Nfpms []struct {
+		ID               string   `yaml:"id"`
+		PackageName      string   `yaml:"package_name"`
+		IDs              []string `yaml:"ids"`
+		Formats          []string `yaml:"formats"`
+		Maintainer       string   `yaml:"maintainer"`
+		Description      string   `yaml:"description"`
+		License          string   `yaml:"license"`
+		Homepage         string   `yaml:"homepage"`
+		Bindir           string   `yaml:"bindir"`
+		FileNameTemplate string   `yaml:"file_name_template"`
+		Mtime            string   `yaml:"mtime"`
+	} `yaml:"nfpms"`
 	Sboms []struct {
 		ID        string   `yaml:"id"`
 		Artifacts string   `yaml:"artifacts"`
@@ -90,6 +103,19 @@ func sbomNames() []string {
 		names = append(names, archive+".sbom.json")
 	}
 	return names
+}
+
+// linuxPackageNames returns the nfpm package names. They deliberately reuse
+// the version-free "jwtd-{os}-{arch}" scheme of the archives rather than
+// nfpm's conventional versioned file name, so every release asset follows one
+// naming convention and the workflow allowlists stay static.
+func linuxPackageNames() []string {
+	return []string{
+		"jwtd-linux-amd64.deb",
+		"jwtd-linux-arm64.deb",
+		"jwtd-linux-amd64.rpm",
+		"jwtd-linux-arm64.rpm",
+	}
 }
 
 // TestGoReleaserConfigurationInvariants checks that .goreleaser.yaml builds
@@ -213,12 +239,56 @@ func TestGoReleaserSupplyChainInvariants(t *testing.T) {
 
 	// Syft SBOMs embed a random documentNamespace UUID and a creation
 	// timestamp, so they are not byte-reproducible. Restricting the checksum
-	// file to the archive build id keeps checksums.txt itself reproducible
-	// and keeps its contents identical to the already-released contract.
-	// Without this, every rerun would produce a different checksums.txt and
-	// the release job's byte-for-byte verification would fail.
+	// file to the "jwtd" id keeps checksums.txt itself reproducible. Without
+	// this, every rerun would produce a different checksums.txt and the
+	// release job's byte-for-byte verification of the signed file would fail.
+	//
+	// The archives and the nfpm packages both carry the "jwtd" id, so both are
+	// covered by checksums.txt, while the SBOMs (id "archive") are excluded.
 	if want := []string{"jwtd"}; !slices.Equal(cfg.Checksum.IDs, want) {
 		t.Errorf("checksum.ids must be exactly %v so non-reproducible SBOMs stay out of checksums.txt, got %v", want, cfg.Checksum.IDs)
+	}
+	if cfg.Sboms[0].ID == "jwtd" {
+		t.Error(`sboms id must not be "jwtd"; that would pull non-reproducible SBOMs into checksums.txt`)
+	}
+
+	if len(cfg.Nfpms) != 1 {
+		t.Fatalf("expected exactly one nfpms entry, got %d", len(cfg.Nfpms))
+	}
+	nfpm := cfg.Nfpms[0]
+	if want := []string{"deb", "rpm"}; !slices.Equal(slices.Sorted(slices.Values(nfpm.Formats)), slices.Sorted(slices.Values(want))) {
+		t.Errorf("nfpms formats must be exactly %v, got %v", want, nfpm.Formats)
+	}
+	if want := []string{"jwtd"}; !slices.Equal(nfpm.IDs, want) {
+		t.Errorf("nfpms ids must be exactly %v so packages come from the audited build, got %v", want, nfpm.IDs)
+	}
+	// Sharing the "jwtd" id is what puts the packages inside checksums.txt,
+	// and therefore under the Cosign signature, alongside the archives.
+	if want := "jwtd"; nfpm.ID != want {
+		t.Errorf("nfpms id must be %q so packages are covered by checksum.ids, got %q", want, nfpm.ID)
+	}
+	// Packages must stay byte-reproducible to remain in the strict cmp tier,
+	// which requires a pinned mtime.
+	if want := "1970-01-01T00:00:00Z"; nfpm.Mtime != want {
+		t.Errorf("nfpms mtime must be the fixed epoch %q to keep packages reproducible, got %q", want, nfpm.Mtime)
+	}
+	if want := "/usr/bin"; nfpm.Bindir != want {
+		t.Errorf("nfpms bindir must be %q, got %q", want, nfpm.Bindir)
+	}
+	// Packages reuse the archives' version-free naming so every release asset
+	// follows one convention and the workflow allowlists stay static.
+	if want := "jwtd-{{ .Os }}-{{ .Arch }}"; nfpm.FileNameTemplate != want {
+		t.Errorf("nfpms file_name_template must be %q, got %q", want, nfpm.FileNameTemplate)
+	}
+	for field, value := range map[string]string{
+		"maintainer":  nfpm.Maintainer,
+		"description": nfpm.Description,
+		"license":     nfpm.License,
+		"homepage":    nfpm.Homepage,
+	} {
+		if strings.TrimSpace(value) == "" {
+			t.Errorf("nfpms %s must be set; package metadata is user-visible", field)
+		}
 	}
 
 	if len(cfg.Signs) != 1 {
@@ -513,6 +583,7 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 	assets := extractBashArray(t, assetsStep.Run, "expected_assets")
 	wantAssets := append([]string{"checksums.txt", cosignBundleName}, releaseArchiveNames...)
 	wantAssets = append(wantAssets, sbomNames()...)
+	wantAssets = append(wantAssets, linuxPackageNames()...)
 	if !slices.Equal(slices.Sorted(slices.Values(assets)), slices.Sorted(slices.Values(wantAssets))) {
 		t.Errorf("release job expected_assets must be exactly %v, got %v", wantAssets, assets)
 	}
@@ -528,7 +599,9 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 	if !slices.Equal(slices.Sorted(slices.Values(nonReproducible)), slices.Sorted(slices.Values(wantNonReproducible))) {
 		t.Errorf("release job nonreproducible_assets must be exactly %v, got %v", wantNonReproducible, nonReproducible)
 	}
-	for _, asset := range append([]string{"checksums.txt"}, releaseArchiveNames...) {
+	reproducible := append([]string{"checksums.txt"}, releaseArchiveNames...)
+	reproducible = append(reproducible, linuxPackageNames()...)
+	for _, asset := range reproducible {
 		if slices.Contains(nonReproducible, asset) {
 			t.Errorf("asset %q must stay in the byte-comparison tier; it is reproducible and its immutability is load-bearing", asset)
 		}

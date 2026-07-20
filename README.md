@@ -42,7 +42,14 @@ Download a prebuilt binary from the [Releases](https://github.com/webcodr/jwtd/r
 - macOS (amd64, arm64)
 - Windows (amd64, arm64)
 
-Each release also includes a `checksums.txt` with SHA-256 hashes for every archive; verify a download with `sha256sum --check checksums.txt`.
+Linux users can also install a `.deb` or `.rpm` package, which places the binary at `/usr/bin/jwtd`:
+
+```sh
+sudo dpkg -i jwtd-linux-amd64.deb    # Debian, Ubuntu
+sudo rpm -i jwtd-linux-amd64.rpm     # Fedora, RHEL, openSUSE
+```
+
+Each release also includes a `checksums.txt` with SHA-256 hashes for every archive and Linux package; verify a download with `sha256sum --check checksums.txt`.
 
 `checksums.txt` is signed with [Cosign](https://docs.sigstore.dev/) keyless signing. To verify that the checksums really came from this project's release workflow, download `checksums.txt.sigstore.json` alongside it and run:
 

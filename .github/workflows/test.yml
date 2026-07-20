@@ -77,12 +77,28 @@ jobs:
             exit 1
           fi
 
-          # checksums.txt must list the archives only. Including the
-          # non-reproducible SBOMs would make the signed checksum file differ
-          # on every run and break byte-for-byte release verification.
+          expected_packages=(
+            "jwtd-linux-amd64.deb"
+            "jwtd-linux-arm64.deb"
+            "jwtd-linux-amd64.rpm"
+            "jwtd-linux-arm64.rpm"
+          )
+          actual_packages=$(jq -r '[.[] | select(.type == "Linux Package") | .name] | sort | .[]' dist/artifacts.json)
+          expected_packages_sorted=$(printf '%s\n' "${expected_packages[@]}" | sort)
+          if [ "$actual_packages" != "$expected_packages_sorted" ]; then
+            echo "Unexpected Linux package set in dist/artifacts.json:" >&2
+            echo "$actual_packages" >&2
+            exit 1
+          fi
+
+          # checksums.txt must cover the reproducible artifacts only: the
+          # archives and the Linux packages. Including the non-reproducible
+          # SBOMs would make the signed checksum file differ on every run and
+          # break byte-for-byte release verification.
           checksummed=$(cut -c 67- dist/checksums.txt | sort)
-          if [ "$checksummed" != "$expected_sorted" ]; then
-            echo "checksums.txt must cover exactly the six archives, got:" >&2
+          expected_checksummed=$(printf '%s\n' "${expected_archives[@]}" "${expected_packages[@]}" | sort)
+          if [ "$checksummed" != "$expected_checksummed" ]; then
+            echo "checksums.txt must cover exactly the archives and Linux packages, got:" >&2
             echo "$checksummed" >&2
             exit 1
           fi
