@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,15 +43,53 @@ type goReleaserConfig struct {
 		} `yaml:"builds_info"`
 	} `yaml:"archives"`
 	Checksum struct {
-		NameTemplate string `yaml:"name_template"`
-		Algorithm    string `yaml:"algorithm"`
+		NameTemplate string   `yaml:"name_template"`
+		Algorithm    string   `yaml:"algorithm"`
+		IDs          []string `yaml:"ids"`
 	} `yaml:"checksum"`
+	Sboms []struct {
+		ID        string   `yaml:"id"`
+		Artifacts string   `yaml:"artifacts"`
+		Cmd       string   `yaml:"cmd"`
+		Args      []string `yaml:"args"`
+		Documents []string `yaml:"documents"`
+	} `yaml:"sboms"`
+	Signs []struct {
+		ID        string   `yaml:"id"`
+		Cmd       string   `yaml:"cmd"`
+		Artifacts string   `yaml:"artifacts"`
+		Signature string   `yaml:"signature"`
+		Args      []string `yaml:"args"`
+	} `yaml:"signs"`
 	Changelog struct {
 		Disable bool `yaml:"disable"`
 	} `yaml:"changelog"`
 	Release struct {
 		Disable bool `yaml:"disable"`
 	} `yaml:"release"`
+}
+
+// releaseArchiveNames are the six archives jwtd has always shipped.
+var releaseArchiveNames = []string{
+	"jwtd-linux-amd64.tar.gz",
+	"jwtd-linux-arm64.tar.gz",
+	"jwtd-darwin-amd64.tar.gz",
+	"jwtd-darwin-arm64.tar.gz",
+	"jwtd-windows-amd64.tar.gz",
+	"jwtd-windows-arm64.tar.gz",
+}
+
+// cosignBundleName is the keyless Cosign bundle covering checksums.txt.
+const cosignBundleName = "checksums.txt.sigstore.json"
+
+// sbomNames returns the per-archive SBOM document names GoReleaser emits for
+// the default "{{ .ArtifactName }}.sbom.json" document template.
+func sbomNames() []string {
+	names := make([]string, 0, len(releaseArchiveNames))
+	for _, archive := range releaseArchiveNames {
+		names = append(names, archive+".sbom.json")
+	}
+	return names
 }
 
 // TestGoReleaserConfigurationInvariants checks that .goreleaser.yaml builds
@@ -148,6 +187,66 @@ func TestGoReleaserConfigurationInvariants(t *testing.T) {
 	}
 	if !cfg.Release.Disable {
 		t.Error("release.disable must be true; GoReleaser must not publish releases")
+	}
+}
+
+// TestGoReleaserSupplyChainInvariants checks that .goreleaser.yaml produces a
+// per-archive SBOM set and a keyless Cosign bundle over checksums.txt.
+// Signing the checksum file transitively covers every artifact the checksum
+// file lists, so individual archives are deliberately not signed separately.
+func TestGoReleaserSupplyChainInvariants(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("reading .goreleaser.yaml: %v", err)
+	}
+	var cfg goReleaserConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parsing .goreleaser.yaml: %v", err)
+	}
+
+	if len(cfg.Sboms) != 1 {
+		t.Fatalf("expected exactly one sboms entry, got %d", len(cfg.Sboms))
+	}
+	if want := "archive"; cfg.Sboms[0].Artifacts != want {
+		t.Errorf("sboms artifacts must be %q so every shipped archive gets an SBOM, got %q", want, cfg.Sboms[0].Artifacts)
+	}
+
+	// Syft SBOMs embed a random documentNamespace UUID and a creation
+	// timestamp, so they are not byte-reproducible. Restricting the checksum
+	// file to the archive build id keeps checksums.txt itself reproducible
+	// and keeps its contents identical to the already-released contract.
+	// Without this, every rerun would produce a different checksums.txt and
+	// the release job's byte-for-byte verification would fail.
+	if want := []string{"jwtd"}; !slices.Equal(cfg.Checksum.IDs, want) {
+		t.Errorf("checksum.ids must be exactly %v so non-reproducible SBOMs stay out of checksums.txt, got %v", want, cfg.Checksum.IDs)
+	}
+
+	if len(cfg.Signs) != 1 {
+		t.Fatalf("expected exactly one signs entry, got %d", len(cfg.Signs))
+	}
+	sign := cfg.Signs[0]
+	if sign.Cmd != "cosign" {
+		t.Errorf("signs cmd must be %q, got %q", "cosign", sign.Cmd)
+	}
+	if want := "checksum"; sign.Artifacts != want {
+		t.Errorf("signs artifacts must be %q; signing the checksum file covers all listed artifacts, got %q", want, sign.Artifacts)
+	}
+	if want := "${artifact}.sigstore.json"; sign.Signature != want {
+		t.Errorf("signs signature template must be %q, got %q", want, sign.Signature)
+	}
+	if !slices.Contains(sign.Args, "sign-blob") {
+		t.Errorf("signs args must invoke sign-blob, got %v", sign.Args)
+	}
+	if !slices.Contains(sign.Args, "--bundle=${signature}") {
+		t.Errorf("signs args must write a sigstore bundle via --bundle=${signature}, got %v", sign.Args)
+	}
+	if !slices.Contains(sign.Args, "--yes") {
+		t.Errorf("signs args must pass --yes so keyless signing is non-interactive in CI, got %v", sign.Args)
+	}
+	for _, arg := range sign.Args {
+		if strings.Contains(arg, "--key") {
+			t.Errorf("signing must stay keyless (OIDC); found long-lived key argument %q", arg)
+		}
 	}
 }
 
@@ -345,8 +444,12 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 	if buildJob.Strategy != nil && len(buildJob.Strategy.Matrix) > 0 {
 		t.Errorf("build job must not use a build matrix; GoReleaser owns cross-compilation, got matrix %v", buildJob.Strategy.Matrix)
 	}
-	if len(buildJob.Permissions) != 0 {
-		t.Errorf("build job must not elevate permissions beyond the workflow default {contents: read}, got %v", buildJob.Permissions)
+	// Keyless Cosign needs an OIDC token, so the build job carries exactly
+	// contents: read plus id-token: write and nothing else. In particular it
+	// must never gain contents: write, which would let GoReleaser publish.
+	wantBuildPermissions := map[string]string{"contents": "read", "id-token": "write"}
+	if !maps.Equal(buildJob.Permissions, wantBuildPermissions) {
+		t.Errorf("build job permissions must be exactly %v, got %v", wantBuildPermissions, buildJob.Permissions)
 	}
 
 	checkoutStep := findStepByUsesPrefix(buildJob.Steps, "actions/checkout")
@@ -408,16 +511,29 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 		t.Fatal("release job must define the expected_assets allowlist")
 	}
 	assets := extractBashArray(t, assetsStep.Run, "expected_assets")
-	wantAssets := []string{
-		"jwtd-linux-amd64.tar.gz",
-		"jwtd-linux-arm64.tar.gz",
-		"jwtd-darwin-amd64.tar.gz",
-		"jwtd-darwin-arm64.tar.gz",
-		"jwtd-windows-amd64.tar.gz",
-		"jwtd-windows-arm64.tar.gz",
-		"checksums.txt",
-	}
+	wantAssets := append([]string{"checksums.txt", cosignBundleName}, releaseArchiveNames...)
+	wantAssets = append(wantAssets, sbomNames()...)
 	if !slices.Equal(slices.Sorted(slices.Values(assets)), slices.Sorted(slices.Values(wantAssets))) {
 		t.Errorf("release job expected_assets must be exactly %v, got %v", wantAssets, assets)
+	}
+
+	// Keyless Cosign bundles embed a fresh certificate and timestamp, and
+	// Syft SBOMs embed a random UUID and creation timestamp, so neither is
+	// byte-reproducible across reruns. They are verified by presence and
+	// exact count (and, for the bundle, by cryptographic validity) instead of
+	// byte equality. Every other asset keeps the strict cmp check, so the six
+	// archives and checksums.txt remain provably immutable.
+	nonReproducible := extractBashArray(t, assetsStep.Run, "nonreproducible_assets")
+	wantNonReproducible := append([]string{cosignBundleName}, sbomNames()...)
+	if !slices.Equal(slices.Sorted(slices.Values(nonReproducible)), slices.Sorted(slices.Values(wantNonReproducible))) {
+		t.Errorf("release job nonreproducible_assets must be exactly %v, got %v", wantNonReproducible, nonReproducible)
+	}
+	for _, asset := range append([]string{"checksums.txt"}, releaseArchiveNames...) {
+		if slices.Contains(nonReproducible, asset) {
+			t.Errorf("asset %q must stay in the byte-comparison tier; it is reproducible and its immutability is load-bearing", asset)
+		}
+	}
+	if !strings.Contains(assetsStep.Run, "cosign verify-blob") {
+		t.Error("release job must verify the Cosign bundle against checksums.txt with cosign verify-blob")
 	}
 }

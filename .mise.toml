@@ -1,3 +1,5 @@
 [tools]
 go = "1.26.1"
 goreleaser = "2.17.0"
+cosign = "3.1.2"
+syft = "1.48.0"

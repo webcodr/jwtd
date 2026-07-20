@@ -60,6 +60,12 @@ jobs:
   build:
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Keyless Cosign exchanges this OIDC token for a short-lived
+      # certificate. It grants no repository write access, so GoReleaser still
+      # cannot publish anything.
+      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -75,18 +81,29 @@ jobs:
         run: goreleaser release --clean --skip=publish
       - name: Verify and stage GoReleaser artifacts
         run: |
-          expected_assets=(
+          expected_archives=(
             "jwtd-linux-amd64.tar.gz"
             "jwtd-linux-arm64.tar.gz"
             "jwtd-darwin-amd64.tar.gz"
             "jwtd-darwin-arm64.tar.gz"
             "jwtd-windows-amd64.tar.gz"
             "jwtd-windows-arm64.tar.gz"
+          )
+
+          expected_sboms=()
+          for archive in "${expected_archives[@]}"; do
+            expected_sboms+=("$archive.sbom.json")
+          done
+
+          expected_assets=(
+            "${expected_archives[@]}"
             "checksums.txt"
+            "checksums.txt.sigstore.json"
+            "${expected_sboms[@]}"
           )
 
           actual_archives=$(jq -r '[.[] | select(.type == "Archive") | .name] | sort | .[]' dist/artifacts.json)
-          expected_archives_sorted=$(printf '%s\n' "${expected_assets[@]}" | grep -v '^checksums.txt$' | sort)
+          expected_archives_sorted=$(printf '%s\n' "${expected_archives[@]}" | sort)
           if [ "$actual_archives" != "$expected_archives_sorted" ]; then
             echo "Unexpected archive set in dist/artifacts.json:" >&2
             echo "$actual_archives" >&2
@@ -97,6 +114,21 @@ jobs:
           if [ "$checksum_names" != "checksums.txt" ]; then
             echo "Expected exactly one checksums.txt Checksum artifact, got:" >&2
             echo "$checksum_names" >&2
+            exit 1
+          fi
+
+          actual_sboms=$(jq -r '[.[] | select(.type == "SBOM") | .name] | sort | .[]' dist/artifacts.json)
+          expected_sboms_sorted=$(printf '%s\n' "${expected_sboms[@]}" | sort)
+          if [ "$actual_sboms" != "$expected_sboms_sorted" ]; then
+            echo "Unexpected SBOM set in dist/artifacts.json:" >&2
+            echo "$actual_sboms" >&2
+            exit 1
+          fi
+
+          signature_names=$(jq -r '[.[] | select(.type == "Signature") | .name] | .[]' dist/artifacts.json)
+          if [ "$signature_names" != "checksums.txt.sigstore.json" ]; then
+            echo "Expected exactly one checksums.txt.sigstore.json Signature artifact, got:" >&2
+            echo "$signature_names" >&2
             exit 1
           fi
 
@@ -118,6 +150,8 @@ jobs:
             cp "dist/$asset" "staging/$asset"
           done
 
+          # checksums.txt covers the archives only, so it must verify cleanly
+          # even though the staging directory also holds SBOMs and the bundle.
           (cd staging && sha256sum --check checksums.txt)
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -133,6 +167,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+      # Provides the mise-pinned cosign used to verify the published bundle.
+      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -183,7 +219,42 @@ jobs:
             "jwtd-windows-amd64.tar.gz"
             "jwtd-windows-arm64.tar.gz"
             "checksums.txt"
+            "checksums.txt.sigstore.json"
+            "jwtd-linux-amd64.tar.gz.sbom.json"
+            "jwtd-linux-arm64.tar.gz.sbom.json"
+            "jwtd-darwin-amd64.tar.gz.sbom.json"
+            "jwtd-darwin-arm64.tar.gz.sbom.json"
+            "jwtd-windows-amd64.tar.gz.sbom.json"
+            "jwtd-windows-arm64.tar.gz.sbom.json"
           )
+
+          # Keyless Cosign bundles carry a fresh certificate and timestamp, and
+          # Syft SBOMs embed a random documentNamespace UUID and creation
+          # timestamp. Neither is byte-reproducible, so they are verified by
+          # presence, exact count, and (for the bundle) cryptographic validity
+          # rather than byte equality. The six archives and checksums.txt stay
+          # in the strict cmp tier, keeping published releases provably
+          # immutable.
+          nonreproducible_assets=(
+            "checksums.txt.sigstore.json"
+            "jwtd-linux-amd64.tar.gz.sbom.json"
+            "jwtd-linux-arm64.tar.gz.sbom.json"
+            "jwtd-darwin-amd64.tar.gz.sbom.json"
+            "jwtd-darwin-arm64.tar.gz.sbom.json"
+            "jwtd-windows-amd64.tar.gz.sbom.json"
+            "jwtd-windows-arm64.tar.gz.sbom.json"
+          )
+
+          is_nonreproducible() {
+            local candidate="$1"
+            local asset
+            for asset in "${nonreproducible_assets[@]}"; do
+              if [ "$asset" = "$candidate" ]; then
+                return 0
+              fi
+            done
+            return 1
+          }
 
           verify_release_assets() {
             local verified_assets
@@ -196,12 +267,28 @@ jobs:
                 rm -rf "$verified_assets"
                 exit 1
               fi
+              if is_nonreproducible "$asset"; then
+                continue
+              fi
               if ! cmp -- "$verified_assets/$asset" "artifacts/$asset"; then
                 echo "Release $tag asset $asset does not match the build artifact" >&2
                 rm -rf "$verified_assets"
                 exit 1
               fi
             done
+
+            # The published checksums.txt is byte-identical to the build
+            # artifact above, so verifying the published bundle against it
+            # proves the signature covers exactly the archives being shipped.
+            if ! cosign verify-blob \
+              --bundle "$verified_assets/checksums.txt.sigstore.json" \
+              --certificate-identity-regexp "^https://github.com/$GH_REPO/\.github/workflows/release\.yml@" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$verified_assets/checksums.txt"; then
+              echo "Release $tag Cosign bundle does not verify against checksums.txt" >&2
+              rm -rf "$verified_assets"
+              exit 1
+            fi
             downloaded_count=$(find "$verified_assets" -maxdepth 1 -type f | wc -l)
             if [ "$downloaded_count" -ne "${#expected_assets[@]}" ]; then
               echo "Release $tag has unexpected assets" >&2

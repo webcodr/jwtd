@@ -44,6 +44,18 @@ Download a prebuilt binary from the [Releases](https://github.com/webcodr/jwtd/r
 
 Each release also includes a `checksums.txt` with SHA-256 hashes for every archive; verify a download with `sha256sum --check checksums.txt`.
 
+`checksums.txt` is signed with [Cosign](https://docs.sigstore.dev/) keyless signing. To verify that the checksums really came from this project's release workflow, download `checksums.txt.sigstore.json` alongside it and run:
+
+```sh
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/webcodr/jwtd/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+Every archive also ships a [Syft](https://github.com/anchore/syft) SPDX SBOM named `<archive>.sbom.json`.
+
 ## Usage
 
 ### Decode a JWT
@@ -156,10 +168,10 @@ Releases are cross-compiled and archived with [GoReleaser](https://goreleaser.co
 ```sh
 mise install
 goreleaser check
-goreleaser release --snapshot --clean
+goreleaser release --snapshot --clean --skip=sign
 ```
 
-Snapshot artifacts are written to the git-ignored `dist/` directory. Production releases remain a manually dispatched GitHub Actions workflow; GoReleaser only builds and packages, it never publishes GitHub releases or Homebrew metadata.
+Snapshot artifacts are written to the git-ignored `dist/` directory. `--skip=sign` is required locally because signing is keyless and needs a GitHub Actions OIDC identity; the release workflow exercises the signing path. Production releases remain a manually dispatched GitHub Actions workflow; GoReleaser only builds, packages, and signs — it never publishes GitHub releases or Homebrew metadata.
 
 ## License
 

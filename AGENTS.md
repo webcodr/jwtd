@@ -38,7 +38,9 @@ All functionality lives in package `main`, split across four source files:
 
 ### Release packaging
 
-Cross-compilation, archive naming, and checksums are owned by `.goreleaser.yaml` (pinned in `.mise.toml`); it selects the six linux/darwin/windows × amd64/arm64 targets, bakes `main.version` via ldflags, and produces binary-only `tar.gz` archives plus a `checksums.txt`. `.github/workflows/release.yml` owns everything GoReleaser does not: version/ref validation, tag provenance (a local, unpushed tag drives GoReleaser's version discovery), draft release creation and reconciliation, byte-for-byte asset verification, semantic latest-release handling, and Homebrew tap publication via `Formula/jwtd.rb`. GoReleaser never publishes: `release.disable: true` in the config and `--skip=publish`/`--snapshot` at every invocation site both enforce this, and the GoReleaser build step never receives a write-capable token.
+Cross-compilation, archive naming, checksums, SBOMs, and signing are owned by `.goreleaser.yaml` (pinned in `.mise.toml`); it selects the six linux/darwin/windows × amd64/arm64 targets, bakes `main.version` via ldflags, and produces binary-only `tar.gz` archives, a `checksums.txt`, a per-archive Syft SBOM, and a keyless Cosign bundle (`checksums.txt.sigstore.json`) over the checksum file.
+
+`checksum.ids` deliberately restricts `checksums.txt` to the archives. Syft SBOMs embed a random `documentNamespace` UUID and a creation timestamp, so including them would make the signed checksum file differ on every run and break byte-for-byte release verification. Consequently the release job verifies assets in two tiers: the six archives and `checksums.txt` must match the build byte-for-byte, while the SBOMs and the Cosign bundle are verified by presence and exact count, with the bundle additionally checked via `cosign verify-blob`. `.github/workflows/release.yml` owns everything GoReleaser does not: version/ref validation, tag provenance (a local, unpushed tag drives GoReleaser's version discovery), draft release creation and reconciliation, byte-for-byte asset verification, semantic latest-release handling, and Homebrew tap publication via `Formula/jwtd.rb`. GoReleaser never publishes: `release.disable: true` in the config and `--skip=publish`/`--snapshot` at every invocation site both enforce this, and the GoReleaser build step never receives a write-capable token.
 
 ## Dependencies
 
@@ -70,10 +72,10 @@ go test -v ./...
 ```sh
 mise install
 goreleaser check
-goreleaser release --snapshot --clean
+goreleaser release --snapshot --clean --skip=sign
 ```
 
-`goreleaser check` validates `.goreleaser.yaml`; the snapshot build writes to the git-ignored `dist/` directory and publishes nothing. CI runs the same two commands on every push/PR and verifies the resulting `dist/artifacts.json` against the six-archive/one-checksum contract.
+`goreleaser check` validates `.goreleaser.yaml`; the snapshot build writes to the git-ignored `dist/` directory and publishes nothing. `--skip=sign` is required locally: signing is keyless and needs a GitHub Actions OIDC identity, so it can only run in the release workflow. CI runs the same commands on every push/PR and verifies the resulting `dist/artifacts.json` against the six-archive / one-checksum / six-SBOM contract.
 
 ### Usage
 
