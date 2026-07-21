@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  pages: read
 
 concurrency:
   group: pages

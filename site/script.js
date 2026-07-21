@@ -43,8 +43,9 @@ if (typeof document !== "undefined") {
   document.documentElement.classList.add("js");
 
   const initialize = () => {
-    const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
-    const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
+    const tabList = document.querySelector("[data-install-tabs]");
+    const tabs = Array.from(document.querySelectorAll("[data-install-method]"));
+    const panels = Array.from(document.querySelectorAll("[data-install-panel]"));
 
     const selectTab = (method, moveFocus = false) => {
       for (const tab of tabs) {
@@ -61,7 +62,17 @@ if (typeof document !== "undefined") {
       }
     };
 
-    if (tabs.length > 0 && panels.length > 0) {
+    if (tabList && tabs.length > 0 && panels.length > 0) {
+      tabList.setAttribute("role", "tablist");
+      for (const tab of tabs) {
+        tab.setAttribute("role", "tab");
+        tab.setAttribute("aria-controls", `install-${tab.dataset.installMethod}`);
+      }
+      for (const panel of panels) {
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", `install-tab-${panel.dataset.installPanel}`);
+      }
+
       let operatingSystem = "unknown";
       try {
         operatingSystem = detectOperatingSystem(

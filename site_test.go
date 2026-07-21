@@ -28,30 +28,31 @@ func TestWebsiteContentContract(t *testing.T) {
 
 	index := readWebsiteFile(t, "site", "index.html")
 	for label, required := range map[string]string{
-		"canonical URL":      `<link rel="canonical" href="https://jwtd.webcodr.io/">`,
-		"content security":   `default-src 'none'`,
-		"skip link":          `href="#main-content"`,
-		"header landmark":    `<header class="site-header">`,
-		"main landmark":      `<main id="main-content">`,
-		"capabilities":       `id="capabilities"`,
-		"installation":       `id="install"`,
-		"usage":              `id="usage"`,
-		"key formats":        `id="key-formats"`,
-		"release security":   `id="release-security"`,
-		"footer landmark":    `<footer class="site-footer">`,
-		"local stylesheet":   `href="/styles.css"`,
-		"local script":       `src="/script.js"`,
-		"local favicon":      `href="/favicon.svg"`,
-		"tab semantics":      `role="tablist"`,
-		"tabpanel semantics": `role="tabpanel"`,
+		"canonical URL":    `<link rel="canonical" href="https://jwtd.webcodr.io/">`,
+		"content security": `default-src 'none'`,
+		"skip link":        `href="#main-content"`,
+		"header landmark":  `<header class="site-header">`,
+		"main landmark":    `<main id="main-content">`,
+		"capabilities":     `id="capabilities"`,
+		"installation":     `id="install"`,
+		"usage":            `id="usage"`,
+		"key formats":      `id="key-formats"`,
+		"release security": `id="release-security"`,
+		"footer landmark":  `<footer class="site-footer">`,
+		"local stylesheet": `href="/styles.css"`,
+		"local script":     `src="/script.js"`,
+		"local favicon":    `href="/favicon.svg"`,
+		"install controls": `data-install-tabs`,
+		"install methods":  `data-install-method="homebrew"`,
+		"install panels":   `data-install-panel="homebrew"`,
 	} {
 		if !strings.Contains(index, required) {
 			t.Errorf("site/index.html is missing %s marker %q", label, required)
 		}
 	}
-	for _, forbidden := range []string{"<style", "style=", "<script>"} {
+	for _, forbidden := range []string{"<style", "style=", "<script>", `role="tablist"`, `role="tab"`, `role="tabpanel"`, `aria-selected=`} {
 		if strings.Contains(index, forbidden) {
-			t.Errorf("site/index.html must not contain inline script/style marker %q", forbidden)
+			t.Errorf("site/index.html must not contain static enhancement marker %q", forbidden)
 		}
 	}
 
@@ -121,7 +122,7 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 		t.Fatalf("parsing Pages workflow: %v", err)
 	}
 
-	if want := map[string]string{"contents": "read"}; !maps.Equal(workflow.Permissions, want) {
+	if want := map[string]string{"contents": "read", "pages": "read"}; !maps.Equal(workflow.Permissions, want) {
 		t.Errorf("root Pages permissions must be exactly %v, got %v", want, workflow.Permissions)
 	}
 	if workflow.Concurrency.Group != "pages" || !workflow.Concurrency.CancelInProgress {
