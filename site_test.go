@@ -1,10 +1,15 @@
 package main
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func readWebsiteFile(t *testing.T, elements ...string) string {
@@ -85,5 +90,103 @@ func TestWebsiteContentContract(t *testing.T) {
 		if _, err := os.Stat(filepath.Join("site", asset)); err != nil {
 			t.Errorf("local asset site/%s must exist: %v", asset, err)
 		}
+	}
+}
+
+type pagesWorkflowContract struct {
+	Permissions map[string]string `yaml:"permissions"`
+	Concurrency struct {
+		Group            string `yaml:"group"`
+		CancelInProgress bool   `yaml:"cancel-in-progress"`
+	} `yaml:"concurrency"`
+	Jobs map[string]struct {
+		Needs       string            `yaml:"needs"`
+		Permissions map[string]string `yaml:"permissions"`
+		Environment struct {
+			Name string `yaml:"name"`
+			URL  string `yaml:"url"`
+		} `yaml:"environment"`
+		Steps []struct {
+			ID   string         `yaml:"id"`
+			Uses string         `yaml:"uses"`
+			With map[string]any `yaml:"with"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+func TestWebsitePagesWorkflowContract(t *testing.T) {
+	data := readWebsiteFile(t, ".github", "workflows", "pages.yml")
+	var workflow pagesWorkflowContract
+	if err := yaml.Unmarshal([]byte(data), &workflow); err != nil {
+		t.Fatalf("parsing Pages workflow: %v", err)
+	}
+
+	if want := map[string]string{"contents": "read"}; !maps.Equal(workflow.Permissions, want) {
+		t.Errorf("root Pages permissions must be exactly %v, got %v", want, workflow.Permissions)
+	}
+	if workflow.Concurrency.Group != "pages" || !workflow.Concurrency.CancelInProgress {
+		t.Errorf("Pages concurrency must cancel superseded deployments, got %+v", workflow.Concurrency)
+	}
+
+	build, ok := workflow.Jobs["build"]
+	if !ok {
+		t.Fatal("Pages workflow must define a build job")
+	}
+	deploy, ok := workflow.Jobs["deploy"]
+	if !ok {
+		t.Fatal("Pages workflow must define a deploy job")
+	}
+	if deploy.Needs != "build" {
+		t.Errorf("deploy job must need build, got %q", deploy.Needs)
+	}
+	if want := map[string]string{"pages": "write", "id-token": "write"}; !maps.Equal(deploy.Permissions, want) {
+		t.Errorf("deploy permissions must be exactly %v, got %v", want, deploy.Permissions)
+	}
+	if deploy.Environment.Name != "github-pages" || deploy.Environment.URL != "${{ steps.deployment.outputs.page_url }}" {
+		t.Errorf("deploy environment must expose the official Pages URL, got %+v", deploy.Environment)
+	}
+
+	wantActions := map[string]string{
+		"actions/checkout":              "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+		"actions/configure-pages":       "actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b",
+		"actions/upload-pages-artifact": "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
+		"actions/deploy-pages":          "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
+	}
+	seen := make(map[string]string)
+	shaPinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
+	for _, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if step.Uses == "" {
+				continue
+			}
+			if !shaPinned.MatchString(step.Uses) {
+				t.Errorf("Pages action must use a full SHA: %q", step.Uses)
+			}
+			name := strings.SplitN(step.Uses, "@", 2)[0]
+			seen[name] = step.Uses
+		}
+	}
+	if !maps.Equal(seen, wantActions) {
+		t.Errorf("Pages actions must be exactly pinned official actions %v, got %v", wantActions, seen)
+	}
+
+	var artifactPath string
+	for _, step := range build.Steps {
+		if strings.HasPrefix(step.Uses, "actions/upload-pages-artifact@") {
+			artifactPath = fmt.Sprint(step.With["path"])
+		}
+	}
+	if artifactPath != "site" {
+		t.Errorf("Pages artifact path must be site, got %q", artifactPath)
+	}
+
+	var deploymentID string
+	for _, step := range deploy.Steps {
+		if strings.HasPrefix(step.Uses, "actions/deploy-pages@") {
+			deploymentID = step.ID
+		}
+	}
+	if deploymentID != "deployment" {
+		t.Errorf("deploy-pages step id must be deployment, got %q", deploymentID)
 	}
 }
