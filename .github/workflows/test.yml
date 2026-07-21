@@ -91,13 +91,6 @@ jobs:
             exit 1
           fi
 
-          cask_names=$(jq -r '[.[] | select(.type == "Homebrew Cask") | .name] | .[]' dist/artifacts.json)
-          if [ "$cask_names" != "jwtd.rb" ]; then
-            echo "Expected exactly one jwtd.rb Homebrew Cask artifact, got:" >&2
-            echo "$cask_names" >&2
-            exit 1
-          fi
-
           scoop_names=$(jq -r '[.[] | select(.type == "Scoop Manifest") | .name] | .[]' dist/artifacts.json)
           if [ "$scoop_names" != "jwtd.json" ]; then
             echo "Expected exactly one jwtd.json Scoop Manifest artifact, got:" >&2

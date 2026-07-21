@@ -20,13 +20,11 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 
 ## Installation
 
-### Homebrew (macOS)
+### Homebrew (macOS and Linux)
 
 ```sh
-brew install --cask webcodr/tap/jwtd
+brew install webcodr/tap/jwtd
 ```
-
-jwtd is distributed as a Homebrew cask, which Homebrew supports on macOS only. On Linux, use the `.deb`/`.rpm` packages or the release archives below.
 
 ### Scoop (Windows)
 

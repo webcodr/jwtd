@@ -148,13 +148,6 @@ jobs:
             exit 1
           fi
 
-          cask_names=$(jq -r '[.[] | select(.type == "Homebrew Cask") | .name] | .[]' dist/artifacts.json)
-          if [ "$cask_names" != "jwtd.rb" ]; then
-            echo "Expected exactly one jwtd.rb Homebrew Cask artifact, got:" >&2
-            echo "$cask_names" >&2
-            exit 1
-          fi
-
           scoop_names=$(jq -r '[.[] | select(.type == "Scoop Manifest") | .name] | .[]' dist/artifacts.json)
           if [ "$scoop_names" != "jwtd.json" ]; then
             echo "Expected exactly one jwtd.json Scoop Manifest artifact, got:" >&2
@@ -180,10 +173,8 @@ jobs:
             cp "dist/$asset" "staging/release/$asset"
           done
 
-          # Manifests are downstream inputs, never release assets. They are
-          # staged separately so the release job cannot upload them.
-          cask_path=$(jq -r '.[] | select(.type == "Homebrew Cask") | .path' dist/artifacts.json)
-          cp "$cask_path" staging/manifests/jwtd.rb
+          # The Scoop manifest is a downstream input, never a release asset. It
+          # is staged separately so the release job cannot upload it.
           scoop_path=$(jq -r '.[] | select(.type == "Scoop Manifest") | .path' dist/artifacts.json)
           cp "$scoop_path" staging/manifests/jwtd.json
 
@@ -422,63 +413,50 @@ jobs:
         with:
           name: jwtd-release-assets
           path: artifacts
-      - name: Download manifests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: jwtd-manifests
-          path: manifests
-      - name: Verify cask against checksums
+      - name: Render formula
         run: |
-          cp manifests/jwtd.rb jwtd.rb
-
-          # Cross-check every hash GoReleaser baked into the cask against the
-          # signed checksums.txt, so the tap can only ever point at the exact
-          # archives this release published.
-          pairs=$(awk '
-            match($0, /sha256 "[0-9a-f]{64}"/) {
-              sha = substr($0, RSTART + 8, 64)
-            }
-            match($0, /jwtd-[a-z0-9]+-[a-z0-9]+\.tar\.gz/) {
-              if (sha != "") {
-                print sha "  " substr($0, RSTART, RLENGTH)
-                sha = ""
-              }
-            }
-          ' jwtd.rb | sort)
-
-          if [ -z "$pairs" ]; then
-            echo "Cask contains no sha256/archive pairs to verify" >&2
-            exit 1
-          fi
-
-          pair_count=$(printf '%s\n' "$pairs" | wc -l)
-          if [ "$pair_count" -ne 4 ]; then
-            echo "Expected 4 sha256/archive pairs in the cask, got $pair_count:" >&2
-            printf '%s\n' "$pairs" >&2
-            exit 1
-          fi
-
-          while IFS= read -r pair; do
-            if ! grep -qxF "$pair" artifacts/checksums.txt; then
-              echo "Cask entry does not match checksums.txt: $pair" >&2
+          # Take the hashes from the signed checksums.txt rather than
+          # re-hashing, so the formula can only point at the exact archives
+          # this release published and verified.
+          sha_for() {
+            local name="$1" sha
+            sha=$(awk -v f="$name" '$2 == f { print $1 }' artifacts/checksums.txt)
+            if [ ${#sha} -ne 64 ]; then
+              echo "No sha256 for $name in checksums.txt" >&2
               exit 1
             fi
-          done <<< "$pairs"
+            printf '%s' "$sha"
+          }
 
-          echo "Cask hashes match checksums.txt:"
-          printf '%s\n' "$pairs"
+          SHA256_DARWIN_AMD64=$(sha_for jwtd-darwin-amd64.tar.gz)
+          SHA256_DARWIN_ARM64=$(sha_for jwtd-darwin-arm64.tar.gz)
+          SHA256_LINUX_AMD64=$(sha_for jwtd-linux-amd64.tar.gz)
+          SHA256_LINUX_ARM64=$(sha_for jwtd-linux-arm64.tar.gz)
+
+          sed \
+            -e "s/VERSION/$VERSION/g" \
+            -e "s/SHA256_DARWIN_ARM64/$SHA256_DARWIN_ARM64/g" \
+            -e "s/SHA256_DARWIN_AMD64/$SHA256_DARWIN_AMD64/g" \
+            -e "s/SHA256_LINUX_ARM64/$SHA256_LINUX_ARM64/g" \
+            -e "s/SHA256_LINUX_AMD64/$SHA256_LINUX_AMD64/g" \
+            Formula/jwtd.rb > jwtd.rb
+
+          if grep -qE 'VERSION|SHA256_' jwtd.rb; then
+            echo "Formula still contains unrendered placeholders" >&2
+            exit 1
+          fi
       - name: Push to homebrew-tap
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           gh auth setup-git
           git clone "https://github.com/webcodr/homebrew-tap.git" tap
-          mkdir -p tap/Casks
-          current_formula="tap/Casks/jwtd.rb"
+          mkdir -p tap/Formula
+          current_formula="tap/Formula/jwtd.rb"
           if [ -f "$current_formula" ]; then
             current_version=$(ruby -e 'ARGF.each_line { |line| puts Regexp.last_match(1) if line =~ /^\s*version\s+"([^"]+)"/ }' "$current_formula")
             if [ -z "$current_version" ]; then
-              echo "Could not determine current Homebrew cask version" >&2
+              echo "Could not determine current Homebrew formula version" >&2
               exit 1
             fi
             if ruby -rrubygems -e 'current = Gem::Version.new(ARGV[0].split("+", 2).first); requested = Gem::Version.new(ARGV[1].split("+", 2).first); exit(current > requested ? 0 : 1)' "$current_version" "$VERSION"; then
@@ -486,16 +464,16 @@ jobs:
               exit 0
             fi
           fi
-          cp jwtd.rb tap/Casks/jwtd.rb
+          cp jwtd.rb tap/Formula/jwtd.rb
           cd tap
-          # Remove the superseded formula so the tap does not expose both a
-          # formula and a cask named jwtd.
-          if [ -f Formula/jwtd.rb ]; then
-            git rm --quiet Formula/jwtd.rb
+          # Remove the superseded cask so the tap does not expose both a cask
+          # and a formula named jwtd (transition away from the 4.0.0 cask).
+          if [ -f Casks/jwtd.rb ]; then
+            git rm --quiet Casks/jwtd.rb
           fi
-          git add Casks/jwtd.rb
+          git add Formula/jwtd.rb
           if git diff --cached --quiet; then
-            echo "Homebrew cask is already current"
+            echo "Homebrew formula is already current"
             exit 0
           else
             diff_status=$?

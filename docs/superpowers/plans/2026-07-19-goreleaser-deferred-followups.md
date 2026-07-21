@@ -326,7 +326,23 @@ description, section, priority, and architecture.
 
 ---
 
-## Phase 3: Homebrew cask migration (+ deferred cross-check) — **implemented**
+## Phase 3: Homebrew cask migration — **implemented then REVERTED**
+
+> **Reverted after release.** Shipping `4.0.0` as a cask surfaced a defect this
+> plan did not anticipate: Homebrew **casks quarantine** their downloaded
+> binary, and macOS Gatekeeper blocks unsigned/unnotarized binaries — so `jwtd`
+> failed to launch with "could not be verified". Homebrew has also removed the
+> `--no-quarantine` bypass and is deprecating casks that fail Gatekeeper on
+> 2026-09-01. Combined with the already-accepted loss of Linux Homebrew support,
+> the cask was a net regression. Homebrew was reverted to a **formula** (which
+> does not quarantine and works on Linux), keeping the item #7 improvement:
+> the formula's hashes are filled from the signed `checksums.txt`. The
+> `homebrew_casks` config, the cask staging, and the cask invariants were
+> removed; `Formula/jwtd.rb` was restored; `update-homebrew` now renders the
+> formula and removes the tap's `Casks/jwtd.rb`. Original cask notes retained
+> below for history.
+
+## Phase 3 (historical): Homebrew cask migration (+ deferred cross-check) — **implemented**
 
 Landed on branch `goreleaser-signing-sbom`. Full verification suite passes.
 
