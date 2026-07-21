@@ -15,6 +15,16 @@ jobs:
 
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
 
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+
+      - name: Check website JavaScript syntax
+        run: node --check site/script.js
+
+      - name: Run website JavaScript tests
+        run: node --test site/script.test.js
+
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l .)

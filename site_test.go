@@ -190,3 +190,25 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 		t.Errorf("deploy-pages step id must be deployment, got %q", deploymentID)
 	}
 }
+
+func TestWebsiteToolingContract(t *testing.T) {
+	testWorkflow := readWebsiteFile(t, ".github", "workflows", "test.yml")
+	for label, required := range map[string]string{
+		"pinned Node setup":       "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+		"Node version":            "node-version: 26.4.0",
+		"JavaScript syntax check": "node --check site/script.js",
+		"JavaScript unit tests":   "node --test site/script.test.js",
+	} {
+		if !strings.Contains(testWorkflow, required) {
+			t.Errorf("test workflow is missing %s marker %q", label, required)
+		}
+	}
+
+	shaPinned := regexp.MustCompile(`uses:\s+[^\s@]+@[0-9a-f]{40}(?:\s|$)`)
+	usesLine := regexp.MustCompile(`(?m)^\s*- uses:\s+\S+`)
+	for _, line := range usesLine.FindAllString(testWorkflow, -1) {
+		if !shaPinned.MatchString(line) {
+			t.Errorf("test workflow action must preserve full-SHA pinning: %q", strings.TrimSpace(line))
+		}
+	}
+}
