@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>jwtd — Modern CLI & Inspector for JWT & JWE Tokens</title>
+  <meta name="description" content="A CLI tool written in Go that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web Encryption (JWE) tokens with syntax-highlighted JSON output and cryptographic verification.">
+  <meta name="theme-color" content="#0b0f19">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Dynamic Background Grids -->
+  <div class="bg-grid"></div>
+  <div class="bg-pattern"></div>
+
+  <!-- Navbar -->
+  <header class="navbar">
+    <a href="#" class="brand">
+      <div class="brand-icon">jwt</div>
+      <span>jwtd</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="#playground">Live Decoder</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#builder">Command Builder</a></li>
+      <li><a href="#installation">Installation</a></li>
+      <li><a href="https://github.com/webcodr/jwtd" target="_blank" rel="noopener">GitHub</a></li>
+    </ul>
+    <button class="btn-nav-install" onclick="copySnippet('nav-install-cmd')">
+      <span>brew install jwtd</span>
+      <span id="nav-install-cmd" style="display:none;">brew install webcodr/tap/jwtd</span>
+      <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <!-- Hero Section -->
+    <section class="container hero">
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span>⚡ High-Performance Go CLI Tool</span>
+        </div>
+        <h1 class="hero-title">
+          Decode, Verify & Decrypt <span class="highlight">JWTs & JWEs</span> with Terminal Precision
+        </h1>
+        <p class="hero-subtitle">
+          jwtd brings instant syntax highlighting, automatic key format detection, RFC3339 timestamp parsing, and nested payload decoding right to your command line and browser.
+        </p>
+        <div class="hero-ctas">
+          <a href="#playground" class="btn-primary">
+            <span>Try Live Decoder</span>
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+          </a>
+          <button class="btn-code-copy" onclick="copySnippet('hero-cmd')">
+            <span id="hero-cmd">$ brew install webcodr/tap/jwtd</span>
+            <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Hero Terminal Mockup -->
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <div class="terminal-dots">
+            <div class="dot dot-red"></div>
+            <div class="dot dot-yellow"></div>
+            <div class="dot dot-green"></div>
+          </div>
+          <span class="terminal-title">jwtd --key raw:my-secret token.jwt</span>
+          <div class="terminal-actions"></div>
+        </div>
+        <div class="terminal-body">
+          <span class="jwt-label">Header:</span>
+{
+  <span class="json-key">"alg"</span>: <span class="json-string">"HS256"</span>,
+  <span class="json-key">"typ"</span>: <span class="json-string">"JWT"</span>
+}
+
+<span class="jwt-label">Claims:</span>
+{
+  <span class="json-key">"sub"</span>: <span class="json-string">"user_90210"</span>,
+  <span class="json-key">"name"</span>: <span class="json-string">"Alice Developer"</span>,
+  <span class="json-key">"admin"</span>: <span class="json-boolean">true</span>,
+  <span class="json-key">"iat"</span>: <span class="json-string">"2026-07-22T00:12:59Z (1784679179)"</span>,
+  <span class="json-key">"exp"</span>: <span class="json-string">"2026-07-22T02:30:00Z (1784687400)"</span>
+}
+
+<span class="sig-status valid">Signature: VALID</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Live Playground Section -->
+    <section id="playground" class="container section">
+      <div class="section-header">
+        <span class="section-badge">Interactive Playground</span>
+        <h2 class="section-title">Live Token Decoder & Inspector</h2>
+        <p class="section-desc">Paste any JWT or JWE token below to inspect headers, payload claims, timestamps, and signature status in real time.</p>
+      </div>
+
+      <div class="playground-grid">
+        <!-- Input Panel -->
+        <div class="playground-controls">
+          <div class="form-group">
+            <div class="form-label">
+              <span>Token Input</span>
+              <span class="form-hint">Supports JWT (3 parts) & JWE (5 parts)</span>
+            </div>
+            <textarea id="input-token" class="form-control" rows="6" placeholder="Paste your eyJ... JWT or JWE token here"></textarea>
+          </div>
+
+          <div class="form-group">
+            <div class="form-label">
+              <span>Presets & Examples</span>
+            </div>
+            <div class="presets-container">
+              <button class="preset-btn" data-preset="hs256">HS256 (HMAC)</button>
+              <button class="preset-btn" data-preset="rs256">RS256 (RSA)</button>
+              <button class="preset-btn" data-preset="jwe">JWE (Encrypted)</button>
+              <button class="preset-btn" data-preset="nested">Nested JWT-in-JWE</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="form-label">
+              <span>Verification / Decryption Key (Optional)</span>
+              <span class="form-hint">raw:secret, PEM, JWK, or Base64</span>
+            </div>
+            <input type="text" id="input-key" class="form-control" placeholder="e.g. raw:my-hmac-secret or PEM key path">
+          </div>
+
+          <div class="action-buttons">
+            <button id="btn-decode" class="btn-primary" style="flex:1;">
+              <span>Decode & Verify</span>
+            </button>
+            <button id="btn-clear" class="btn-secondary">Clear</button>
+          </div>
+        </div>
+
+        <!-- Output Terminal Window -->
+        <div class="terminal-window">
+          <div class="terminal-header">
+            <div class="terminal-dots">
+              <div class="dot dot-red"></div>
+              <div class="dot dot-yellow"></div>
+              <div class="dot dot-green"></div>
+            </div>
+            <span class="terminal-title">jwtd output</span>
+            <div class="terminal-actions">
+              <button id="btn-copy-json" class="btn-term-action">Copy Output</button>
+            </div>
+          </div>
+          <div id="terminal-output" class="terminal-body">
+            <!-- Output dynamically rendered by JS -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Command Builder Section -->
+    <section id="builder" class="container section">
+      <div class="section-header">
+        <span class="section-badge">CLI Generator</span>
+        <h2 class="section-title">Interactive Command Builder</h2>
+        <p class="section-desc">Generate exact CLI invocation commands tailored to your workflow.</p>
+      </div>
+
+      <div class="builder-card">
+        <div class="builder-options">
+          <div class="option-card">
+            <div class="option-title">Input Source</div>
+            <div class="radio-group">
+              <label class="radio-label">
+                <input type="radio" name="builder-source" value="arg" checked>
+                <span>Command Line Argument</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="builder-source" value="pipe">
+                <span>Stdin Pipe (echo / cat)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="option-card">
+            <div class="option-title">Key Option</div>
+            <div class="radio-group">
+              <label class="radio-label">
+                <input type="radio" name="builder-key" value="none" checked>
+                <span>No Key (Unverified inspection)</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="builder-key" value="flag">
+                <span>Key File (--key /path/to/key.pem)</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="builder-key" value="raw">
+                <span>Raw Secret (--key raw:my-secret)</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="builder-key" value="env">
+                <span>Environment Var (JWTD_KEY)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="command-output-box">
+          <span id="builder-command-text" class="command-text">jwtd &lt;token&gt;</span>
+          <button id="btn-copy-builder-cmd" class="btn-code-copy">
+            <span>Copy Command</span>
+            <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Key Features Grid -->
+    <section id="features" class="container section">
+      <div class="section-header">
+        <span class="section-badge">Powerful Capabilities</span>
+        <h2 class="section-title">Built for Speed and Security</h2>
+        <p class="section-desc">Designed with developer experience in mind, supporting all modern token standards and key formats.</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🔒</div>
+          <h3 class="feature-title">JWE Decryption & Parsing</h3>
+          <p class="feature-desc">Automatically detects 5-part JWE compact serialization. Displays protected headers and decrypts payload when provided a key.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🔑</div>
+          <h3 class="feature-title">Universal Key Format Support</h3>
+          <p class="feature-desc">Supports RSA, ECDSA, Ed25519, and HMAC keys in PEM, DER, JWK, JWKS, X.509 certificates, base64, or <code>raw:&lt;secret&gt;</code> formats.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">⏱️</div>
+          <h3 class="feature-title">RFC3339 Timestamp Parsing</h3>
+          <p class="feature-desc">Converts numeric Unix timestamps (<code>iat</code>, <code>exp</code>, <code>nbf</code>) into human-readable ISO/RFC3339 date strings automatically.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🔄</div>
+          <h3 class="feature-title">Recursive Nested Decoding</h3>
+          <p class="feature-desc">Handles complex tokens seamlessly: JWT-inside-JWE and JWE-inside-JWE are decoded and pretty-printed recursively.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🎨</div>
+          <h3 class="feature-title">TTY-Aware Colored Output</h3>
+          <p class="feature-desc">Rich color-coded JSON formatting with automatic TTY detection. Controls C0/C1 characters and targeted bidi controls safely.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">📦</div>
+          <h3 class="feature-title">Verifiable Cosign Releases</h3>
+          <p class="feature-desc">Every release features keyless Cosign signature bundles, Syft SPDX SBOMs, reproducible deb/rpm packages, and multi-arch binaries.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Installation Section -->
+    <section id="installation" class="container section">
+      <div class="section-header">
+        <span class="section-badge">Get Started</span>
+        <h2 class="section-title">Installation & Package Distribution</h2>
+        <p class="section-desc">Install jwtd on macOS, Linux, or Windows with your favorite package manager.</p>
+      </div>
+
+      <div class="install-card">
+        <div class="tab-headers">
+          <button class="tab-btn active" data-tab="tab-brew">Homebrew (macOS / Linux)</button>
+          <button class="tab-btn" data-tab="tab-scoop">Scoop (Windows)</button>
+          <button class="tab-btn" data-tab="tab-go">Go Install</button>
+          <button class="tab-btn" data-tab="tab-packages">Linux (.deb / .rpm)</button>
+          <button class="tab-btn" data-tab="tab-cosign">Cosign Verification</button>
+        </div>
+
+        <div class="tab-content">
+          <!-- Homebrew -->
+          <div id="tab-brew" class="tab-pane active">
+            <div class="install-snippet">
+              <code id="cmd-brew">brew install webcodr/tap/jwtd</code>
+              <button class="btn-code-copy" onclick="copySnippet('cmd-brew')">
+                <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+              </button>
+            </div>
+            <p class="install-desc">Official Homebrew formula tap. Updates automatically with each stable release tag.</p>
+          </div>
+
+          <!-- Scoop -->
+          <div id="tab-scoop" class="tab-pane">
+            <div class="install-snippet">
+              <code id="cmd-scoop">scoop bucket add webcodr https://github.com/webcodr/scoop-bucket && scoop install jwtd</code>
+              <button class="btn-code-copy" onclick="copySnippet('cmd-scoop')">
+                <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+              </button>
+            </div>
+            <p class="install-desc">Official Scoop bucket manifest for Windows amd64 and arm64 architectures.</p>
+          </div>
+
+          <!-- Go -->
+          <div id="tab-go" class="tab-pane">
+            <div class="install-snippet">
+              <code id="cmd-go">go install github.com/webcodr/jwtd@latest</code>
+              <button class="btn-code-copy" onclick="copySnippet('cmd-go')">
+                <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+              </button>
+            </div>
+            <p class="install-desc">Requires Go 1.26 or higher. Compiles directly from source.</p>
+          </div>
+
+          <!-- Linux Packages -->
+          <div id="tab-packages" class="tab-pane">
+            <div class="install-snippet">
+              <code id="cmd-deb">sudo dpkg -i jwtd-linux-amd64.deb   # Debian / Ubuntu</code>
+              <button class="btn-code-copy" onclick="copySnippet('cmd-deb')">
+                <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+              </button>
+            </div>
+            <div class="install-snippet">
+              <code id="cmd-rpm">sudo rpm -i jwtd-linux-amd64.rpm    # Fedora / RHEL / openSUSE</code>
+              <button class="btn-code-copy" onclick="copySnippet('cmd-rpm')">
+                <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+              </button>
+            </div>
+            <p class="install-desc">Debian and RPM packages place the <code>jwtd</code> binary at <code>/usr/bin/jwtd</code>.</p>
+          </div>
+
+          <!-- Verification -->
+          <div id="tab-cosign" class="tab-pane">
+            <div class="install-snippet">
+              <code id="cmd-cosign">cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '^https://github.com/webcodr/jwtd/\.github/workflows/release\.yml@' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt</code>
+              <button class="btn-code-copy" onclick="copySnippet('cmd-cosign')">
+                <svg class="copy-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+              </button>
+            </div>
+            <p class="install-desc">Verify keyless Sigstore release provenance and payload checksum integrity.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-grid">
+      <div class="footer-brand">
+        <a href="#" class="brand">
+          <div class="brand-icon">jwt</div>
+          <span>jwtd</span>
+        </a>
+        <p>A fast, reliable CLI tool written in Go that decodes, verifies, and decrypts JSON Web Tokens & Encryption structures.</p>
+      </div>
+
+      <div class="footer-col">
+        <h4>Navigation</h4>
+        <ul>
+          <li><a href="#playground">Live Playground</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#builder">Command Builder</a></li>
+          <li><a href="#installation">Installation</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/webcodr/jwtd" target="_blank" rel="noopener">GitHub Repository</a></li>
+          <li><a href="https://github.com/webcodr/jwtd/releases" target="_blank" rel="noopener">Releases & Binaries</a></li>
+          <li><a href="https://github.com/webcodr/jwtd/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="container footer-bottom">
+      <span>&copy; 2026 jwtd project. Released under the MIT License.</span>
+      <span>Built with Vanilla HTML/CSS/JS</span>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
