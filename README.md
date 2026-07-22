@@ -33,6 +33,18 @@ scoop bucket add webcodr https://github.com/webcodr/scoop-bucket
 scoop install jwtd
 ```
 
+### AUR (Arch Linux)
+
+Install the prebuilt-binary package from the [AUR](https://aur.archlinux.org/packages/jwtd-bin) with any AUR helper:
+
+```sh
+paru -S jwtd-bin
+# or
+yay -S jwtd-bin
+```
+
+The package installs the same signed release binary used by the other channels; its hashes are taken from the release's signed `checksums.txt`.
+
 ### From source
 
 Requires Go 1.26+.
