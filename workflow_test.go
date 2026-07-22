@@ -471,6 +471,121 @@ func TestScoopInvariants(t *testing.T) {
 	}
 }
 
+// TestAURInvariants checks that jwtd ships a prebuilt-binary AUR package
+// (jwtd-bin) rendered from the signed checksums.txt and pushed by the release
+// workflow, on the same terms as the Homebrew and Scoop channels: hashes
+// derived from the signed checksum file, a version-downgrade guard, a pinned
+// SSH host key, and publication gated to stable releases.
+func TestAURInvariants(t *testing.T) {
+	pkgbuild, err := os.ReadFile(filepath.Join("aur", "PKGBUILD"))
+	if err != nil {
+		t.Fatalf("aur/PKGBUILD template must exist: %v", err)
+	}
+	srcinfo, err := os.ReadFile(filepath.Join("aur", ".SRCINFO"))
+	if err != nil {
+		t.Fatalf("aur/.SRCINFO template must exist: %v", err)
+	}
+	pb := string(pkgbuild)
+	si := string(srcinfo)
+
+	// jwtd-bin installs the released Linux binary rather than compiling from
+	// source, so it must carry no build toolchain and hit /usr/bin/jwtd like
+	// the deb/rpm packages.
+	if !strings.Contains(pb, "pkgname=jwtd-bin") {
+		t.Error("aur/PKGBUILD must define pkgname=jwtd-bin")
+	}
+	if strings.Contains(pb, "go build") || strings.Contains(pb, "makedepends") {
+		t.Error("aur/PKGBUILD (jwtd-bin) must install the prebuilt binary, not compile from source")
+	}
+	if !strings.Contains(pb, "/usr/bin/jwtd") {
+		t.Error("aur/PKGBUILD must install the binary to /usr/bin/jwtd")
+	}
+	// provides/conflicts jwtd so the -bin package interoperates with a
+	// hypothetical from-source package of the same binary.
+	for _, want := range []string{"provides=('jwtd')", "conflicts=('jwtd')"} {
+		if !strings.Contains(pb, want) {
+			t.Errorf("aur/PKGBUILD must contain %q", want)
+		}
+	}
+	// .SRCINFO must agree with PKGBUILD on the package identity so the AUR
+	// server hook accepts the commit.
+	if !strings.Contains(si, "pkgbase = jwtd-bin") || !strings.Contains(si, "pkgname = jwtd-bin") {
+		t.Error("aur/.SRCINFO must declare pkgbase and pkgname jwtd-bin")
+	}
+
+	// Both templates must carry the placeholders the release workflow fills
+	// from checksums.txt, cover both architectures, and point at the exact
+	// release archives.
+	for _, placeholder := range []string{"VERSION", "SHA256_LINUX_AMD64", "SHA256_LINUX_ARM64"} {
+		if !strings.Contains(pb, placeholder) {
+			t.Errorf("aur/PKGBUILD must contain the %q placeholder", placeholder)
+		}
+		if !strings.Contains(si, placeholder) {
+			t.Errorf("aur/.SRCINFO must contain the %q placeholder", placeholder)
+		}
+	}
+	for _, arch := range []string{"x86_64", "aarch64"} {
+		if !strings.Contains(pb, arch) {
+			t.Errorf("aur/PKGBUILD must cover the %q architecture", arch)
+		}
+		if !strings.Contains(si, "arch = "+arch) {
+			t.Errorf("aur/.SRCINFO must cover the %q architecture", arch)
+		}
+	}
+	for _, archive := range []string{"jwtd-linux-amd64.tar.gz", "jwtd-linux-arm64.tar.gz"} {
+		if !strings.Contains(pb, archive) {
+			t.Errorf("aur/PKGBUILD must download %q", archive)
+		}
+		if !strings.Contains(si, archive) {
+			t.Errorf("aur/.SRCINFO must download %q", archive)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("reading release workflow: %v", err)
+	}
+	var wf releaseWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("parsing release workflow: %v", err)
+	}
+
+	aurJob, ok := wf.Jobs["update-aur"]
+	if !ok {
+		t.Fatal("release workflow must define an update-aur job")
+	}
+	if !slices.Contains(workflowNeeds(t, aurJob.Needs), "release") {
+		t.Error("update-aur must run only after a successfully published release")
+	}
+	// The AUR channel publishes only for stable releases, like Homebrew/Scoop.
+	if want := "needs.validate.outputs.prerelease == 'false'"; !strings.Contains(aurJob.If, want) {
+		t.Errorf("update-aur must be gated on %q so prereleases never update the AUR, got %q", want, aurJob.If)
+	}
+	// The package hashes are taken from the signed checksums.txt, so the AUR
+	// can only point at the exact archives this release published and verified.
+	if findStepContainingRun(aurJob.Steps, "checksums.txt") == nil {
+		t.Error("update-aur must derive the package hashes from checksums.txt")
+	}
+	pushStep := findStepContainingRun(aurJob.Steps, "git push")
+	if pushStep == nil {
+		t.Fatal("update-aur must push to the AUR")
+	}
+	if !strings.Contains(pushStep.Run, "ssh://aur@aur.archlinux.org/jwtd-bin.git") {
+		t.Error("update-aur must push to the jwtd-bin AUR repository")
+	}
+	// The AUR host key is pinned so pushes cannot be redirected via
+	// trust-on-first-use.
+	if !strings.Contains(pushStep.Run, "known_hosts") || !strings.Contains(pushStep.Run, "aur.archlinux.org ssh-ed25519") {
+		t.Error("update-aur must pin the AUR SSH host key in known_hosts")
+	}
+	if !strings.Contains(pushStep.Run, "Gem::Version") {
+		t.Error("update-aur must keep the version-downgrade guard")
+	}
+	if got := pushStep.Env["AUR_SSH_KEY"]; !strings.Contains(got, "AUR_SSH_KEY") {
+		t.Errorf("update-aur must authenticate with the AUR_SSH_KEY secret, got %q", got)
+	}
+}
+
 // TestReleaseWorkflowSecurityInvariants checks the durable security
 // properties of the release workflow: actions pinned to commit SHAs,
 // least-privilege default permissions, workflow inputs reaching shell

@@ -1,0 +1,18 @@
+pkgbase = jwtd-bin
+	pkgdesc = Decode and pretty-print JSON Web Tokens with syntax highlighting
+	pkgver = VERSION
+	pkgrel = 1
+	url = https://github.com/webcodr/jwtd
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	provides = jwtd
+	conflicts = jwtd
+	source = LICENSE-VERSION::https://raw.githubusercontent.com/webcodr/jwtd/vVERSION/LICENSE
+	sha256sums = SHA256_LICENSE
+	source_x86_64 = jwtd-VERSION-x86_64.tar.gz::https://github.com/webcodr/jwtd/releases/download/vVERSION/jwtd-linux-amd64.tar.gz
+	sha256sums_x86_64 = SHA256_LINUX_AMD64
+	source_aarch64 = jwtd-VERSION-aarch64.tar.gz::https://github.com/webcodr/jwtd/releases/download/vVERSION/jwtd-linux-arm64.tar.gz
+	sha256sums_aarch64 = SHA256_LINUX_ARM64
+
+pkgname = jwtd-bin
