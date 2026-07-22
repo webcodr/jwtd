@@ -6,10 +6,12 @@
   outputs =
     { self, nixpkgs }:
     let
+      # nixpkgs unstable has dropped x86_64-darwin, so the source build targets
+      # Linux (amd64/arm64) and Apple Silicon; Intel macOS users have Homebrew
+      # and the release archives.
       systems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system nixpkgs.legacyPackages.${system});

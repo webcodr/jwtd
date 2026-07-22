@@ -91,7 +91,7 @@ goreleaser release --snapshot --clean --skip=sign
 
 ### Nix flake
 
-`flake.nix` builds jwtd from source with `buildGoModule` (not the release binaries), exposing `packages.default`, `apps.default` (so `nix run github:webcodr/jwtd` works), a `devShells.default` with Go and GoReleaser, and `nixfmt-rfc-style` as the formatter across linux/darwin × amd64/arm64. The version is the git revision (`self.shortRev`), so source builds report the commit while tagged release binaries carry the semver via GoReleaser's ldflags. `flake.lock` pins nixpkgs.
+`flake.nix` builds jwtd from source with `buildGoModule` (not the release binaries), exposing `packages.default`, `apps.default` (so `nix run github:webcodr/jwtd` works), a `devShells.default` with Go and GoReleaser, and `nixfmt-rfc-style` as the formatter for `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin` (nixpkgs unstable has dropped `x86_64-darwin`). The version is the git revision (`self.shortRev`), so source builds report the commit while tagged release binaries carry the semver via GoReleaser's ldflags. `flake.lock` pins nixpkgs.
 
 `vendorHash` is the fixed-output hash of the Go module dependencies and must be updated whenever `go.mod`/`go.sum` change: set it to `pkgs.lib.fakeHash`, run `nix build`, and copy the `got:` hash from the mismatch error. The `nix` job in `.github/workflows/test.yml` runs `nix flake check --all-systems`, which builds the current-system package from source, so a stale `vendorHash` fails CI rather than rotting silently; `TestFlakeInvariants` guards the build-from-source contract (including that the hash is not the placeholder) and that the CI job exists.
 
