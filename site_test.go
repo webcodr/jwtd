@@ -97,17 +97,23 @@ func TestWebsiteContentContract(t *testing.T) {
 func TestWebsiteCopyContract(t *testing.T) {
 	index := readWebsiteFile(t, "site", "index.html")
 	for label, required := range map[string]string{
-		"page title":        "jwtd - JWT, JWS, and JWE inspection",
-		"metadata summary":  "Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.",
-		"hero eyebrow":      "A command-line tool for JWT, JWS, and JWE",
-		"hero heading":      "Inspect tokens",
-		"hero continuation": "from the terminal.",
-		"overview heading":  "Focused tools for token inspection.",
-		"install heading":   "Install jwtd.",
-		"usage heading":     "Common workflows.",
-		"keys heading":      "Use the key format you have.",
-		"security heading":  "Verifiable releases.",
-		"footer copy":       "A focused CLI for JWT, JWS, and JWE inspection.",
+		"page title":          `<title>jwtd - JWT, JWS, and JWE inspection</title>`,
+		"meta description":    `<meta name="description" content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.">`,
+		"Open Graph title":    `<meta property="og:title" content="jwtd - JWT, JWS, and JWE inspection">`,
+		"Open Graph summary":  `<meta property="og:description" content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.">`,
+		"hero eyebrow":        `<p class="eyebrow">A command-line tool for JWT, JWS, and JWE</p>`,
+		"hero heading":        `<h1 id="hero-title">Inspect tokens<br><span>from the terminal.</span></h1>`,
+		"primary action":      `<a class="button" href="#install">Install jwtd</a>`,
+		"secondary action":    `<a class="text-link" href="#usage">View usage</a>`,
+		"overview heading":    `<h2 id="capabilities-title">Focused tools for token inspection.</h2>`,
+		"install heading":     `<h2 id="install-title">Install jwtd.</h2>`,
+		"usage heading":       `<h2 id="usage-title">Common workflows.</h2>`,
+		"signature guidance":  `Verify the cryptographic signature without evaluating claims such as expiry. Invalid signatures exit nonzero.`,
+		"decryption guidance": `Compact JWEs are detected automatically. Provide a private key to decrypt the payload.`,
+		"keys heading":        `<h2 id="key-formats-title">Use the key format you have.</h2>`,
+		"security heading":    `<h2 id="release-security-title">Verifiable releases.</h2>`,
+		"security guidance":   `Release archives and Linux packages are listed in <code>checksums.txt</code>, which is signed with a keyless Cosign bundle. Each archive also includes a Syft SPDX SBOM.`,
+		"footer copy":         `<p>A focused CLI for JWT, JWS, and JWE inspection.</p>`,
 	} {
 		if !strings.Contains(index, required) {
 			t.Errorf("site/index.html is missing refined %s %q", label, required)
