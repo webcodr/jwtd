@@ -107,6 +107,7 @@
           <a id="install-tab-scoop" href="#install-scoop" data-install-method="scoop">Scoop</a>
           <a id="install-tab-linux" href="#install-linux" data-install-method="linux">Linux packages</a>
           <a id="install-tab-aur" href="#install-aur" data-install-method="aur">AUR</a>
+          <a id="install-tab-fedora" href="#install-fedora" data-install-method="fedora">Fedora</a>
           <a id="install-tab-nix" href="#install-nix" data-install-method="nix">Nix</a>
           <a id="install-tab-go" href="#install-go" data-install-method="go">Go</a>
           <a id="install-tab-archives" href="#install-archives" data-install-method="archives">Archives</a>
@@ -145,6 +146,15 @@ scoop install jwtd</code></pre>
           <div class="command-block">
             <pre><code id="aur-command">yay -S jwtd-bin</code></pre>
             <div class="command-actions"><button type="button" data-copy-target="aur-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div>
+          </div>
+        </div>
+
+        <div class="install-panel" id="install-fedora" data-install-panel="fedora">
+          <div><p class="panel-kicker">Fedora / RHEL</p><h3>COPR repository</h3><p>Enable the COPR repository, then install with dnf.</p></div>
+          <div class="command-block">
+            <pre><code id="fedora-command">sudo dnf copr enable webcodr/jwtd
+sudo dnf install jwtd</code></pre>
+            <div class="command-actions"><button type="button" data-copy-target="fedora-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div>
           </div>
         </div>
 
