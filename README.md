@@ -45,6 +45,22 @@ yay -S jwtd-bin
 
 The package installs the same signed release binary used by the other channels; its hashes are taken from the release's signed `checksums.txt`.
 
+### Nix
+
+The repository is a flake. Run jwtd without installing it:
+
+```sh
+nix run github:webcodr/jwtd -- <token>
+```
+
+Or install it into a profile:
+
+```sh
+nix profile install github:webcodr/jwtd
+```
+
+Flake builds compile from source and report the commit they were built from; tagged release binaries carry the semantic version.
+
 ### From source
 
 Requires Go 1.26+.
@@ -179,6 +195,12 @@ jwtd prints sections with colored, indented JSON:
 
 ```sh
 go build -o jwtd .
+```
+
+A Nix development shell with Go and GoReleaser is available via the flake:
+
+```sh
+nix develop
 ```
 
 ### Test

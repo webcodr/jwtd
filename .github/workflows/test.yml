@@ -134,3 +134,19 @@ jobs:
           done
 
           (cd dist && sha256sum --check checksums.txt)
+
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Builds the current-system package from source, so a stale vendorHash
+      # (or any other flake regression) fails here instead of silently rotting;
+      # --all-systems additionally evaluates the darwin/arm outputs.
+      - name: Check flake
+        run: nix flake check --all-systems --print-build-logs

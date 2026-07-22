@@ -2,3 +2,5 @@ jwtd
 .idea/
 dist/
 .worktrees/
+result
+result-*
