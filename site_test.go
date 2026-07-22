@@ -94,6 +94,40 @@ func TestWebsiteContentContract(t *testing.T) {
 	}
 }
 
+func TestWebsiteCopyContract(t *testing.T) {
+	index := readWebsiteFile(t, "site", "index.html")
+	for label, required := range map[string]string{
+		"page title":        "jwtd - JWT, JWS, and JWE inspection",
+		"metadata summary":  "Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.",
+		"hero eyebrow":      "A command-line tool for JWT, JWS, and JWE",
+		"hero heading":      "Inspect tokens",
+		"hero continuation": "from the terminal.",
+		"overview heading":  "Focused tools for token inspection.",
+		"install heading":   "Install jwtd.",
+		"usage heading":     "Common workflows.",
+		"keys heading":      "Use the key format you have.",
+		"security heading":  "Verifiable releases.",
+		"footer copy":       "A focused CLI for JWT, JWS, and JWE inspection.",
+	} {
+		if !strings.Contains(index, required) {
+			t.Errorf("site/index.html is missing refined %s %q", label, required)
+		}
+	}
+
+	for _, retired := range []string{
+		"Trust the evidence.",
+		"the full token path",
+		"Read the field guide",
+		"Bring real keys",
+		"Verify before execution",
+		"people who live in terminals",
+	} {
+		if strings.Contains(index, retired) {
+			t.Errorf("site/index.html must not retain dramatic phrase %q", retired)
+		}
+	}
+}
+
 type pagesWorkflowContract struct {
 	Permissions map[string]string `yaml:"permissions"`
 	Concurrency struct {
