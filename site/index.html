@@ -106,6 +106,7 @@
           <a id="install-tab-homebrew" href="#install-homebrew" data-install-method="homebrew">Homebrew</a>
           <a id="install-tab-scoop" href="#install-scoop" data-install-method="scoop">Scoop</a>
           <a id="install-tab-linux" href="#install-linux" data-install-method="linux">Linux packages</a>
+          <a id="install-tab-aur" href="#install-aur" data-install-method="aur">AUR</a>
           <a id="install-tab-go" href="#install-go" data-install-method="go">Go</a>
           <a id="install-tab-archives" href="#install-archives" data-install-method="archives">Archives</a>
         </div>
@@ -136,6 +137,14 @@ scoop install jwtd</code></pre>
             <div class="command-block"><p>Fedora / RHEL / openSUSE - arm64 <a class="package-link" href="https://github.com/webcodr/jwtd/releases/latest/download/jwtd-linux-arm64.rpm">Download .rpm</a></p><pre><code id="rpm-arm64-command">sudo rpm -i jwtd-linux-arm64.rpm</code></pre><div class="command-actions"><button type="button" data-copy-target="rpm-arm64-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div>
           </div>
           <a class="text-link" href="https://github.com/webcodr/jwtd/releases">View all Linux packages</a>
+        </div>
+
+        <div class="install-panel" id="install-aur" data-install-panel="aur">
+          <div><p class="panel-kicker">Arch Linux</p><h3>AUR package</h3><p>Install the prebuilt-binary package with any AUR helper such as yay or paru.</p></div>
+          <div class="command-block">
+            <pre><code id="aur-command">yay -S jwtd-bin</code></pre>
+            <div class="command-actions"><button type="button" data-copy-target="aur-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div>
+          </div>
         </div>
 
         <div class="install-panel" id="install-go" data-install-panel="go">
