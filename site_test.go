@@ -134,6 +134,34 @@ func TestWebsiteCopyContract(t *testing.T) {
 	}
 }
 
+func TestLinuxPackageHeaderLayout(t *testing.T) {
+	styles := readWebsiteFile(t, "site", "styles.css")
+	for selector, declarations := range map[string][]string{
+		".linux-commands .command-block > p": {
+			"display: flex",
+			"align-items: flex-start",
+			"justify-content: space-between",
+			"gap: 1rem",
+		},
+		".package-link": {
+			"float: none",
+			"flex: 0 0 auto",
+			"white-space: nowrap",
+		},
+	} {
+		rule := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(selector) + `\s*\{([^}]*)\}`).FindStringSubmatch(styles)
+		if rule == nil {
+			t.Errorf("site/styles.css is missing %s rule", selector)
+			continue
+		}
+		for _, declaration := range declarations {
+			if !strings.Contains(rule[1], declaration) {
+				t.Errorf("site/styles.css %s rule is missing %q", selector, declaration)
+			}
+		}
+	}
+}
+
 type pagesWorkflowContract struct {
 	Permissions map[string]string `yaml:"permissions"`
 	Concurrency struct {

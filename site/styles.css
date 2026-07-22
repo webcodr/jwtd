@@ -450,11 +450,20 @@ code {
   padding: 0.65rem 1rem;
 }
 
+.linux-commands .command-block > p {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 .package-link {
-  float: right;
+  flex: 0 0 auto;
+  float: none;
   color: var(--blue);
   font-weight: 700;
   text-underline-offset: 0.2em;
+  white-space: nowrap;
 }
 
 .command-block pre {
