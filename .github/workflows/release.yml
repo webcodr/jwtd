@@ -658,3 +658,53 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "jwtd $VERSION"
           git push
+  update-copr:
+    needs: [validate, release]
+    if: needs.validate.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: jwtd-release-assets
+          path: artifacts
+      - name: Build SRPM
+        run: |
+          # Verify the prebuilt archives against the signed checksums.txt so the
+          # RPM can only wrap the exact binaries this release published. Every
+          # file checksums.txt lists is present in the release assets.
+          (cd artifacts && sha256sum -c checksums.txt)
+
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+          mkdir -p rpmbuild/SOURCES rpmbuild/SPECS
+          cp artifacts/jwtd-linux-amd64.tar.gz artifacts/jwtd-linux-arm64.tar.gz rpmbuild/SOURCES/
+          cp LICENSE rpmbuild/SOURCES/LICENSE
+
+          date_str=$(date -u +'%a %b %d %Y')
+          sed \
+            -e "s/VERSION/$VERSION/g" \
+            -e "s/DATE/$date_str/g" \
+            copr/jwtd.spec > rpmbuild/SPECS/jwtd.spec
+          if grep -qE 'VERSION|DATE' rpmbuild/SPECS/jwtd.spec; then
+            echo "Spec still contains unrendered placeholders" >&2
+            exit 1
+          fi
+
+          rpmbuild --define "_topdir $PWD/rpmbuild" -bs rpmbuild/SPECS/jwtd.spec
+      - name: Submit to COPR
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_API_TOKEN }}
+        run: |
+          # COPR builds the SRPM in its Fedora chroots and signs the result with
+          # its own key; a submitted older version cannot downgrade users because
+          # dnf resolves the highest EVR from the repo.
+          python3 -m venv "$RUNNER_TEMP/copr-venv"
+          "$RUNNER_TEMP/copr-venv/bin/pip" install --quiet copr-cli
+          mkdir -p ~/.config
+          printf '%s' "$COPR_CONFIG" | base64 -d > ~/.config/copr
+          chmod 600 ~/.config/copr
+          srpm=$(ls rpmbuild/SRPMS/*.src.rpm)
+          "$RUNNER_TEMP/copr-venv/bin/copr-cli" build webcodr/jwtd "$srpm" --nowait

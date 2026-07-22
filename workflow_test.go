@@ -586,6 +586,82 @@ func TestAURInvariants(t *testing.T) {
 	}
 }
 
+// TestCOPRInvariants checks that jwtd ships a Fedora COPR RPM that repackages
+// the prebuilt release binaries (rather than compiling from source), built and
+// submitted by the release workflow on the same terms as the other channels:
+// sources verified against the signed checksums.txt and publication gated to
+// stable releases.
+func TestCOPRInvariants(t *testing.T) {
+	spec, err := os.ReadFile(filepath.Join("copr", "jwtd.spec"))
+	if err != nil {
+		t.Fatalf("copr/jwtd.spec template must exist: %v", err)
+	}
+	body := string(spec)
+
+	if !regexp.MustCompile(`(?m)^Name:\s+jwtd\b`).MatchString(body) {
+		t.Error("copr/jwtd.spec must define Name: jwtd")
+	}
+	for _, want := range []string{
+		"VERSION",                      // rendered by the workflow
+		"ExclusiveArch:",               // the package is arch-specific
+		"x86_64 aarch64",               // the two release arches
+		"%global debug_package %{nil}", // no debuginfo for a prebuilt binary
+		"%{_bindir}/jwtd",              // installs the binary
+		"%license",                     // ships the license
+		"jwtd-linux-amd64.tar.gz",      // wraps the prebuilt archives
+		"jwtd-linux-arm64.tar.gz",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("copr/jwtd.spec must contain %q", want)
+		}
+	}
+	// A binary-repackage spec must not compile from source.
+	for _, forbidden := range []string{"go build", "golang", "BuildRequires"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("copr/jwtd.spec repackages the prebuilt binary and must not contain %q", forbidden)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("reading release workflow: %v", err)
+	}
+	var wf releaseWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("parsing release workflow: %v", err)
+	}
+
+	coprJob, ok := wf.Jobs["update-copr"]
+	if !ok {
+		t.Fatal("release workflow must define an update-copr job")
+	}
+	if !slices.Contains(workflowNeeds(t, coprJob.Needs), "release") {
+		t.Error("update-copr must run only after a successfully published release")
+	}
+	if want := "needs.validate.outputs.prerelease == 'false'"; !strings.Contains(coprJob.If, want) {
+		t.Errorf("update-copr must be gated on %q so prereleases never update COPR, got %q", want, coprJob.If)
+	}
+	// The archives must be verified against the signed checksums.txt before the
+	// SRPM wraps them, so COPR can only build the exact release binaries.
+	srpmStep := findStepContainingRun(coprJob.Steps, "rpmbuild")
+	if srpmStep == nil {
+		t.Fatal("update-copr must build an SRPM with rpmbuild")
+	}
+	if !strings.Contains(srpmStep.Run, "checksums.txt") {
+		t.Error("update-copr must verify the archives against checksums.txt before packaging")
+	}
+	submitStep := findStepContainingRun(coprJob.Steps, "copr-cli")
+	if submitStep == nil {
+		t.Fatal("update-copr must submit the build to COPR via copr-cli")
+	}
+	if !strings.Contains(submitStep.Run, "webcodr/jwtd") {
+		t.Error("update-copr must submit to the webcodr/jwtd COPR project")
+	}
+	if got := submitStep.Env["COPR_CONFIG"]; !strings.Contains(got, "COPR_API_TOKEN") {
+		t.Errorf("update-copr must authenticate with the COPR_API_TOKEN secret, got %q", got)
+	}
+}
+
 // TestReleaseWorkflowSecurityInvariants checks the durable security
 // properties of the release workflow: actions pinned to commit SHAs,
 // least-privilege default permissions, workflow inputs reaching shell

@@ -45,6 +45,17 @@ yay -S jwtd-bin
 
 The package installs the same signed release binary used by the other channels; its hashes are taken from the release's signed `checksums.txt`.
 
+### Fedora (COPR)
+
+Enable the COPR repository and install with `dnf`:
+
+```sh
+sudo dnf copr enable webcodr/jwtd
+sudo dnf install jwtd
+```
+
+The COPR package repackages the same signed release binary used by the other channels, verified against the release's signed `checksums.txt`.
+
 ### Nix
 
 The repository is a flake. Run jwtd without installing it:
