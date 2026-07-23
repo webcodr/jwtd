@@ -42,6 +42,8 @@ func TestWebsiteContentContract(t *testing.T) {
 		"local stylesheet": `href="/styles.css"`,
 		"local script":     `src="/script.js"`,
 		"local favicon":    `href="/favicon.svg"`,
+		"structured data":  `<script type="application/ld+json">`,
+		"release version":  `<p class="panel-kicker">Latest release: <a href="https://github.com/webcodr/jwtd/releases/latest">VERSION</a></p>`,
 		"install controls": `data-install-tabs`,
 		"install methods":  `data-install-method="homebrew"`,
 		"install panels":   `data-install-panel="homebrew"`,
@@ -87,7 +89,7 @@ func TestWebsiteContentContract(t *testing.T) {
 		}
 	}
 
-	for _, asset := range []string{"styles.css", "script.js", "favicon.svg"} {
+	for _, asset := range []string{"styles.css", "script.js", "favicon.svg", "robots.txt", "sitemap.xml"} {
 		if _, err := os.Stat(filepath.Join("site", asset)); err != nil {
 			t.Errorf("local asset site/%s must exist: %v", asset, err)
 		}
@@ -178,6 +180,7 @@ type pagesWorkflowContract struct {
 		Steps []struct {
 			ID   string         `yaml:"id"`
 			Uses string         `yaml:"uses"`
+			Run  string         `yaml:"run"`
 			With map[string]any `yaml:"with"`
 		} `yaml:"steps"`
 	} `yaml:"jobs"`
@@ -247,6 +250,14 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 	}
 	if artifactPath != "site" {
 		t.Errorf("Pages artifact path must be site, got %q", artifactPath)
+	}
+
+	var bakeScript string
+	for _, step := range build.Steps {
+		bakeScript += step.Run
+	}
+	if !strings.Contains(bakeScript, "gh release view") || !strings.Contains(bakeScript, "VERSION") {
+		t.Errorf("Pages build job must bake the latest release version into the site, got %q", bakeScript)
 	}
 
 	var deploymentID string

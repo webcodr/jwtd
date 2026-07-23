@@ -7,9 +7,11 @@ content contract in `site_test.go`. Suggestions below are ordered by impact.
 
 ## Functional issues worth fixing
 
-> Status: items 1–5 are implemented (script.js hash handling + OS-aware hero
-> command, combined curl/install snippets in the Linux panel, tabpanel
-> `tabindex`, outside-click close for the mobile nav).
+> Status: items 1–5 and 7–9 are implemented (script.js hash handling +
+> OS-aware hero command, combined curl/install snippets in the Linux panel,
+> tabpanel `tabindex`, outside-click close for the mobile nav, JSON-LD
+> structured data, robots.txt/sitemap.xml, deploy-time release version).
+> Remaining: 6 (og:image), 10–14.
 
 ### 1. Install tabs ignore the URL hash
 
@@ -84,12 +86,15 @@ A small `<script type="application/ld+json">` block (name, description,
 repository URL, license, operating systems) improves search rich results. Note:
 the CSP `script-src 'self'` blocks inline scripts, so the JSON-LD must either be
 served from an external file or the CSP extended with a `'sha256-…'` hash (hashes
-do work for inline blocks in a meta-delivered CSP).
+do work for inline blocks in a meta-delivered CSP). *Implemented inline:
+browsers do not apply `script-src` to inert, non-JavaScript script types, so
+the CSP stays unchanged. `softwareVersion` carries the `VERSION` placeholder
+and is baked at deploy time.*
 
 ### 8. Add `robots.txt` and `sitemap.xml`
 
 Trivial for a one-pager, but completes the picture. Both are plain files that fit
-the existing `site/` → Pages artifact workflow.
+the existing `site/` → Pages artifact workflow. *Implemented.*
 
 ## Content / polish
 
@@ -98,7 +103,10 @@ the existing `site/` → Pages artifact workflow.
 There is no version anywhere on the page. Options that respect
 `connect-src 'none'`: bake it in at deploy time in `.github/workflows/pages.yml`
 (a small step querying the GitHub API and substituting into the HTML), or link
-"Latest release" without a number.
+"Latest release" without a number. *Implemented: a build step resolves the
+latest tag with `gh release view` and substitutes the `VERSION` placeholder in
+`site/index.html` (visible "Latest release" line in the install section plus
+JSON-LD `softwareVersion`).*
 
 ### 10. FAQ as `<details>` / `<summary>`
 
