@@ -109,6 +109,7 @@ if (typeof document !== "undefined") {
       for (const panel of panels) {
         panel.setAttribute("role", "tabpanel");
         panel.setAttribute("aria-labelledby", `install-tab-${panel.dataset.installPanel}`);
+        panel.tabIndex = 0;
       }
 
       selectTab(
@@ -203,6 +204,16 @@ if (typeof document !== "undefined") {
 
       navigation.addEventListener("click", (event) => {
         if (event.target.closest("a")) {
+          closeNavigation();
+        }
+      });
+
+      document.addEventListener("click", (event) => {
+        if (
+          navToggle.getAttribute("aria-expanded") === "true" &&
+          !event.target.closest("#primary-navigation") &&
+          !event.target.closest("[data-nav-toggle]")
+        ) {
           closeNavigation();
         }
       });

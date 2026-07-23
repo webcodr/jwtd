@@ -7,8 +7,9 @@ content contract in `site_test.go`. Suggestions below are ordered by impact.
 
 ## Functional issues worth fixing
 
-> Status: items 1–3 are implemented (script.js hash handling + OS-aware hero
-> command, combined curl/install snippets in the Linux panel).
+> Status: items 1–5 are implemented (script.js hash handling + OS-aware hero
+> command, combined curl/install snippets in the Linux panel, tabpanel
+> `tabindex`, outside-click close for the mobile nav).
 
 ### 1. Install tabs ignore the URL hash
 
@@ -57,14 +58,14 @@ remain.*
 The WAI-ARIA tabs pattern recommends `tabindex="0"` on tabpanels so keyboard
 users can tab into panel content. The script already sets the other ARIA wiring
 (`role`, `aria-controls`, `aria-labelledby`); this is one more line in the same
-loop.
+loop. *Implemented via `panel.tabIndex = 0`.*
 
 ### 5. Mobile nav does not close on outside click
 
 `site/script.js`
 
 Only Escape, a link click, or the toggle itself closes the mobile navigation. A
-click-outside listener would match user expectations.
+click-outside listener would match user expectations. *Implemented.*
 
 ## SEO / social
 
@@ -139,6 +140,6 @@ in the HTML so nobody assumes clickjacking protection is in place.
 
 ## Suggested quick wins
 
-Items 1 and 2 are done. Items 4 and 6 remain small, high-value changes that fit
-the existing architecture and test setup (`site_test.go` contract tests,
+Items 1–5 are done. Item 6 remains a small, high-value change that fits the
+existing architecture and test setup (`site_test.go` contract tests,
 `node --test site/script.test.js` for the script).
