@@ -74,6 +74,7 @@ type goReleaserConfig struct {
 	Sboms []struct {
 		ID        string   `yaml:"id"`
 		Artifacts string   `yaml:"artifacts"`
+		IDs       []string `yaml:"ids"`
 		Cmd       string   `yaml:"cmd"`
 		Args      []string `yaml:"args"`
 		Documents []string `yaml:"documents"`
@@ -107,7 +108,9 @@ type goReleaserConfig struct {
 	} `yaml:"release"`
 }
 
-// releaseArchiveNames are the six archives jwtd has always shipped.
+// releaseArchiveNames are the six tar.gz archives jwtd has always shipped.
+// Each carries a Syft SBOM; the windows zips (below) deliberately do not, since
+// they wrap the same binary as the windows tar.gz.
 var releaseArchiveNames = []string{
 	"jwtd-linux-amd64.tar.gz",
 	"jwtd-linux-arm64.tar.gz",
@@ -115,6 +118,14 @@ var releaseArchiveNames = []string{
 	"jwtd-darwin-arm64.tar.gz",
 	"jwtd-windows-amd64.tar.gz",
 	"jwtd-windows-arm64.tar.gz",
+}
+
+// windowsZipNames are the additional zip archives shipped for WinGet, whose
+// portable installer cannot consume tar.gz. They are byte-reproducible and so
+// stay in the strict comparison tier alongside the tar.gz archives.
+var windowsZipNames = []string{
+	"jwtd-windows-amd64.zip",
+	"jwtd-windows-arm64.zip",
 }
 
 // cosignBundleName is the keyless Cosign bundle covering checksums.txt.
@@ -185,65 +196,114 @@ func TestGoReleaserConfigurationInvariants(t *testing.T) {
 		t.Errorf("project_name must be %q, got %q", "jwtd", cfg.ProjectName)
 	}
 
-	if len(cfg.Builds) != 1 {
-		t.Fatalf("expected exactly one build, got %d", len(cfg.Builds))
+	// Two builds: the original jwtd build (all six targets) and a windows-only
+	// build feeding the WinGet zip. Both must carry identical, deterministic
+	// settings so the windows binary is byte-for-byte the same in the tar.gz and
+	// the zip.
+	if len(cfg.Builds) != 2 {
+		t.Fatalf("expected exactly two builds, got %d", len(cfg.Builds))
 	}
-	build := cfg.Builds[0]
-	if build.ID != "jwtd" {
-		t.Errorf("build id must be %q, got %q", "jwtd", build.ID)
+	buildsByID := make(map[string]int, len(cfg.Builds))
+	for i, b := range cfg.Builds {
+		buildsByID[b.ID] = i
 	}
-	if build.Binary != "jwtd" {
-		t.Errorf("build binary must be %q, got %q", "jwtd", build.Binary)
+	jwtdIdx, ok := buildsByID["jwtd"]
+	if !ok {
+		t.Fatalf("expected a build with id %q, got builds %v", "jwtd", slices.Collect(maps.Keys(buildsByID)))
 	}
-	if build.Main != "." {
-		t.Errorf("build main must be %q, got %q", ".", build.Main)
+	winIdx, ok := buildsByID["jwtd-windows"]
+	if !ok {
+		t.Fatalf("expected a windows-only build with id %q, got builds %v", "jwtd-windows", slices.Collect(maps.Keys(buildsByID)))
 	}
-	if !slices.Contains(build.Env, "CGO_ENABLED=0") {
-		t.Errorf("build env must contain %q, got %v", "CGO_ENABLED=0", build.Env)
-	}
-	if wantGoos := []string{"linux", "darwin", "windows"}; !slices.Equal(slices.Sorted(slices.Values(build.Goos)), slices.Sorted(slices.Values(wantGoos))) {
-		t.Errorf("build goos must be exactly %v, got %v", wantGoos, build.Goos)
-	}
-	if wantGoarch := []string{"amd64", "arm64"}; !slices.Equal(slices.Sorted(slices.Values(build.Goarch)), slices.Sorted(slices.Values(wantGoarch))) {
-		t.Errorf("build goarch must be exactly %v, got %v", wantGoarch, build.Goarch)
-	}
-	if !slices.Contains(build.Flags, "-trimpath") {
-		t.Errorf("build flags must contain %q, got %v", "-trimpath", build.Flags)
-	}
-	if wantLdflags := "-s -w -X main.version={{ .Version }}"; !slices.Contains(build.Ldflags, wantLdflags) {
-		t.Errorf("build ldflags must contain %q, got %v", wantLdflags, build.Ldflags)
-	}
-	if want := "{{ .CommitTimestamp }}"; build.ModTimestamp != want {
-		t.Errorf("build mod_timestamp must be %q, got %q", want, build.ModTimestamp)
-	}
+	build := cfg.Builds[jwtdIdx]
+	winBuild := cfg.Builds[winIdx]
 
-	if len(cfg.Archives) != 1 {
-		t.Fatalf("expected exactly one archive definition, got %d", len(cfg.Archives))
-	}
-	archive := cfg.Archives[0]
-	if !slices.Contains(archive.Formats, "tar.gz") || len(archive.Formats) != 1 {
-		t.Errorf("archive formats must be exactly [tar.gz], got %v", archive.Formats)
-	}
-	if want := "jwtd-{{ .Os }}-{{ .Arch }}"; archive.NameTemplate != want {
-		t.Errorf("archive name_template must be %q, got %q", want, archive.NameTemplate)
-	}
-	if len(archive.Files) == 0 {
-		t.Fatal("archive files glob must be set so README/LICENSE are not implicitly added")
-	}
-	for _, glob := range archive.Files {
-		for _, extra := range []string{"README.md", "LICENSE"} {
-			if matched, err := filepath.Match(glob, extra); err != nil {
-				t.Fatalf("invalid archive files glob %q: %v", glob, err)
-			} else if matched {
-				t.Errorf("archive files glob %q must not match %q; archives must stay binary-only", glob, extra)
-			}
+	// Shared, deterministic build settings both builds must honor.
+	for _, name := range []string{"jwtd", "jwtd-windows"} {
+		bd := cfg.Builds[buildsByID[name]]
+		if bd.Binary != "jwtd" {
+			t.Errorf("build %q binary must be %q, got %q", name, "jwtd", bd.Binary)
+		}
+		if bd.Main != "." {
+			t.Errorf("build %q main must be %q, got %q", name, ".", bd.Main)
+		}
+		if !slices.Contains(bd.Env, "CGO_ENABLED=0") {
+			t.Errorf("build %q env must contain %q, got %v", name, "CGO_ENABLED=0", bd.Env)
+		}
+		if !slices.Contains(bd.Flags, "-trimpath") {
+			t.Errorf("build %q flags must contain %q, got %v", name, "-trimpath", bd.Flags)
+		}
+		if wantLdflags := "-s -w -X main.version={{ .Version }}"; !slices.Contains(bd.Ldflags, wantLdflags) {
+			t.Errorf("build %q ldflags must contain %q, got %v", name, wantLdflags, bd.Ldflags)
+		}
+		if want := "{{ .CommitTimestamp }}"; bd.ModTimestamp != want {
+			t.Errorf("build %q mod_timestamp must be %q, got %q", name, want, bd.ModTimestamp)
+		}
+		if wantGoarch := []string{"amd64", "arm64"}; !slices.Equal(slices.Sorted(slices.Values(bd.Goarch)), slices.Sorted(slices.Values(wantGoarch))) {
+			t.Errorf("build %q goarch must be exactly %v, got %v", name, wantGoarch, bd.Goarch)
 		}
 	}
-	if archive.BuildsInfo.Owner != "root" || archive.BuildsInfo.Group != "root" {
-		t.Errorf("archive builds_info owner/group must be root/root, got %q/%q", archive.BuildsInfo.Owner, archive.BuildsInfo.Group)
+	if wantGoos := []string{"linux", "darwin", "windows"}; !slices.Equal(slices.Sorted(slices.Values(build.Goos)), slices.Sorted(slices.Values(wantGoos))) {
+		t.Errorf("build jwtd goos must be exactly %v, got %v", wantGoos, build.Goos)
 	}
-	if want := "1970-01-01T00:00:00Z"; archive.BuildsInfo.Mtime != want {
-		t.Errorf("archive builds_info mtime must be the fixed epoch %q, got %q", want, archive.BuildsInfo.Mtime)
+	if wantGoos := []string{"windows"}; !slices.Equal(winBuild.Goos, wantGoos) {
+		t.Errorf("build jwtd-windows goos must be exactly %v so the zip is windows-only, got %v", wantGoos, winBuild.Goos)
+	}
+
+	// Two archives: the tar.gz set (id jwtd) and the windows zip (id jwtd-zip)
+	// fed by the windows-only build. Both must be deterministic and binary-only.
+	if len(cfg.Archives) != 2 {
+		t.Fatalf("expected exactly two archive definitions, got %d", len(cfg.Archives))
+	}
+	archivesByID := make(map[string]int, len(cfg.Archives))
+	for i, a := range cfg.Archives {
+		archivesByID[a.ID] = i
+	}
+	tarIdx, ok := archivesByID["jwtd"]
+	if !ok {
+		t.Fatalf("expected a tar.gz archive with id %q", "jwtd")
+	}
+	zipIdx, ok := archivesByID["jwtd-zip"]
+	if !ok {
+		t.Fatalf("expected a zip archive with id %q for WinGet", "jwtd-zip")
+	}
+	archive := cfg.Archives[tarIdx]
+	zipArchive := cfg.Archives[zipIdx]
+	if !slices.Equal(archive.Formats, []string{"tar.gz"}) {
+		t.Errorf("archive jwtd formats must be exactly [tar.gz], got %v", archive.Formats)
+	}
+	if !slices.Equal(zipArchive.Formats, []string{"zip"}) {
+		t.Errorf("archive jwtd-zip formats must be exactly [zip], got %v", zipArchive.Formats)
+	}
+	if !slices.Equal(zipArchive.IDs, []string{"jwtd-windows"}) {
+		t.Errorf("archive jwtd-zip must be built from the windows-only build [jwtd-windows], got %v", zipArchive.IDs)
+	}
+	for _, a := range []struct {
+		name string
+		arc  int
+	}{{"jwtd", tarIdx}, {"jwtd-zip", zipIdx}} {
+		arc := cfg.Archives[a.arc]
+		if want := "jwtd-{{ .Os }}-{{ .Arch }}"; arc.NameTemplate != want {
+			t.Errorf("archive %q name_template must be %q, got %q", a.name, want, arc.NameTemplate)
+		}
+		if len(arc.Files) == 0 {
+			t.Fatalf("archive %q files glob must be set so README/LICENSE are not implicitly added", a.name)
+		}
+		for _, glob := range arc.Files {
+			for _, extra := range []string{"README.md", "LICENSE"} {
+				if matched, err := filepath.Match(glob, extra); err != nil {
+					t.Fatalf("invalid archive %q files glob %q: %v", a.name, glob, err)
+				} else if matched {
+					t.Errorf("archive %q files glob %q must not match %q; archives must stay binary-only", a.name, glob, extra)
+				}
+			}
+		}
+		if arc.BuildsInfo.Owner != "root" || arc.BuildsInfo.Group != "root" {
+			t.Errorf("archive %q builds_info owner/group must be root/root, got %q/%q", a.name, arc.BuildsInfo.Owner, arc.BuildsInfo.Group)
+		}
+		if want := "1970-01-01T00:00:00Z"; arc.BuildsInfo.Mtime != want {
+			t.Errorf("archive %q builds_info mtime must be the fixed epoch %q, got %q", a.name, want, arc.BuildsInfo.Mtime)
+		}
 	}
 
 	if cfg.Checksum.Algorithm != "sha256" {
@@ -281,20 +341,28 @@ func TestGoReleaserSupplyChainInvariants(t *testing.T) {
 	if want := "archive"; cfg.Sboms[0].Artifacts != want {
 		t.Errorf("sboms artifacts must be %q so every shipped archive gets an SBOM, got %q", want, cfg.Sboms[0].Artifacts)
 	}
+	// SBOMs are scoped to the tar.gz archives (id "jwtd"). The windows zip
+	// (id "jwtd-zip") wraps the same binary already cataloged by the windows
+	// tar.gz SBOM, so a second SBOM would be redundant and non-reproducible
+	// churn for no benefit.
+	if want := []string{"jwtd"}; !slices.Equal(cfg.Sboms[0].IDs, want) {
+		t.Errorf("sboms.ids must be exactly %v so only the tar.gz archives are cataloged, got %v", want, cfg.Sboms[0].IDs)
+	}
 
 	// Syft SBOMs embed a random documentNamespace UUID and a creation
 	// timestamp, so they are not byte-reproducible. Restricting the checksum
-	// file to the "jwtd" id keeps checksums.txt itself reproducible. Without
+	// file to the archive ids keeps checksums.txt itself reproducible. Without
 	// this, every rerun would produce a different checksums.txt and the
 	// release job's byte-for-byte verification of the signed file would fail.
 	//
-	// The archives and the nfpm packages both carry the "jwtd" id, so both are
-	// covered by checksums.txt, while the SBOMs (id "archive") are excluded.
-	if want := []string{"jwtd"}; !slices.Equal(cfg.Checksum.IDs, want) {
-		t.Errorf("checksum.ids must be exactly %v so non-reproducible SBOMs stay out of checksums.txt, got %v", want, cfg.Checksum.IDs)
+	// Both archive ids (tar.gz "jwtd" and zip "jwtd-zip") plus the nfpm packages
+	// (id "jwtd") are covered by checksums.txt, while the SBOMs (sboms id
+	// "archive") are excluded.
+	if want := []string{"jwtd", "jwtd-zip"}; !slices.Equal(cfg.Checksum.IDs, want) {
+		t.Errorf("checksum.ids must be exactly %v so archives and packages are covered but non-reproducible SBOMs stay out, got %v", want, cfg.Checksum.IDs)
 	}
-	if cfg.Sboms[0].ID == "jwtd" {
-		t.Error(`sboms id must not be "jwtd"; that would pull non-reproducible SBOMs into checksums.txt`)
+	if cfg.Sboms[0].ID == "jwtd" || cfg.Sboms[0].ID == "jwtd-zip" {
+		t.Error(`sboms id must not be an archive id; that would pull non-reproducible SBOMs into checksums.txt`)
 	}
 
 	if len(cfg.Nfpms) != 1 {
@@ -545,6 +613,11 @@ func TestScoopInvariants(t *testing.T) {
 
 	if scoop.SkipUpload != "true" {
 		t.Errorf("scoops skip_upload must be %q so GoReleaser never pushes to the bucket, got %q", "true", scoop.SkipUpload)
+	}
+	// Windows now produces two archives (tar.gz and the WinGet zip); Scoop must
+	// be pinned to the tar.gz id or GoReleaser cannot pick a single archive.
+	if want := []string{"jwtd"}; !slices.Equal(scoop.IDs, want) {
+		t.Errorf("scoops ids must be exactly %v so Scoop uses the tar.gz archive, not the WinGet zip, got %v", want, scoop.IDs)
 	}
 	if scoop.Repository.Owner != "webcodr" || scoop.Repository.Name != "scoop-bucket" {
 		t.Errorf("scoops repository must be webcodr/scoop-bucket, got %s/%s", scoop.Repository.Owner, scoop.Repository.Name)
@@ -823,6 +896,104 @@ func TestCOPRInvariants(t *testing.T) {
 	}
 }
 
+// TestWinGetInvariants checks that jwtd ships a WinGet manifest set that
+// installs the release zip as a portable package, and that the update-winget
+// job submits it to the moderated microsoft/winget-pkgs repository on the same
+// terms as the other channels: installers verified against the signed
+// checksums.txt, a pinned+checksummed submission tool, and publication gated to
+// stable releases.
+func TestWinGetInvariants(t *testing.T) {
+	manifests := map[string]string{}
+	for _, name := range []string{
+		"WebCodr.jwtd.yaml",
+		"WebCodr.jwtd.installer.yaml",
+		"WebCodr.jwtd.locale.en-US.yaml",
+	} {
+		data, err := os.ReadFile(filepath.Join("winget", name))
+		if err != nil {
+			t.Fatalf("winget/%s template must exist: %v", name, err)
+		}
+		manifests[name] = string(data)
+	}
+
+	// Every manifest must agree on the package identity and carry the version
+	// placeholder the workflow fills.
+	for name, body := range manifests {
+		if !strings.Contains(body, "PackageIdentifier: WebCodr.jwtd") {
+			t.Errorf("winget/%s must declare PackageIdentifier WebCodr.jwtd", name)
+		}
+		if !strings.Contains(body, "PackageVersion: VERSION") {
+			t.Errorf("winget/%s must carry the VERSION placeholder", name)
+		}
+	}
+
+	installer := manifests["WebCodr.jwtd.installer.yaml"]
+	// jwtd ships as a zip consumed as a portable nested installer (WinGet cannot
+	// consume the tar.gz archives), pointing at the exact release zips with
+	// per-arch hash placeholders the workflow fills from checksums.txt.
+	if !strings.Contains(installer, "InstallerType: zip") {
+		t.Error("winget installer manifest must use InstallerType: zip")
+	}
+	if !strings.Contains(installer, "NestedInstallerType: portable") {
+		t.Error("winget installer manifest must install jwtd.exe as a portable nested installer")
+	}
+	for _, want := range []string{
+		"SHA256_WINDOWS_AMD64", "SHA256_WINDOWS_ARM64",
+		"jwtd-windows-amd64.zip", "jwtd-windows-arm64.zip",
+	} {
+		if !strings.Contains(installer, want) {
+			t.Errorf("winget installer manifest must contain %q", want)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("reading release workflow: %v", err)
+	}
+	var wf releaseWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("parsing release workflow: %v", err)
+	}
+
+	wingetJob, ok := wf.Jobs["update-winget"]
+	if !ok {
+		t.Fatal("release workflow must define an update-winget job")
+	}
+	if !slices.Contains(workflowNeeds(t, wingetJob.Needs), "release") {
+		t.Error("update-winget must run only after a successfully published release")
+	}
+	if want := "needs.validate.outputs.prerelease == 'false'"; !strings.Contains(wingetJob.If, want) {
+		t.Errorf("update-winget must be gated on %q so prereleases never update WinGet, got %q", want, wingetJob.If)
+	}
+	// The installers are verified against the signed checksums.txt before the
+	// manifest is built from the same release URLs.
+	if findStepContainingRun(wingetJob.Steps, "checksums.txt") == nil {
+		t.Error("update-winget must verify the installers against checksums.txt")
+	}
+	// The submission tool is pinned and checksum-verified so the release-publish
+	// path pulls in no unpinned third party.
+	installStep := findStepContainingRun(wingetJob.Steps, "komac")
+	if installStep == nil {
+		t.Fatal("update-winget must install komac")
+	}
+	if findStepContainingRun(wingetJob.Steps, "sha256sum -c") == nil {
+		t.Error("update-winget must verify the komac binary against a pinned sha256")
+	}
+	submitStep := findStepContainingRun(wingetJob.Steps, "update WebCodr.jwtd")
+	if submitStep == nil {
+		t.Fatal("update-winget must submit the manifest via komac update")
+	}
+	if !strings.Contains(submitStep.Run, "--submit") {
+		t.Error("update-winget must open the winget-pkgs PR via komac --submit")
+	}
+	if got := submitStep.Env["KOMAC_FORK_OWNER"]; got != "webcodr" {
+		t.Errorf("update-winget must submit from the webcodr fork, got KOMAC_FORK_OWNER=%q", got)
+	}
+	if got := submitStep.Env["GITHUB_TOKEN"]; !strings.Contains(got, "WINGET_TOKEN") {
+		t.Errorf("update-winget must authenticate with the WINGET_TOKEN secret, got %q", got)
+	}
+}
+
 // TestReleaseWorkflowSecurityInvariants checks the durable security
 // properties of the release workflow: actions pinned to commit SHAs,
 // least-privilege default permissions, workflow inputs reaching shell
@@ -1036,6 +1207,7 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 	}
 	assets := extractBashArray(t, assetsStep.Run, "expected_assets")
 	wantAssets := append([]string{"checksums.txt", cosignBundleName}, releaseArchiveNames...)
+	wantAssets = append(wantAssets, windowsZipNames...)
 	wantAssets = append(wantAssets, sbomNames()...)
 	wantAssets = append(wantAssets, sbomSignatureNames()...)
 	wantAssets = append(wantAssets, linuxPackageNames()...)
@@ -1056,6 +1228,7 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 		t.Errorf("release job nonreproducible_assets must be exactly %v, got %v", wantNonReproducible, nonReproducible)
 	}
 	reproducible := append([]string{"checksums.txt"}, releaseArchiveNames...)
+	reproducible = append(reproducible, windowsZipNames...)
 	reproducible = append(reproducible, linuxPackageNames()...)
 	for _, asset := range reproducible {
 		if slices.Contains(nonReproducible, asset) {

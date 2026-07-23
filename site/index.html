@@ -464,11 +464,28 @@ sudo rpm -i jwtd-linux-arm64.rpm</code></pre>
         >
           <div>
             <p class="panel-kicker">Windows</p>
-            <h3>Scoop bucket</h3>
-            <p>Add the webcodr bucket once, then install jwtd.</p>
+            <h3>WinGet or Scoop</h3>
+            <p>
+              Install with the built-in Windows Package Manager, or add the
+              webcodr Scoop bucket.
+            </p>
           </div>
           <div class="install-methods">
             <div class="command-block">
+              <p>WinGet &mdash; built-in package manager</p>
+              <pre><code id="winget-command">winget install WebCodr.jwtd</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="winget-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+            <div class="command-block">
+              <p>Scoop &mdash; webcodr bucket</p>
               <pre><code id="scoop-command">scoop bucket add webcodr https://github.com/webcodr/scoop-bucket
 scoop install jwtd</code></pre>
               <div class="command-actions">

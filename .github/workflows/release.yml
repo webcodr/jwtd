@@ -81,7 +81,10 @@ jobs:
         run: goreleaser release --clean --skip=publish
       - name: Verify and stage GoReleaser artifacts
         run: |
-          expected_archives=(
+          # tar.gz archives carry a Syft SBOM each; the windows zips (for
+          # WinGet) wrap the same binary as the windows tar.gz, so they are
+          # deliberately not SBOM'd separately.
+          expected_tarballs=(
             "jwtd-linux-amd64.tar.gz"
             "jwtd-linux-arm64.tar.gz"
             "jwtd-darwin-amd64.tar.gz"
@@ -90,9 +93,15 @@ jobs:
             "jwtd-windows-arm64.tar.gz"
           )
 
+          expected_archives=(
+            "${expected_tarballs[@]}"
+            "jwtd-windows-amd64.zip"
+            "jwtd-windows-arm64.zip"
+          )
+
           expected_sboms=()
           expected_sbom_signatures=()
-          for archive in "${expected_archives[@]}"; do
+          for archive in "${expected_tarballs[@]}"; do
             expected_sboms+=("$archive.sbom.json")
             expected_sbom_signatures+=("$archive.sbom.json.sigstore.json")
           done
@@ -163,13 +172,14 @@ jobs:
 
           mkdir -p staging/release staging/manifests
           for asset in "${expected_assets[@]}"; do
+            entries=""
             case "$asset" in
-              *windows*.tar.gz) expected_entry="jwtd.exe" ;;
-              *.tar.gz) expected_entry="jwtd" ;;
+              *windows*.tar.gz) expected_entry="jwtd.exe"; entries=$(tar -tzf "dist/$asset") ;;
+              *windows*.zip) expected_entry="jwtd.exe"; entries=$(unzip -Z1 "dist/$asset") ;;
+              *.tar.gz) expected_entry="jwtd"; entries=$(tar -tzf "dist/$asset") ;;
               *) expected_entry="" ;;
             esac
             if [ -n "$expected_entry" ]; then
-              entries=$(tar -tzf "dist/$asset")
               if [ "$entries" != "$expected_entry" ]; then
                 echo "Archive $asset must contain only $expected_entry, got:" >&2
                 echo "$entries" >&2
@@ -261,6 +271,8 @@ jobs:
             "jwtd-darwin-arm64.tar.gz"
             "jwtd-windows-amd64.tar.gz"
             "jwtd-windows-arm64.tar.gz"
+            "jwtd-windows-amd64.zip"
+            "jwtd-windows-arm64.zip"
             "checksums.txt"
             "checksums.txt.sigstore.json"
             "jwtd-linux-amd64.tar.gz.sbom.json"
@@ -285,9 +297,9 @@ jobs:
           # Syft SBOMs embed a random documentNamespace UUID and creation
           # timestamp. Neither is byte-reproducible, so they are verified by
           # presence, exact count, and (for the bundle) cryptographic validity
-          # rather than byte equality. The six archives and checksums.txt stay
-          # in the strict cmp tier, keeping published releases provably
-          # immutable.
+          # rather than byte equality. The eight archives (six tar.gz plus the
+          # two windows zips) and checksums.txt stay in the strict cmp tier,
+          # keeping published releases provably immutable.
           nonreproducible_assets=(
             "checksums.txt.sigstore.json"
             "jwtd-linux-amd64.tar.gz.sbom.json"
@@ -757,3 +769,51 @@ jobs:
           chmod 600 ~/.config/copr
           srpm=$(ls rpmbuild/SRPMS/*.src.rpm)
           "$RUNNER_TEMP/copr-venv/bin/copr-cli" build webcodr/jwtd "$srpm" --nowait
+  update-winget:
+    needs: [validate, release]
+    if: needs.validate.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: jwtd-release-assets
+          path: artifacts
+      - name: Verify installers against checksums
+        run: |
+          # Confirm the published windows zips (and every other asset) match the
+          # signed checksums.txt before komac builds the manifest from the same
+          # release URLs, so WinGet can only point at the exact binaries this
+          # release verified. Release assets are immutable once published.
+          (cd artifacts && sha256sum -c checksums.txt)
+      - name: Install komac
+        env:
+          KOMAC_VERSION: 2.16.0
+          KOMAC_SHA256: 7d2707fa6210f2789a3702de49fbd150b736dbf426ee0b9bc8e098736f9fd82d
+        run: |
+          # Pin komac by version and verify the downloaded binary against a known
+          # sha256 so the release-publish path pulls in no unpinned third party.
+          asset="komac-${KOMAC_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          url="https://github.com/russellbanks/Komac/releases/download/v${KOMAC_VERSION}/${asset}"
+          curl --fail --location --silent --show-error "$url" -o "$asset"
+          echo "${KOMAC_SHA256}  ${asset}" | sha256sum -c -
+          tar -xzf "$asset" komac
+          install -Dm755 komac "$RUNNER_TEMP/bin/komac"
+      - name: Submit to winget-pkgs
+        env:
+          # A fine-grained/classic PAT that can push to the webcodr/winget-pkgs
+          # fork and open a PR against microsoft/winget-pkgs. winget-pkgs PRs are
+          # moderated, so this can never reach users without review.
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          KOMAC_FORK_OWNER: webcodr
+        run: |
+          # komac reuses the previously submitted WebCodr.jwtd manifest as its
+          # base (seeded manually for the first release), fetches the release
+          # zips to compute their hashes, and opens the winget-pkgs PR via the
+          # GitHub API. It never clones the (very large) winget-pkgs repository.
+          base="https://github.com/webcodr/jwtd/releases/download/v${VERSION}"
+          "$RUNNER_TEMP/bin/komac" update WebCodr.jwtd \
+            --version "$VERSION" \
+            --urls \
+              "${base}/jwtd-windows-amd64.zip" \
+              "${base}/jwtd-windows-arm64.zip" \
+            --submit
