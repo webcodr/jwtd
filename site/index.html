@@ -27,6 +27,7 @@
           <a href="#capabilities">Capabilities</a>
           <a href="#usage">Usage</a>
           <a href="#key-formats">Keys</a>
+          <a href="#algorithms">Algorithms</a>
           <a href="#release-security">Security</a>
         </nav>
         <div class="header-actions">
@@ -104,11 +105,11 @@
 
         <div class="install-tabs" aria-label="Installation methods" data-install-tabs>
           <a id="install-tab-homebrew" href="#install-homebrew" data-install-method="homebrew">Homebrew</a>
-          <a id="install-tab-scoop" href="#install-scoop" data-install-method="scoop">Scoop</a>
           <a id="install-tab-linux" href="#install-linux" data-install-method="linux">Linux packages</a>
           <a id="install-tab-aur" href="#install-aur" data-install-method="aur">AUR</a>
           <a id="install-tab-fedora" href="#install-fedora" data-install-method="fedora">Fedora</a>
           <a id="install-tab-nix" href="#install-nix" data-install-method="nix">Nix</a>
+          <a id="install-tab-scoop" href="#install-scoop" data-install-method="scoop">Scoop</a>
           <a id="install-tab-go" href="#install-go" data-install-method="go">Go</a>
           <a id="install-tab-archives" href="#install-archives" data-install-method="archives">Archives</a>
         </div>
@@ -118,15 +119,6 @@
           <div class="command-block">
             <pre><code id="brew-command">brew install webcodr/tap/jwtd</code></pre>
             <div class="command-actions"><button type="button" data-copy-target="brew-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div>
-          </div>
-        </div>
-
-        <div class="install-panel" id="install-scoop" data-install-panel="scoop">
-          <div><p class="panel-kicker">Windows</p><h3>Scoop bucket</h3><p>Add the webcodr bucket once, then install jwtd.</p></div>
-          <div class="command-block">
-            <pre><code id="scoop-command">scoop bucket add webcodr https://github.com/webcodr/scoop-bucket
-scoop install jwtd</code></pre>
-            <div class="command-actions"><button type="button" data-copy-target="scoop-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div>
           </div>
         </div>
 
@@ -166,6 +158,15 @@ sudo dnf install jwtd</code></pre>
           </div>
         </div>
 
+        <div class="install-panel" id="install-scoop" data-install-panel="scoop">
+          <div><p class="panel-kicker">Windows</p><h3>Scoop bucket</h3><p>Add the webcodr bucket once, then install jwtd.</p></div>
+          <div class="command-block">
+            <pre><code id="scoop-command">scoop bucket add webcodr https://github.com/webcodr/scoop-bucket
+scoop install jwtd</code></pre>
+            <div class="command-actions"><button type="button" data-copy-target="scoop-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div>
+          </div>
+        </div>
+
         <div class="install-panel" id="install-go" data-install-panel="go">
           <div><p class="panel-kicker">Go 1.26+</p><h3>Install from source</h3><p>Build the latest tagged release with your Go toolchain.</p></div>
           <div class="command-block"><pre><code id="go-command">go install github.com/webcodr/jwtd@latest</code></pre><div class="command-actions"><button type="button" data-copy-target="go-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div>
@@ -187,7 +188,11 @@ sudo dnf install jwtd</code></pre>
         <div class="usage-list">
           <article><div class="usage-number">01</div><div class="usage-copy"><h3>Decode a JWT</h3><p>View the header, claims, and signature without a key.</p></div><div class="command-block"><pre><code id="decode-command">jwtd eyJhbGciOiJIUzI1NiIs...</code></pre><div class="command-actions"><button type="button" data-copy-target="decode-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div></article>
           <article><div class="usage-number">02</div><div class="usage-copy"><h3>Verify a JWS signature</h3><p>Verify the cryptographic signature without evaluating claims such as expiry. Invalid signatures exit nonzero.</p></div><div class="command-block"><pre><code id="verify-command">jwtd --key /path/to/public-key.pem eyJhbGciOiJSUzI1NiIs...</code></pre><div class="command-actions"><button type="button" data-copy-target="verify-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div></article>
-          <article><div class="usage-number">03</div><div class="usage-copy"><h3>Decrypt a JWE</h3><p>Compact JWEs are detected automatically. Provide a private key to decrypt the payload.</p></div><div class="command-block"><pre><code id="decrypt-command">jwtd --key /path/to/private-key.pem eyJhbGciOiJSU0EtT0FF...</code></pre><div class="command-actions"><button type="button" data-copy-target="decrypt-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div></article>
+          <article><div class="usage-number">03</div><div class="usage-copy"><h3>Decrypt a JWE</h3><p>Compact JWEs are detected automatically. Provide a private key to decrypt the payload. Nested JWT and JWE payloads are decoded in place.</p></div><div class="command-block"><pre><code id="decrypt-command">jwtd --key /path/to/private-key.pem eyJhbGciOiJSU0EtT0FF...</code></pre><div class="command-actions"><button type="button" data-copy-target="decrypt-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div></article>
+          <article><div class="usage-number">04</div><div class="usage-copy"><h3>Pipe a token from stdin</h3><p>Read the token from a pipe, so output from other tools flows straight in. Wrapped or spaced tokens are accepted.</p></div><div class="command-block"><pre><code id="stdin-command">pbpaste | jwtd</code></pre><div class="command-actions"><button type="button" data-copy-target="stdin-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div></article>
+          <article><div class="usage-number">05</div><div class="usage-copy"><h3>Supply the key from the environment</h3><p>Set <code>JWTD_KEY</code> instead of passing <code>--key</code>. It accepts the same formats and is overridden by an explicit flag.</p></div><div class="command-block"><pre><code id="env-command">JWTD_KEY=/path/to/public-key.pem jwtd eyJhbGciOiJSUzI1NiIs...</code></pre><div class="command-actions"><button type="button" data-copy-target="env-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div></article>
+          <article><div class="usage-number">06</div><div class="usage-copy"><h3>Use the interactive prompt</h3><p>Run jwtd with no token and no pipe to enter one at an editable prompt.</p></div><div class="command-block"><pre><code id="interactive-command">jwtd</code></pre><div class="command-actions"><button type="button" data-copy-target="interactive-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div></article>
+          <article><div class="usage-number">07</div><div class="usage-copy"><h3>Verify with a raw HMAC secret</h3><p>Prefix the key with <code>raw:</code> to pass a literal symmetric secret instead of a file, so an HS256 token verifies without touching disk.</p></div><div class="command-block"><pre><code id="raw-secret-command">jwtd --key raw:my-hmac-secret eyJhbGciOiJIUzI1NiIs...</code></pre><div class="command-actions"><button type="button" data-copy-target="raw-secret-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div></div></article>
         </div>
       </section>
 
@@ -210,9 +215,50 @@ sudo dnf install jwtd</code></pre>
         </div>
       </section>
 
+      <section class="section algorithms" id="algorithms" aria-labelledby="algorithms-title">
+        <div class="section-heading narrow-heading">
+          <p class="eyebrow">05 / algorithms</p>
+          <h2 id="algorithms-title">Broad algorithm support.</h2>
+          <p>Signature verification and JWE decryption cover the algorithms defined by the JOSE standards. Accepted signing algorithms are restricted to those matching the key type to rule out algorithm confusion.</p>
+        </div>
+        <div class="algorithm-groups">
+          <article class="algorithm-group">
+            <h3>JWS signatures</h3>
+            <p>HMAC, RSA (PKCS#1 v1.5 and PSS), ECDSA, and EdDSA.</p>
+            <ul class="algorithm-tags">
+              <li>HS256</li><li>HS384</li><li>HS512</li>
+              <li>RS256</li><li>RS384</li><li>RS512</li>
+              <li>PS256</li><li>PS384</li><li>PS512</li>
+              <li>ES256</li><li>ES384</li><li>ES512</li>
+              <li>EdDSA</li>
+            </ul>
+          </article>
+          <article class="algorithm-group">
+            <h3>JWE key management</h3>
+            <p>RSA, ECDH-ES, AES key wrap, AES-GCM key wrap, PBES2, and direct.</p>
+            <ul class="algorithm-tags">
+              <li>RSA1_5</li><li>RSA-OAEP</li><li>RSA-OAEP-256</li>
+              <li>ECDH-ES</li><li>ECDH-ES+A128KW</li><li>ECDH-ES+A192KW</li><li>ECDH-ES+A256KW</li>
+              <li>A128KW</li><li>A192KW</li><li>A256KW</li>
+              <li>A128GCMKW</li><li>A192GCMKW</li><li>A256GCMKW</li>
+              <li>PBES2-HS256+A128KW</li><li>PBES2-HS384+A192KW</li><li>PBES2-HS512+A256KW</li>
+              <li>dir</li>
+            </ul>
+          </article>
+          <article class="algorithm-group">
+            <h3>JWE content encryption</h3>
+            <p>AES-CBC with HMAC and AES-GCM.</p>
+            <ul class="algorithm-tags">
+              <li>A128CBC-HS256</li><li>A192CBC-HS384</li><li>A256CBC-HS512</li>
+              <li>A128GCM</li><li>A192GCM</li><li>A256GCM</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
       <section class="section release-security" id="release-security" aria-labelledby="release-security-title">
         <div class="security-copy">
-          <p class="eyebrow">05 / release security</p>
+          <p class="eyebrow">06 / release security</p>
           <h2 id="release-security-title">Verifiable releases.</h2>
           <p>Release archives and Linux packages are listed in <code>checksums.txt</code>, which is signed with a keyless Cosign bundle. Each archive also includes a Syft SPDX SBOM.</p>
           <a class="text-link" href="https://github.com/webcodr/jwtd#installation">View verification instructions</a>

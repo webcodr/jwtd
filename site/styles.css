@@ -587,6 +587,45 @@ code {
   margin-top: 2rem;
 }
 
+.algorithm-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+.algorithm-group {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--magenta);
+  background: rgba(36, 40, 59, 0.72);
+  padding: clamp(1.25rem, 3vw, 1.75rem);
+}
+
+.algorithm-group > p {
+  margin-bottom: 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.algorithm-tags {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: auto 0 0;
+  padding: 0;
+}
+
+.algorithm-tags li {
+  border: 1px solid var(--border);
+  background: var(--background-deep);
+  color: var(--cyan);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.3rem 0.55rem;
+}
+
 .release-security {
   display: grid;
   grid-template-columns: 0.8fr 1.2fr;
@@ -635,6 +674,10 @@ code {
 
   .usage-list .command-block {
     grid-column: 2;
+  }
+
+  .algorithm-groups {
+    grid-template-columns: 1fr;
   }
 }
 
