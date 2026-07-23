@@ -29,6 +29,7 @@
           <a href="#key-formats">Keys</a>
           <a href="#algorithms">Algorithms</a>
           <a href="#release-security">Security</a>
+          <a href="#faq">FAQ</a>
         </nav>
         <div class="header-actions">
           <a class="text-link" href="https://github.com/webcodr/jwtd">GitHub</a>
@@ -42,7 +43,7 @@
         <div class="hero-copy">
           <p class="eyebrow">A command-line tool for JWT, JWS, and JWE</p>
           <h1 id="hero-title">Inspect tokens<br><span>from the terminal.</span></h1>
-          <p class="hero-lede">Decode JWTs, verify signatures, and decrypt JWEs with clear, syntax-highlighted output.</p>
+          <p class="hero-lede">Decode JWTs, verify signatures, and decrypt JWEs with clear, syntax-highlighted output. Everything runs locally, so your tokens never leave your machine.</p>
           <div class="hero-actions">
             <a class="button" href="#install">Install jwtd</a>
             <a class="text-link" href="#usage">View usage</a>
@@ -73,7 +74,8 @@
 {
   <span class="token-key">"sub"</span>: <span class="token-string">"user_2048"</span>,
   <span class="token-key">"admin"</span>: <span class="token-boolean">true</span>,
-  <span class="token-key">"iat"</span>: <span class="token-number">1784689200</span>,
+  <span class="token-key">"iat"</span>: <span class="token-string">"2026-07-22T03:00:00Z (1784689200)"</span>,
+  <span class="token-key">"exp"</span>: <span class="token-string">"2026-07-22T04:00:00Z (1784692800)"</span>,
   <span class="token-key">"note"</span>: <span class="token-null">null</span>
 }
 
@@ -271,6 +273,27 @@ scoop install jwtd</code></pre>
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt</code></pre>
           <div class="command-actions"><button type="button" data-copy-target="cosign-command">Copy</button><span class="copy-feedback" data-copy-feedback aria-live="polite"></span></div>
+        </div>
+      </section>
+      <section class="section faq" id="faq" aria-labelledby="faq-title">
+        <div class="section-heading narrow-heading">
+          <p class="eyebrow">07 / faq</p>
+          <h2 id="faq-title">Questions, answered.</h2>
+          <p>What jwtd does, and just as importantly, what it deliberately does not.</p>
+        </div>
+        <div class="faq-list">
+          <article>
+            <h3>Does jwtd send my token anywhere?</h3>
+            <p>No. jwtd runs entirely on your machine and makes no network requests. Decoding, verification, and decryption all happen locally, so the secrets inside a token never leave your terminal.</p>
+          </article>
+          <article>
+            <h3>Does verifying a signature also check expiry?</h3>
+            <p>No. Signature verification reports only whether the cryptographic signature is valid. Claim checks such as expiry are kept separate, so an expired but authentic token still verifies. An invalid signature exits nonzero.</p>
+          </article>
+          <article>
+            <h3>Do I need a key to decode a token?</h3>
+            <p>No. Decoding a JWT and inspecting a JWE protected header need no key. A key is only required to verify a JWS signature or decrypt a JWE payload.</p>
+          </article>
         </div>
       </section>
     </main>

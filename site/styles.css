@@ -626,6 +626,29 @@ code {
   padding: 0.3rem 0.55rem;
 }
 
+.faq-list {
+  display: grid;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+
+.faq-list article {
+  background: var(--background);
+  padding: clamp(1.5rem, 4vw, 2rem);
+}
+
+.faq-list h3 {
+  margin-bottom: 0.5rem;
+  color: var(--cyan);
+  font-size: 1.1rem;
+}
+
+.faq-list p {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
 .release-security {
   display: grid;
   grid-template-columns: 0.8fr 1.2fr;
