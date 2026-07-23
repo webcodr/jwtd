@@ -1,4 +1,4 @@
-"use strict";
+
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const {
   detectOperatingSystem,
   installMethodForOperatingSystem,
+  heroCommandForOperatingSystem,
 } = require("./script.js");
 
 test("detectOperatingSystem classifies supported operating systems", () => {
@@ -39,6 +40,19 @@ test("installMethodForOperatingSystem selects the approved default", () => {
   assert.equal(installMethodForOperatingSystem("windows"), "scoop");
   assert.equal(installMethodForOperatingSystem("linux"), "linux");
   assert.equal(installMethodForOperatingSystem("unknown"), "homebrew");
+});
+
+test("heroCommandForOperatingSystem selects a working command per platform", () => {
+  assert.equal(
+    heroCommandForOperatingSystem("windows"),
+    "scoop bucket add webcodr https://github.com/webcodr/scoop-bucket\nscoop install jwtd",
+  );
+  assert.equal(
+    heroCommandForOperatingSystem("linux"),
+    "curl -fLO https://github.com/webcodr/jwtd/releases/latest/download/jwtd-linux-amd64.deb\nsudo dpkg -i jwtd-linux-amd64.deb",
+  );
+  assert.equal(heroCommandForOperatingSystem("macos"), "brew install webcodr/tap/jwtd");
+  assert.equal(heroCommandForOperatingSystem("unknown"), "brew install webcodr/tap/jwtd");
 });
 
 test("detectOperatingSystem honors platform source priority", () => {

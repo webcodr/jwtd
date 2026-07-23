@@ -35,17 +35,55 @@ function installMethodForOperatingSystem(operatingSystem) {
   return "homebrew";
 }
 
+function heroCommandForOperatingSystem(operatingSystem) {
+  if (operatingSystem === "windows") {
+    return "scoop bucket add webcodr https://github.com/webcodr/scoop-bucket\nscoop install jwtd";
+  }
+  if (operatingSystem === "linux") {
+    return "curl -fLO https://github.com/webcodr/jwtd/releases/latest/download/jwtd-linux-amd64.deb\nsudo dpkg -i jwtd-linux-amd64.deb";
+  }
+  return "brew install webcodr/tap/jwtd";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { detectOperatingSystem, installMethodForOperatingSystem };
+  module.exports = { detectOperatingSystem, installMethodForOperatingSystem, heroCommandForOperatingSystem };
 }
 
 if (typeof document !== "undefined") {
   document.documentElement.classList.add("js");
 
   const initialize = () => {
+    let operatingSystem = "unknown";
+    try {
+      operatingSystem = detectOperatingSystem(
+        navigator.userAgentData?.platform || "",
+        navigator.platform || "",
+        navigator.userAgent || "",
+      );
+    } catch {
+      operatingSystem = "unknown";
+    }
+
+    const heroCommand = document.getElementById("hero-install-command");
+    if (heroCommand) {
+      heroCommand.textContent = heroCommandForOperatingSystem(operatingSystem);
+    }
+
     const tabList = document.querySelector("[data-install-tabs]");
     const tabs = Array.from(document.querySelectorAll("[data-install-method]"));
     const panels = Array.from(document.querySelectorAll("[data-install-panel]"));
+
+    const methodForHash = (hash) => {
+      const match = /^#install-([a-z]+)$/.exec(hash || "");
+      if (match && tabs.some((tab) => tab.dataset.installMethod === match[1])) {
+        return match[1];
+      }
+      return null;
+    };
+
+    const rememberSelection = (method) => {
+      window.history.replaceState(null, "", `#install-${method}`);
+    };
 
     const selectTab = (method, moveFocus = false) => {
       for (const tab of tabs) {
@@ -73,23 +111,16 @@ if (typeof document !== "undefined") {
         panel.setAttribute("aria-labelledby", `install-tab-${panel.dataset.installPanel}`);
       }
 
-      let operatingSystem = "unknown";
-      try {
-        operatingSystem = detectOperatingSystem(
-          navigator.userAgentData?.platform || "",
-          navigator.platform || "",
-          navigator.userAgent || "",
-        );
-      } catch {
-        operatingSystem = "unknown";
-      }
-
-      selectTab(installMethodForOperatingSystem(operatingSystem));
+      selectTab(
+        methodForHash(window.location.hash) ||
+          installMethodForOperatingSystem(operatingSystem),
+      );
 
       tabs.forEach((tab, index) => {
         tab.addEventListener("click", (event) => {
           event.preventDefault();
           selectTab(tab.dataset.installMethod);
+          rememberSelection(tab.dataset.installMethod);
         });
 
         tab.addEventListener("keydown", (event) => {
@@ -108,7 +139,15 @@ if (typeof document !== "undefined") {
 
           event.preventDefault();
           selectTab(tabs[nextIndex].dataset.installMethod, true);
+          rememberSelection(tabs[nextIndex].dataset.installMethod);
         });
+      });
+
+      window.addEventListener("hashchange", () => {
+        const method = methodForHash(window.location.hash);
+        if (method) {
+          selectTab(method);
+        }
       });
     }
 
