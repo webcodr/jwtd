@@ -435,6 +435,12 @@ code {
   display: none;
 }
 
+.install-methods {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
 .command-block {
   min-width: 0;
   border: 1px solid var(--border);
@@ -519,21 +525,6 @@ code {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
-}
-
-.archive-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.7rem;
-}
-
-.archive-grid span {
-  border-left: 2px solid var(--magenta);
-  background: var(--background-deep);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 0.78rem;
-  padding: 0.75rem;
 }
 
 .usage-list {
@@ -782,8 +773,7 @@ code {
     gap: 1.5rem;
   }
 
-  .linux-commands,
-  .archive-grid {
+  .linux-commands {
     grid-template-columns: 1fr;
   }
 

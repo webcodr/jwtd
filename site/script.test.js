@@ -36,10 +36,10 @@ test("detectOperatingSystem returns unknown when no platform matches", () => {
 });
 
 test("installMethodForOperatingSystem selects the approved default", () => {
-  assert.equal(installMethodForOperatingSystem("macos"), "homebrew");
-  assert.equal(installMethodForOperatingSystem("windows"), "scoop");
+  assert.equal(installMethodForOperatingSystem("macos"), "macos");
+  assert.equal(installMethodForOperatingSystem("windows"), "windows");
   assert.equal(installMethodForOperatingSystem("linux"), "linux");
-  assert.equal(installMethodForOperatingSystem("unknown"), "homebrew");
+  assert.equal(installMethodForOperatingSystem("unknown"), "macos");
 });
 
 test("heroCommandForOperatingSystem selects a working command per platform", () => {

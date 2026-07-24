@@ -27,12 +27,12 @@ function detectOperatingSystem(userAgentDataPlatform, platform, userAgent) {
 
 function installMethodForOperatingSystem(operatingSystem) {
   if (operatingSystem === "windows") {
-    return "scoop";
+    return "windows";
   }
   if (operatingSystem === "linux") {
     return "linux";
   }
-  return "homebrew";
+  return "macos";
 }
 
 function heroCommandForOperatingSystem(operatingSystem) {
