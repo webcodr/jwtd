@@ -12,7 +12,7 @@ Two exploitable weaknesses of the same class (**H1**, **H2**) that let an attack
 
 ## H1 — Unparseable public-key material silently becomes an HMAC secret
 
-**Severity:** High (forged-token acceptance) · **Location:** `keys.go:22-67`, `isStructuredKeyData` `keys.go:69-85` · **Status: fixed**
+**Severity:** High (forged-token acceptance) · **Location:** `keys.go` symmetric fallback · **Status: fixed at instance level in 4.0.2; class closed in 5.0.0 (see phase 2 below)**
 
 When `loadKey` cannot parse key data as JWK/PEM/DER and `isStructuredKeyData` does not recognise it as structured, the bytes are used verbatim as a symmetric HMAC key. Public keys in formats jwtd does not support fall into that path. Since public keys are *public*, an attacker who knows which key file the victim uses can sign an `HS256` token with the file's contents and jwtd will report it as authentic.
 
@@ -56,13 +56,17 @@ Minimal and dependency-free — treat these as structured key material so they f
 
 Stronger, and worth considering given the failure mode: require symmetric secrets to be *explicit* (`raw:`, or a `--key-type` flag), so no file can ever become an HMAC key by accident. Supporting OpenSSH keys properly would need `golang.org/x/crypto/ssh`, which is a larger dependency call than this project's minimal style has taken so far.
 
-### Remediation (applied)
+### Remediation, phase 1 — instances (4.0.2)
 
-All three changes landed in `keys.go`, plus the H2 fix below:
+The three known variants were closed by treating them as structured key material so they fail closed with an error: `isSSHPublicKey` (OpenSSH, `authorized_keys`, RFC 4716, verified via the SSH wire-format type prefix), `isStructuredKeyData` returning `true` for them, and `decodeBase64Key` applied to files as well as inline input. Empty key material (H2) was rejected on the same path. Regression tests confirmed failing against the unfixed code.
 
-- `isSSHPublicKey` recognises OpenSSH one-line keys, `authorized_keys` option prefixes, and RFC 4716 armor. Detection confirms the SSH wire-format type prefix inside the base64 blob, so a secret that merely begins with `ssh-rsa` is not misclassified. `isStructuredKeyData` returns `true` for these, and `parseKeyData` returns a targeted error naming the supported formats. (The conversion hint is scoped to RSA and ECDSA: `ssh-keygen -e -m PKCS8` rejects Ed25519 keys, which is worth knowing before writing that hint into a message.)
-- `decodeBase64Key` decodes whitespace-tolerantly and is now used for text key files as well as inline arguments, so identical bytes yield an identical key either way. Encoded data only wins if it parses as a key or looks structured, so opaque base64-looking secrets stay literal.
-- Regression tests: `TestLoadKey_RejectsSSHPublicKeyFile` (7 formats), `TestLoadKey_RejectsBase64EncodedSSHPublicKey`, `TestLoadKey_Base64KeyMaterialInFileParsesAsKey`, `TestLoadKey_Base64LookingSecretFileStaysLiteral`, and end-to-end forgery coverage in `TestVerifySignature_RejectsForgedHMACFromPublishedKeyFile`. All 21 new subtests were confirmed to fail against the unfixed code.
+### Remediation, phase 2 — the class (5.0.0)
+
+Phase 1 patched the instances I found. The rule underneath was unchanged — *unparseable key material becomes an HMAC secret* — so any format nobody enumerated was a latent repeat: PKCS#12, Java keystores, PGP or age public keys, a future SSH type. Finding three in an afternoon was the argument that enumeration is the wrong strategy.
+
+5.0.0 inverts the default. A key file **must** parse as PEM/DER/JWK/X.509; symmetric secrets are requested explicitly with `hmac:<file>` or `raw:<secret>`. Unparseable material is an error, so the failure direction is closed for every format, known or not — verified against PKCS#12, which was never on the list. This deleted the heuristics that existed only to decide the fallback (`isStructuredKeyData`, `hasPEMMarker`, `hasJWKMember`, `jsonStringEnd`, `isCompleteDER`), ~100 lines of the most error-prone code in the package; `isSSHPublicKey` stays, now only to produce a better message. The `hmac:` prefix, rather than `raw:$(cat file)`, keeps secret bytes out of `argv` — closing H1 without reopening A1.
+
+This is a breaking change to what `--key` accepts, hence the major version. `keys_test.go` was rewritten around the explicit forms; `TestVerifySignature_RejectsForgedHMACFromPublishedKeyFile` still holds the forgery cases down.
 
 ## H2 — Empty key material is accepted as an HMAC secret
 
@@ -126,9 +130,4 @@ The site is static, self-contained, and served from GitHub Pages.
 
 ## Status
 
-**H1**, **H2**, **S1**, **S2**, **A1**, and **A2** are fixed.
-
-Remaining, all optional:
-
-- **S3/S4** — sign or checksum the SBOMs; add a `mise.lock` so tools are checksum-pinned rather than only version-pinned.
-- **H1 (stronger form)** — require symmetric secrets to be explicit, so no file can become an HMAC key by accident. This is the only change that would close the class rather than the known instances of it, and it is a breaking UX decision rather than a defect.
+**H1**, **H2**, **S1**, **S2**, **A1**, **A2**, **S3**, and **S4** are fixed. H1's underlying class was closed in 5.0.0 by making symmetric secrets explicit (phase 2 above). Nothing outstanding.

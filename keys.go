@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/x509"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -15,15 +14,37 @@ import (
 	"github.com/go-jose/go-jose/v4"
 )
 
-// loadKey reads a decryption key from either a file path or an inline base64 string.
-// It auto-detects the format: if the value looks like a file path (exists on disk),
-// it reads and parses the file; otherwise it treats it as a base64-encoded key.
-// A "raw:" prefix bypasses detection and uses the remainder as a literal
-// symmetric secret.
+// loadKey resolves a key argument. Symmetric secrets must be requested
+// explicitly, with "raw:<secret>" for a literal or "hmac:<file>" for a file of
+// secret bytes. Everything else must parse as structured key material: JWK/JWK
+// Set, PEM, DER, or an X.509 certificate, read from a file path or from inline
+// base64.
+//
+// The explicit prefixes are the security boundary. Inferring "symmetric
+// secret" from "did not parse" made every unsupported key format forgeable: a
+// public key is a published value, so anyone who knew its bytes could sign an
+// HS256 token that verified against it. Unparseable material is now an error,
+// so the failure direction is always closed no matter what format shows up.
 func loadKey(keyStr string) (any, error) {
 	// Explicit literal secret; no file or base64 detection.
 	if secret, ok := strings.CutPrefix(keyStr, "raw:"); ok {
 		return symmetricKey([]byte(secret))
+	}
+
+	// Explicit symmetric key file. Keeps secret bytes out of argv, where
+	// other local users can read them, and covers binary secrets that cannot
+	// be passed as text.
+	if path, ok := strings.CutPrefix(keyStr, "hmac:"); ok {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading symmetric key file %q: %w", path, err)
+		}
+		// Text secrets get the trailing newline editors typically add
+		// trimmed; binary key material is used byte-exact.
+		if isTextKey(data) {
+			data = bytes.TrimRight(data, "\r\n")
+		}
+		return symmetricKey(data)
 	}
 
 	// Try as file path first.
@@ -31,34 +52,19 @@ func loadKey(keyStr string) (any, error) {
 		if len(data) == 0 {
 			return nil, fmt.Errorf("key file %q is empty", keyStr)
 		}
-		key, parseErr := parseKeyData(data)
-		if parseErr == nil {
+		if key, err := parseKeyData(data); err == nil {
 			return key, nil
 		}
-		if isStructuredKeyData(data) {
-			return nil, fmt.Errorf("parsing key file %q: %w", keyStr, parseErr)
-		}
-		// File exists but doesn't parse as PEM/DER; use raw bytes as a
-		// symmetric key. Text secrets get the trailing newline editors
-		// typically add trimmed; binary key material is used as-is.
+		// A text file may hold base64-encoded key material just as an inline
+		// key argument can, so the same bytes mean the same key either way.
 		if isTextKey(data) {
-			trimmed := bytes.TrimRight(data, "\r\n")
-			// A text file may hold base64-encoded key material just as an
-			// inline key argument can. Decode it the same way, so encoded
-			// key material cannot degrade into a symmetric secret purely
-			// because it arrived in a file.
-			if decoded, ok := decodeBase64Key(trimmed); ok {
-				decodedKey, decodedErr := parseKeyData(decoded)
-				if decodedErr == nil {
-					return decodedKey, nil
-				}
-				if isStructuredKeyData(decoded) {
-					return nil, fmt.Errorf("parsing key file %q: %w", keyStr, decodedErr)
+			if decoded, ok := decodeBase64Key(bytes.TrimRight(data, "\r\n")); ok {
+				if key, err := parseKeyData(decoded); err == nil {
+					return key, nil
 				}
 			}
-			return symmetricKey(trimmed)
 		}
-		return symmetricKey(data)
+		return nil, unsupportedKeyError(data, fmt.Sprintf("key file %q", keyStr), "hmac:"+keyStr)
 	}
 
 	// Try as base64-encoded key.
@@ -66,18 +72,23 @@ func loadKey(keyStr string) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("key is neither a valid file path nor base64-encoded data")
 	}
-
-	// Try parsing decoded bytes as PEM/DER key.
-	key, parseErr := parseKeyData(decoded)
-	if parseErr == nil {
-		return key, nil
+	key, err := parseKeyData(decoded)
+	if err != nil {
+		return nil, unsupportedKeyError(decoded, "inline key", "raw:<secret> or hmac:<file>")
 	}
-	if isStructuredKeyData(decoded) {
-		return nil, fmt.Errorf("parsing base64-encoded key: %w", parseErr)
-	}
+	return key, nil
+}
 
-	// Use raw bytes as a symmetric key.
-	return symmetricKey(decoded)
+// unsupportedKeyError explains why key material was rejected and names the
+// explicit form to use for a symmetric secret. SSH keys get their own message
+// because converting them, not re-flagging them, is the fix.
+func unsupportedKeyError(data []byte, subject, symmetricForm string) error {
+	if isSSHPublicKey(data) {
+		// ssh-keygen's PKCS8 export covers RSA and ECDSA keys only, so the
+		// hint does not promise it for Ed25519.
+		return fmt.Errorf("%s is an SSH public key, which is not supported; supply it as PEM, DER, or JWK (for RSA and ECDSA keys: ssh-keygen -e -m PKCS8 -f <key>)", subject)
+	}
+	return fmt.Errorf("%s is not PEM, DER, JWK, or an X.509 certificate; if it holds a symmetric secret, pass it as %s", subject, symmetricForm)
 }
 
 // symmetricKey wraps opaque bytes used as a symmetric secret. Empty key
@@ -100,6 +111,8 @@ const (
 	keySourceFile keySource = iota
 	// keySourceLiteral is a raw: prefixed literal secret.
 	keySourceLiteral
+	// keySourceSecretFile is an hmac: prefixed symmetric key file.
+	keySourceSecretFile
 	// keySourceBase64 is inline base64/base64url key material.
 	keySourceBase64
 	// keySourceUnusable is neither, and loadKey will reject it.
@@ -107,12 +120,15 @@ const (
 )
 
 // classifyKeyArg reports how loadKey will interpret keyStr, mirroring its
-// precedence: the raw: prefix, then an existing file, then base64. Existence
-// is checked with Stat rather than a read, so classifying never consumes the
-// key source.
+// precedence: the explicit prefixes, then an existing file, then base64.
+// Existence is checked with Stat rather than a read, so classifying never
+// consumes the key source.
 func classifyKeyArg(keyStr string) keySource {
 	if strings.HasPrefix(keyStr, "raw:") {
 		return keySourceLiteral
+	}
+	if strings.HasPrefix(keyStr, "hmac:") {
+		return keySourceSecretFile
 	}
 	if info, err := os.Stat(keyStr); err == nil && !info.IsDir() {
 		return keySourceFile
@@ -138,43 +154,6 @@ func decodeBase64Key(data []byte) ([]byte, bool) {
 		return decoded, true
 	}
 	return nil, false
-}
-
-func isStructuredKeyData(data []byte) bool {
-	data = bytes.TrimSpace(data)
-	if hasPEMMarker(data) {
-		return true
-	}
-	// SSH public keys are structured key material jwtd cannot parse. They must
-	// fail closed: they are published values, so silently accepting them as
-	// symmetric secrets would let anyone who knows the key forge an HMAC
-	// signature that verifies.
-	if isSSHPublicKey(data) {
-		return true
-	}
-	jsonData := bytes.TrimSpace(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}))
-	if len(jsonData) > 0 && jsonData[0] == '{' {
-		objectBody := bytes.TrimLeft(jsonData[1:], " \t\r\n")
-		if json.Valid(jsonData) || len(objectBody) > 0 && objectBody[0] == '"' || hasJWKMember(jsonData) {
-			return true
-		}
-	}
-
-	var value asn1.RawValue
-	rest, err := asn1.Unmarshal(data, &value)
-	return err == nil && len(rest) == 0 && value.Tag == asn1.TagSequence && value.IsCompound && isCompleteDER(value.Bytes)
-}
-
-func hasPEMMarker(data []byte) bool {
-	for _, line := range bytes.Split(data, []byte{'\n'}) {
-		line = bytes.TrimSpace(line)
-		line = bytes.TrimPrefix(line, []byte{0xef, 0xbb, 0xbf})
-		line = bytes.TrimSpace(line)
-		if bytes.HasPrefix(line, []byte("-----BEGIN ")) {
-			return true
-		}
-	}
-	return false
 }
 
 // isSSHPublicKey reports whether data holds an SSH public key: either the
@@ -228,106 +207,6 @@ func sshBlobHasType(blob, keyType []byte) bool {
 		return false
 	}
 	return bytes.Equal(decoded[4:4+length], keyType)
-}
-
-func hasJWKMember(data []byte) bool {
-	const (
-		expectsMember = iota
-		expectsValue
-		afterValue
-	)
-	type container struct {
-		kind  byte
-		state int
-	}
-
-	var stack []container
-	for i := 0; i < len(data); {
-		switch data[i] {
-		case ' ', '\t', '\r', '\n':
-			i++
-		case '"':
-			end, ok := jsonStringEnd(data, i)
-			if !ok {
-				return false
-			}
-
-			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
-				state := stack[len(stack)-1].state
-				next := end
-				for next < len(data) && (data[next] == ' ' || data[next] == '\t' || data[next] == '\r' || data[next] == '\n') {
-					next++
-				}
-				isRootMember := len(stack) == 1 && state == expectsMember
-				isMissingCommaMember := len(stack) == 1 && state == afterValue && (next == len(data) || data[next] == ':')
-				if isRootMember || isMissingCommaMember {
-					var name string
-					if err := json.Unmarshal(data[i:end], &name); err == nil && (name == "kty" || name == "keys") {
-						return true
-					}
-				}
-				stack[len(stack)-1].state = afterValue
-			}
-			i = end
-		case '{', '[':
-			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
-				stack[len(stack)-1].state = afterValue
-			}
-			stack = append(stack, container{kind: data[i], state: expectsMember})
-			i++
-		case '}', ']':
-			if len(stack) > 0 && ((data[i] == '}' && stack[len(stack)-1].kind == '{') || (data[i] == ']' && stack[len(stack)-1].kind == '[')) {
-				stack = stack[:len(stack)-1]
-			}
-			i++
-		case ',':
-			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
-				stack[len(stack)-1].state = expectsMember
-			}
-			i++
-		case ':':
-			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
-				stack[len(stack)-1].state = expectsValue
-			}
-			i++
-		default:
-			if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
-				stack[len(stack)-1].state = afterValue
-			}
-			i++
-		}
-	}
-	return false
-}
-
-func jsonStringEnd(data []byte, start int) (int, bool) {
-	for i := start + 1; i < len(data); i++ {
-		switch data[i] {
-		case '\\':
-			i++
-			if i >= len(data) {
-				return 0, false
-			}
-		case '"':
-			return i + 1, true
-		}
-	}
-	return 0, false
-}
-
-func isCompleteDER(data []byte) bool {
-	for len(data) > 0 {
-		var value asn1.RawValue
-		rest, err := asn1.Unmarshal(data, &value)
-		if err != nil {
-			return false
-		}
-		if value.IsCompound && !isCompleteDER(value.Bytes) {
-			return false
-		}
-		data = rest
-	}
-	return true
 }
 
 // isTextKey reports whether key file content looks like a text secret

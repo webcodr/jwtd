@@ -155,6 +155,14 @@ func writeECKeyFile(t *testing.T, key *ecdsa.PrivateKey) string {
 	return path
 }
 
+// symmetricKeyArg writes symmetric key bytes to a temp file and returns the
+// hmac:<path> argument that asks jwtd to use them as a secret. Symmetric keys
+// must be requested explicitly, so this is how tests pass one.
+func symmetricKeyArg(t *testing.T, key []byte) string {
+	t.Helper()
+	return "hmac:" + writeSymmetricKeyFile(t, key)
+}
+
 // writeSymmetricKeyFile writes raw symmetric key bytes to a temp file and returns the path.
 func writeSymmetricKeyFile(t *testing.T, key []byte) string {
 	t.Helper()

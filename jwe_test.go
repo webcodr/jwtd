@@ -719,10 +719,10 @@ func TestDecodeAndPrintJWE_AESKWKeyAlgorithms(t *testing.T) {
 				t.Fatalf("generating key: %v", err)
 			}
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, symKey, []byte(`{"sub":"aeskw-test","msg":"hello"}`))
-			b64Key := base64.StdEncoding.EncodeToString(symKey)
+			keyArg := symmetricKeyArg(t, symKey)
 
 			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, b64Key)
+			err := decodeAndPrintJWE(&buf, token, keyArg)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -785,10 +785,10 @@ func TestDecodeAndPrintJWE_AESGCMKWKeyAlgorithms(t *testing.T) {
 				t.Fatalf("generating key: %v", err)
 			}
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A256GCM, symKey, []byte(`{"sub":"aesgcmkw-test","status":"ok"}`))
-			b64Key := base64.StdEncoding.EncodeToString(symKey)
+			keyArg := symmetricKeyArg(t, symKey)
 
 			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, b64Key)
+			err := decodeAndPrintJWE(&buf, token, keyArg)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -845,10 +845,10 @@ func TestDecodeAndPrintJWE_DirectKeyAgreement(t *testing.T) {
 		t.Run(tt.name+"/decrypt", func(t *testing.T) {
 			symKey := symmetricKeyForEnc(t, tt.enc)
 			token := encryptJWEGeneric(t, jose.DIRECT, tt.enc, symKey, []byte(`{"sub":"dir-test","val":"direct"}`))
-			b64Key := base64.StdEncoding.EncodeToString(symKey)
+			keyArg := symmetricKeyArg(t, symKey)
 
 			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, b64Key)
+			err := decodeAndPrintJWE(&buf, token, keyArg)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -904,11 +904,12 @@ func TestDecodeAndPrintJWE_PBES2KeyAlgorithms(t *testing.T) {
 
 		t.Run(tt.name+"/decrypt", func(t *testing.T) {
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, password, []byte(`{"sub":"pbes2-test","auth":"pass"}`))
-			// For PBES2, the "key" is the password passed as base64.
-			b64Password := base64.StdEncoding.EncodeToString(password)
+			// For PBES2 the "key" is a password, so it is passed as an
+			// explicit literal secret.
+			passwordArg := "raw:" + string(password)
 
 			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, b64Password)
+			err := decodeAndPrintJWE(&buf, token, passwordArg)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -1048,7 +1049,7 @@ func TestDecodeAndPrintJWE_A256KW_WithAllContentEncryptions(t *testing.T) {
 	if _, err := rand.Read(symKey); err != nil {
 		t.Fatalf("generating key: %v", err)
 	}
-	b64Key := base64.StdEncoding.EncodeToString(symKey)
+	keyArg := symmetricKeyArg(t, symKey)
 
 	for _, tt := range contentEncs {
 		t.Run("A256KW/"+tt.name, func(t *testing.T) {
@@ -1056,7 +1057,7 @@ func TestDecodeAndPrintJWE_A256KW_WithAllContentEncryptions(t *testing.T) {
 				[]byte(`{"sub":"a256kw-combo","result":"success"}`))
 
 			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, b64Key)
+			err := decodeAndPrintJWE(&buf, token, keyArg)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

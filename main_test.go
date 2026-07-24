@@ -875,12 +875,12 @@ func TestDecodeAndPrint_SignatureValid_HMAC(t *testing.T) {
 	if _, err := rand.Read(symKey); err != nil {
 		t.Fatalf("generating key: %v", err)
 	}
-	b64Key := base64.StdEncoding.EncodeToString(symKey)
+	keyArg := symmetricKeyArg(t, symKey)
 	claims := jwt.MapClaims{"sub": "test"}
 	token := signJWTWithHMAC(t, symKey, claims)
 
 	var buf bytes.Buffer
-	err := decodeAndPrint(&buf, token, b64Key)
+	err := decodeAndPrint(&buf, token, keyArg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1060,7 +1060,6 @@ func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 func TestRun_KeyInterpretationHint(t *testing.T) {
 	secret := []byte("a-32-byte-symmetric-test-secret!")
 	token := signHS256(t, secret, jwt.MapClaims{"sub": "hint"})
-	keyPath := writeSymmetricKeyFile(t, secret)
 
 	tests := []struct {
 		name       string
@@ -1068,6 +1067,9 @@ func TestRun_KeyInterpretationHint(t *testing.T) {
 		env        string
 		wantStderr []string
 		notStderr  []string
+		// Some readings are reported and then rejected; the note still has
+		// to reach the user, which is when it is most useful.
+		wantErr bool
 	}{
 		{
 			name:       "literal secret",
@@ -1075,13 +1077,16 @@ func TestRun_KeyInterpretationHint(t *testing.T) {
 			wantStderr: []string{"--key used as a literal symmetric secret", "process list"},
 		},
 		{
+			// Opaque inline base64 is reported, then rejected: symmetric
+			// secrets have to be explicit.
 			name:       "inline base64",
 			args:       []string{token, "--key", base64.StdEncoding.EncodeToString(secret)},
 			wantStderr: []string{"is not an existing file", "decoded as base64", "process list"},
+			wantErr:    true,
 		},
 		{
-			name:      "key file stays silent",
-			args:      []string{token, "--key", keyPath},
+			name:      "explicit secret file stays silent",
+			args:      []string{token, "--key", symmetricKeyArg(t, secret)},
 			notStderr: []string{"Note:", "process list"},
 		},
 		{
@@ -1107,7 +1112,11 @@ func TestRun_KeyInterpretationHint(t *testing.T) {
 			rootCmd.SetErr(&errBuf)
 			rootCmd.SetArgs(tt.args)
 
-			if err := rootCmd.Execute(); err != nil {
+			err := rootCmd.Execute()
+			if tt.wantErr && err == nil {
+				t.Fatal("expected the key to be rejected")
+			}
+			if !tt.wantErr && err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
