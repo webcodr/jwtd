@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -22,11 +23,14 @@ import (
 func loadKey(keyStr string) (any, error) {
 	// Explicit literal secret; no file or base64 detection.
 	if secret, ok := strings.CutPrefix(keyStr, "raw:"); ok {
-		return []byte(secret), nil
+		return symmetricKey([]byte(secret))
 	}
 
 	// Try as file path first.
 	if data, err := os.ReadFile(keyStr); err == nil {
+		if len(data) == 0 {
+			return nil, fmt.Errorf("key file %q is empty", keyStr)
+		}
 		key, parseErr := parseKeyData(data)
 		if parseErr == nil {
 			return key, nil
@@ -38,19 +42,29 @@ func loadKey(keyStr string) (any, error) {
 		// symmetric key. Text secrets get the trailing newline editors
 		// typically add trimmed; binary key material is used as-is.
 		if isTextKey(data) {
-			return bytes.TrimRight(data, "\r\n"), nil
+			trimmed := bytes.TrimRight(data, "\r\n")
+			// A text file may hold base64-encoded key material just as an
+			// inline key argument can. Decode it the same way, so encoded
+			// key material cannot degrade into a symmetric secret purely
+			// because it arrived in a file.
+			if decoded, ok := decodeBase64Key(trimmed); ok {
+				decodedKey, decodedErr := parseKeyData(decoded)
+				if decodedErr == nil {
+					return decodedKey, nil
+				}
+				if isStructuredKeyData(decoded) {
+					return nil, fmt.Errorf("parsing key file %q: %w", keyStr, decodedErr)
+				}
+			}
+			return symmetricKey(trimmed)
 		}
-		return data, nil
+		return symmetricKey(data)
 	}
 
 	// Try as base64-encoded key.
-	decoded, err := base64.StdEncoding.DecodeString(keyStr)
-	if err != nil {
-		// Try base64url encoding.
-		decoded, err = base64.RawURLEncoding.DecodeString(keyStr)
-		if err != nil {
-			return nil, fmt.Errorf("key is neither a valid file path nor base64-encoded data")
-		}
+	decoded, ok := decodeBase64Key([]byte(keyStr))
+	if !ok {
+		return nil, fmt.Errorf("key is neither a valid file path nor base64-encoded data")
 	}
 
 	// Try parsing decoded bytes as PEM/DER key.
@@ -63,12 +77,46 @@ func loadKey(keyStr string) (any, error) {
 	}
 
 	// Use raw bytes as a symmetric key.
-	return decoded, nil
+	return symmetricKey(decoded)
+}
+
+// symmetricKey wraps opaque bytes used as a symmetric secret. Empty key
+// material is rejected: it is never legitimate, and every attacker knows the
+// empty secret, so accepting it would report forged HMAC tokens as valid.
+func symmetricKey(data []byte) (any, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("key is empty")
+	}
+	return data, nil
+}
+
+// decodeBase64Key decodes base64 or base64url key material, tolerating the
+// line wrapping and surrounding whitespace that encoded keys pick up when they
+// are stored in files or pasted between tools.
+func decodeBase64Key(data []byte) ([]byte, bool) {
+	compact := string(bytes.Join(bytes.Fields(data), nil))
+	if compact == "" {
+		return nil, false
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(compact); err == nil {
+		return decoded, true
+	}
+	if decoded, err := base64.RawURLEncoding.DecodeString(compact); err == nil {
+		return decoded, true
+	}
+	return nil, false
 }
 
 func isStructuredKeyData(data []byte) bool {
 	data = bytes.TrimSpace(data)
 	if hasPEMMarker(data) {
+		return true
+	}
+	// SSH public keys are structured key material jwtd cannot parse. They must
+	// fail closed: they are published values, so silently accepting them as
+	// symmetric secrets would let anyone who knows the key forge an HMAC
+	// signature that verifies.
+	if isSSHPublicKey(data) {
 		return true
 	}
 	jsonData := bytes.TrimSpace(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}))
@@ -94,6 +142,59 @@ func hasPEMMarker(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// isSSHPublicKey reports whether data holds an SSH public key: either the
+// one-line OpenSSH format ("ssh-ed25519 AAAA... comment", as found in
+// id_*.pub and authorized_keys) or the RFC 4716 armor, whose BEGIN marker
+// uses four dashes and so is not a PEM marker.
+func isSSHPublicKey(data []byte) bool {
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		line = bytes.TrimPrefix(line, []byte{0xef, 0xbb, 0xbf})
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, []byte("---- BEGIN ")) {
+			return true
+		}
+
+		// authorized_keys entries may carry options before the key type, so
+		// every adjacent field pair is considered.
+		fields := bytes.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if isSSHKeyType(fields[i]) && sshBlobHasType(fields[i+1], fields[i]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isSSHKeyType(field []byte) bool {
+	name := string(field)
+	switch name {
+	case "ssh-rsa", "ssh-dss", "ssh-ed25519", "ssh-ed448":
+		return true
+	}
+	return strings.HasPrefix(name, "ecdsa-sha2-") ||
+		strings.HasPrefix(name, "sk-ssh-") ||
+		strings.HasPrefix(name, "sk-ecdsa-") ||
+		strings.HasSuffix(name, "-cert-v01@openssh.com")
+}
+
+// sshBlobHasType reports whether a base64 SSH key blob opens with the given
+// key type. The SSH wire format prefixes the type with its big-endian length,
+// so this confirms the field pair really is a key rather than a secret that
+// happens to start with a key-type word.
+func sshBlobHasType(blob, keyType []byte) bool {
+	decoded, err := base64.StdEncoding.DecodeString(string(blob))
+	if err != nil || len(decoded) < 4 {
+		return false
+	}
+	length := binary.BigEndian.Uint32(decoded[:4])
+	if length > uint32(len(decoded)-4) {
+		return false
+	}
+	return bytes.Equal(decoded[4:4+length], keyType)
 }
 
 func hasJWKMember(data []byte) bool {
@@ -241,6 +342,12 @@ func parseKeyData(data []byte) (any, error) {
 	}
 	if cert, err := x509.ParseCertificate(data); err == nil {
 		return cert.PublicKey, nil
+	}
+
+	if isSSHPublicKey(data) {
+		// ssh-keygen's PKCS8 export covers RSA and ECDSA keys only, so the
+		// hint does not promise it for Ed25519.
+		return nil, fmt.Errorf("SSH public key format is not supported; supply the key as PEM, DER, or JWK (for RSA and ECDSA keys: ssh-keygen -e -m PKCS8 -f <key>)")
 	}
 
 	return nil, fmt.Errorf("unrecognized key format")

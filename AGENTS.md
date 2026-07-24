@@ -27,7 +27,10 @@ All functionality lives in package `main`, split across four source files:
 ### `keys.go` - Key loading and format detection
 
 - `loadKey()` / `parseKeyData()` / `parseDERKey()` / `parseJWK()` - Resolve `raw:<secret>`, then an existing file path, then base64/base64url; parse loaded data as JWK/JWK Set, PEM, or DER (PKCS#1/PKCS#8/SEC 1/PKIX) keys and X.509 certificates; reject recognizable structured parse failures and otherwise allow opaque raw symmetric bytes; trim trailing newlines only for ASCII text key files limited to printable bytes plus tab/CR/LF, while UTF-8/non-ASCII and other binary files remain byte-exact
-- `isStructuredKeyData()` / `hasPEMMarker()` / `hasJWKMember()` / `isCompleteDER()` / `isTextKey()` - Heuristics distinguishing structured key material (PEM/JWK/DER) from opaque symmetric secrets
+- `decodeBase64Key()` / `symmetricKey()` - Decode whitespace-tolerant base64/base64url key material (applied to text key files as well as inline arguments, so the same bytes mean the same key either way) and gate the symmetric fallback, which rejects empty key material
+- `isStructuredKeyData()` / `hasPEMMarker()` / `hasJWKMember()` / `isCompleteDER()` / `isTextKey()` / `isSSHPublicKey()` - Heuristics distinguishing structured key material (PEM/JWK/DER/SSH) from opaque symmetric secrets
+
+**The symmetric fallback is the security-critical path here.** Key material jwtd cannot parse becomes an HMAC secret, so any *public* key that reaches it is forgeable: an attacker who knows the published key bytes can sign an HS256 token that verifies. `isStructuredKeyData()` must therefore recognize every format a user might plausibly pass, even ones jwtd cannot parse, so they fail closed with an error. `isSSHPublicKey()` covers OpenSSH one-line keys (verified through the SSH wire-format type prefix, so a secret merely starting with `ssh-rsa` is not misread), `authorized_keys` option prefixes, and RFC 4716 armor, whose four-dash BEGIN marker is deliberately not a PEM marker. Empty key material is rejected for the same reason: the empty secret is known to everyone. `keys_test.go` and `TestVerifySignature_RejectsForgedHMACFromPublishedKeyFile` in `main_test.go` hold these properties down.
 
 ### `output.go` - Formatting, escaping, and colored printing
 

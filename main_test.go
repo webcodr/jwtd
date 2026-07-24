@@ -478,6 +478,68 @@ func TestVerifySignature_RejectsTrailingJWTClaimsData(t *testing.T) {
 	}
 }
 
+// An attacker who knows a published key file's bytes must not be able to sign
+// an HS256 token with them and have jwtd report it as authentic. This is the
+// classic public-key-as-HMAC-secret forgery, reached through key-format
+// fallback rather than through the "alg" header.
+func TestVerifySignature_RejectsForgedHMACFromPublishedKeyFile(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating ed25519 key: %v", err)
+	}
+	rsaKey := generateRSAKey(t)
+	der, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshaling public key: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		filename string
+		contents string
+	}{
+		{
+			name:     "openssh public key",
+			filename: "id_ed25519.pub",
+			contents: sshEd25519PublicKeyLine(pub, "victim@host") + "\n",
+		},
+		{
+			name:     "authorized_keys entry",
+			filename: "authorized_keys",
+			contents: sshEd25519PublicKeyLine(pub, "victim@host") + "\n",
+		},
+		{
+			name:     "base64 public key in a file",
+			filename: "key.b64",
+			contents: base64.StdEncoding.EncodeToString(der) + "\n",
+		},
+		{
+			name:     "empty key file",
+			filename: "converted.pem",
+			contents: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyPath := writeTextKeyFile(t, tt.filename, tt.contents)
+			// The attacker signs with exactly what the victim's key file
+			// holds, trailing newline trimmed as jwtd trims it.
+			secret := []byte(strings.TrimRight(tt.contents, "\n"))
+			forged := signHS256(t, secret, jwt.MapClaims{"sub": "attacker", "role": "admin"})
+
+			var buf bytes.Buffer
+			err := verifySignature(&buf, forged, keyPath)
+			if err == nil {
+				t.Fatal("forged HMAC token accepted")
+			}
+			if output := stripANSI(buf.String()); strings.Contains(output, "Signature: VALID") {
+				t.Errorf("forged HMAC token reported as valid:\n%s", output)
+			}
+		})
+	}
+}
+
 func TestDecodeAndPrint_SignatureValid_RSA(t *testing.T) {
 	key := generateRSAKey(t)
 	keyPath := writeKeyFile(t, key)
