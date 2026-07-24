@@ -43,7 +43,7 @@ func newRootCommand() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification (file path, base64, JWK, or raw:<secret> for a literal symmetric key; inline values are visible to other local users in the process list, so prefer a file or JWTD_KEY)")
+	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification: a PEM/DER/JWK file or inline base64, hmac:<file> for a symmetric secret file, or raw:<secret> for a literal one (inline values are visible to other local users in the process list, so prefer a file or JWTD_KEY)")
 	return rootCmd
 }
 
@@ -99,8 +99,8 @@ func printKeyInterpretation(w io.Writer, keyStr string, fromFlag bool) {
 	case keySourceBase64:
 		note = fmt.Sprintf("Note: %s is not an existing file; decoded as base64 key material.", origin)
 	default:
-		// A file is the expected reading, and unusable values produce an
-		// error that speaks for itself.
+		// A file, including an hmac: secret file, is the expected reading,
+		// and unusable values produce an error that speaks for itself.
 		return
 	}
 

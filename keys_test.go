@@ -39,8 +39,10 @@ func TestLoadKey_FromPEMFile(t *testing.T) {
 	}
 }
 
-func TestLoadKey_FromBase64SymmetricKey(t *testing.T) {
-	// 32-byte symmetric key encoded in base64.
+// Opaque bytes passed inline used to become a symmetric key by inference.
+// That inference is what made unsupported public key formats forgeable, so it
+// is gone: the caller must say what the bytes are.
+func TestLoadKey_RejectsInlineOpaqueBase64(t *testing.T) {
 	rawKey := make([]byte, 32)
 	for i := range rawKey {
 		rawKey[i] = byte(i)
@@ -48,16 +50,30 @@ func TestLoadKey_FromBase64SymmetricKey(t *testing.T) {
 	b64 := base64.StdEncoding.EncodeToString(rawKey)
 
 	loaded, err := loadKey(b64)
+	if err == nil {
+		t.Fatalf("inline opaque base64 accepted as a %T key; symmetric secrets must be explicit", loaded)
+	}
+	if !strings.Contains(err.Error(), "raw:<secret> or hmac:<file>") {
+		t.Errorf("error must name the explicit forms so the fix is obvious, got: %v", err)
+	}
+}
+
+func TestLoadKey_SymmetricKeyFromExplicitFile(t *testing.T) {
+	symKey := make([]byte, 32)
+	if _, err := rand.Read(symKey); err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+
+	loaded, err := loadKey(symmetricKeyArg(t, symKey))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	symKey, ok := loaded.([]byte)
+	got, ok := loaded.([]byte)
 	if !ok {
 		t.Fatalf("expected []byte, got %T", loaded)
 	}
-	if len(symKey) != 32 {
-		t.Errorf("expected 32-byte key, got %d bytes", len(symKey))
+	if !bytes.Equal(got, symKey) {
+		t.Errorf("hmac: key modified: expected % x, got % x", symKey, got)
 	}
 }
 
@@ -89,7 +105,7 @@ func TestLoadKey_TextKeyFileTrimsTrailingNewline(t *testing.T) {
 		t.Fatalf("writing key file: %v", err)
 	}
 
-	loaded, err := loadKey(path)
+	loaded, err := loadKey("hmac:" + path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +123,7 @@ func TestLoadKey_BinaryKeyFileKeepsTrailingNewlineByte(t *testing.T) {
 	binKey := []byte{0x00, 0x01, 0xfe, 0xff, '\n'}
 	keyPath := writeSymmetricKeyFile(t, binKey)
 
-	loaded, err := loadKey(keyPath)
+	loaded, err := loadKey("hmac:" + keyPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -159,25 +175,6 @@ func TestLoadKey_FromBase64EncodedPEM(t *testing.T) {
 	}
 	if rsaKey.N.Cmp(key.N) != 0 {
 		t.Error("loaded key does not match original")
-	}
-}
-
-func TestLoadKey_SymmetricKeyFromFile(t *testing.T) {
-	symKey := make([]byte, 32)
-	if _, err := rand.Read(symKey); err != nil {
-		t.Fatalf("generating key: %v", err)
-	}
-	keyPath := writeSymmetricKeyFile(t, symKey)
-
-	loaded, err := loadKey(keyPath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Raw bytes that don't parse as PEM or DER should be returned as-is
-	// (symmetric key fallback).
-	if loaded == nil {
-		t.Fatal("loaded key is nil")
 	}
 }
 
@@ -384,7 +381,11 @@ func TestLoadKey_RejectsMalformedStructuredData(t *testing.T) {
 	}
 }
 
-func TestLoadKey_OpaqueStructuredPrefixesRemainRaw(t *testing.T) {
+// These inputs used to sit on the structured-vs-opaque heuristic boundary,
+// where a misjudgement turned key material into an HMAC secret. The heuristic
+// is gone: none of them may become a key unless the caller asks for a
+// symmetric secret, and hmac: must then return them byte-exact.
+func TestLoadKey_OpaqueDataRequiresExplicitSymmetricForm(t *testing.T) {
 	tests := []struct {
 		name string
 		data []byte
@@ -410,16 +411,8 @@ func TestLoadKey_OpaqueStructuredPrefixesRemainRaw(t *testing.T) {
 						}
 					}
 
-					loaded, err := loadKey(input)
-					if err != nil {
-						t.Fatalf("unexpected error: %v", err)
-					}
-					key, ok := loaded.([]byte)
-					if !ok {
-						t.Fatalf("expected []byte, got %T", loaded)
-					}
-					if !bytes.Equal(key, tt.data) {
-						t.Fatalf("opaque key modified: expected % x, got % x", tt.data, key)
+					if loaded, err := loadKey(input); err == nil {
+						t.Fatalf("opaque %s data accepted as a %T key without an explicit symmetric form", mode, loaded)
 					}
 				})
 			}
@@ -638,7 +631,7 @@ func TestLoadKey_RejectsSSHPublicKeyFile(t *testing.T) {
 			if err == nil {
 				t.Fatalf("SSH public key accepted as a %T key", loaded)
 			}
-			if !strings.Contains(err.Error(), "SSH public key format is not supported") {
+			if !strings.Contains(err.Error(), "is an SSH public key, which is not supported") {
 				t.Errorf("expected an SSH format error, got: %v", err)
 			}
 		})
@@ -656,7 +649,7 @@ func TestLoadKey_RejectsBase64EncodedSSHPublicKey(t *testing.T) {
 	if err == nil {
 		t.Fatalf("base64-encoded SSH public key accepted as a %T key", loaded)
 	}
-	if !strings.Contains(err.Error(), "SSH public key format is not supported") {
+	if !strings.Contains(err.Error(), "is an SSH public key, which is not supported") {
 		t.Errorf("expected an SSH format error, got: %v", err)
 	}
 }
@@ -721,12 +714,24 @@ func TestLoadKey_RejectsEmptyKeyMaterial(t *testing.T) {
 		}
 	})
 
-	t.Run("whitespace-only file", func(t *testing.T) {
-		path := writeTextKeyFile(t, "blank.pem", "\n\n")
+	t.Run("whitespace-only secret file", func(t *testing.T) {
+		path := writeTextKeyFile(t, "blank.key", "\n\n")
 
-		loaded, err := loadKey(path)
+		loaded, err := loadKey("hmac:" + path)
 		if err == nil {
-			t.Fatalf("whitespace-only key file accepted as a %T key", loaded)
+			t.Fatalf("whitespace-only secret file accepted as a %T key", loaded)
+		}
+		if !strings.Contains(err.Error(), "empty") {
+			t.Errorf("expected an empty-key error, got: %v", err)
+		}
+	})
+
+	t.Run("empty secret file", func(t *testing.T) {
+		path := writeTextKeyFile(t, "empty.key", "")
+
+		loaded, err := loadKey("hmac:" + path)
+		if err == nil {
+			t.Fatalf("empty secret file accepted as a %T key", loaded)
 		}
 		if !strings.Contains(err.Error(), "empty") {
 			t.Errorf("expected an empty-key error, got: %v", err)
@@ -751,7 +756,7 @@ func TestLoadKey_Base64LookingSecretFileStaysLiteral(t *testing.T) {
 	secret := base64.StdEncoding.EncodeToString([]byte("a-32-byte-symmetric-test-secret!"))
 	path := writeTextKeyFile(t, "secret.b64", secret+"\n")
 
-	loaded, err := loadKey(path)
+	loaded, err := loadKey("hmac:" + path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

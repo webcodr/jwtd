@@ -704,8 +704,12 @@ scoop install jwtd</code></pre>
               ><span>Standard or URL-safe encoded material</span>
             </li>
             <li>
+              <strong>hmac:</strong
+              ><span>A file of symmetric secret bytes</span>
+            </li>
+            <li>
               <strong>raw:</strong
-              ><span>Explicit literal symmetric secrets</span>
+              ><span>An inline literal symmetric secret</span>
             </li>
           </ul>
           <div class="command-block key-command">
@@ -871,15 +875,25 @@ scoop install jwtd</code></pre>
             </p>
           </article>
           <article>
+            <h3>How do I verify an HS256 token with a shared secret?</h3>
+            <p>
+              Pass the secret explicitly: <code>hmac:&lt;file&gt;</code> for a
+              file of secret bytes, or <code>raw:&lt;secret&gt;</code> for an
+              inline one. jwtd never treats an unrecognized key file as a
+              symmetric secret on its own — a public key is a published value,
+              so guessing would let anyone who knows it forge a token that
+              verified.
+            </p>
+          </article>
+          <article>
             <h3>Can I use an SSH public key?</h3>
             <p>
               Not directly. OpenSSH keys,
               <code>authorized_keys</code> entries, and RFC 4716 armor are
-              recognized and rejected with an error, rather than being used as a
-              symmetric secret. A public key is a published value, so anyone who
-              knows it could otherwise forge a token that verified. Convert RSA
-              and ECDSA keys with
-              <code>ssh-keygen -e -m PKCS8 -f &lt;key&gt;</code>.
+              detected and reported with a conversion hint. Convert RSA and
+              ECDSA keys with
+              <code>ssh-keygen -e -m PKCS8 -f &lt;key&gt;</code>, then pass the
+              result.
             </p>
           </article>
         </div>

@@ -166,15 +166,19 @@ The `--key` flag accepts:
 - **PEM files**: RSA, EC, or Ed25519 keys (private or public), and X.509 certificates
 - **DER files**: PKCS#1, PKCS#8, SEC 1, or PKIX encoded keys, and X.509 certificates
 - **JWK files**: Single JSON Web Key or JWK Set (first key is used)
-- **Base64 strings**: Base64 or base64url encoded key material (PEM, DER, certificate, JWK, or raw symmetric key)
+- **Base64 strings**: Base64 or base64url encoded key material (PEM, DER, certificate, or JWK)
+- **Symmetric key files**: `hmac:<file>` uses the file's bytes as a symmetric key
 - **Literal secrets**: `raw:<secret>` uses the text after the prefix as a symmetric key verbatim
 
-Key detection first honors the `raw:` prefix, then tries an existing file path, then standard base64 followed by base64url. File contents and decoded inline data are parsed as JWK/JWK Set, then PEM, then DER keys or X.509 certificates. Base64-encoded key material is decoded the same way whether it arrives inline or in a text file. For signature verification, jwtd extracts the public key from X.509 certificates. Recognizable structured data must parse successfully or jwtd returns an error; opaque unstructured data falls back to raw symmetric bytes. For key files, trailing newlines are trimmed only when the content is printable ASCII text (with tab, CR, and LF allowed). UTF-8/non-ASCII and other binary files remain byte-exact.
+Key detection first honors the `raw:` and `hmac:` prefixes, then tries an existing file path, then standard base64 followed by base64url. File contents and decoded inline data are parsed as JWK/JWK Set, then PEM, then DER keys or X.509 certificates. Base64-encoded key material is decoded the same way whether it arrives inline or in a text file. For signature verification, jwtd extracts the public key from X.509 certificates. For `hmac:` files, trailing newlines are trimmed only when the content is printable ASCII text (with tab, CR, and LF allowed); UTF-8/non-ASCII and other binary files remain byte-exact.
 
-SSH public keys (`id_*.pub`, `authorized_keys`, and RFC 4716 armor) are recognized but not supported, and empty key material is rejected. Both are errors rather than fallbacks: a public key is a published value, so treating unparseable key material as a symmetric secret would let anyone who knows it forge an HMAC signature that verifies. Convert RSA and ECDSA keys with `ssh-keygen -e -m PKCS8 -f <key>`.
+**Symmetric secrets must be explicit.** Key material that does not parse as PEM, DER, JWK, or an X.509 certificate is an error, not a symmetric key. jwtd used to fall back to using such bytes as an HMAC secret, which made any unsupported key format forgeable: a public key is a published value, so anyone who knew its bytes could sign an HS256 token that verified against it. Pass symmetric secrets as `hmac:<file>` or `raw:<secret>` and the failure direction stays closed regardless of what format turns up.
+
+SSH public keys (`id_*.pub`, `authorized_keys`, and RFC 4716 armor) are detected and reported with a conversion hint rather than a generic error. Convert RSA and ECDSA keys with `ssh-keygen -e -m PKCS8 -f <key>`. Empty key material is rejected: the empty secret is known to everyone.
 
 ```sh
 jwtd --key raw:my-hmac-secret eyJhbGciOiJIUzI1NiIs...
+jwtd --key hmac:/path/to/secret.key eyJhbGciOiJIUzI1NiIs...
 ```
 
 Inline key material is visible to other local users through the process list and lands in shell history. Prefer a key file or `JWTD_KEY` for anything sensitive.
