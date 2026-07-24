@@ -91,8 +91,10 @@ jobs:
           )
 
           expected_sboms=()
+          expected_sbom_signatures=()
           for archive in "${expected_archives[@]}"; do
             expected_sboms+=("$archive.sbom.json")
+            expected_sbom_signatures+=("$archive.sbom.json.sigstore.json")
           done
 
           expected_packages=(
@@ -107,6 +109,7 @@ jobs:
             "checksums.txt"
             "checksums.txt.sigstore.json"
             "${expected_sboms[@]}"
+            "${expected_sbom_signatures[@]}"
             "${expected_packages[@]}"
           )
 
@@ -133,10 +136,13 @@ jobs:
             exit 1
           fi
 
-          signature_names=$(jq -r '[.[] | select(.type == "Signature") | .name] | .[]' dist/artifacts.json)
-          if [ "$signature_names" != "checksums.txt.sigstore.json" ]; then
-            echo "Expected exactly one checksums.txt.sigstore.json Signature artifact, got:" >&2
-            echo "$signature_names" >&2
+          # checksums.txt and every SBOM carry their own keyless bundle, so no
+          # published artifact rests on presence checks alone.
+          actual_signatures=$(jq -r '[.[] | select(.type == "Signature") | .name] | sort | .[]' dist/artifacts.json)
+          expected_signatures_sorted=$(printf '%s\n' "checksums.txt.sigstore.json" "${expected_sbom_signatures[@]}" | sort)
+          if [ "$actual_signatures" != "$expected_signatures_sorted" ]; then
+            echo "Unexpected Signature set in dist/artifacts.json:" >&2
+            echo "$actual_signatures" >&2
             exit 1
           fi
 
@@ -263,6 +269,12 @@ jobs:
             "jwtd-darwin-arm64.tar.gz.sbom.json"
             "jwtd-windows-amd64.tar.gz.sbom.json"
             "jwtd-windows-arm64.tar.gz.sbom.json"
+            "jwtd-linux-amd64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-linux-arm64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-darwin-amd64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-darwin-arm64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-windows-amd64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-windows-arm64.tar.gz.sbom.json.sigstore.json"
             "jwtd-linux-amd64.deb"
             "jwtd-linux-arm64.deb"
             "jwtd-linux-amd64.rpm"
@@ -284,6 +296,12 @@ jobs:
             "jwtd-darwin-arm64.tar.gz.sbom.json"
             "jwtd-windows-amd64.tar.gz.sbom.json"
             "jwtd-windows-arm64.tar.gz.sbom.json"
+            "jwtd-linux-amd64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-linux-arm64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-darwin-amd64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-darwin-arm64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-windows-amd64.tar.gz.sbom.json.sigstore.json"
+            "jwtd-windows-arm64.tar.gz.sbom.json.sigstore.json"
           )
 
           is_nonreproducible() {
@@ -330,6 +348,25 @@ jobs:
               rm -rf "$verified_assets"
               exit 1
             fi
+
+            # SBOMs are not byte-reproducible, so they cannot ride on
+            # checksums.txt. Each one carries its own bundle instead, which is
+            # what keeps them from being alterable behind a presence check.
+            for asset in "${expected_assets[@]}"; do
+              case "$asset" in
+                *.sbom.json) ;;
+                *) continue ;;
+              esac
+              if ! cosign verify-blob \
+                --bundle "$verified_assets/$asset.sigstore.json" \
+                --certificate-identity-regexp "^https://github.com/$GH_REPO/\.github/workflows/release\.yml@" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                "$verified_assets/$asset"; then
+                echo "Release $tag Cosign bundle does not verify against $asset" >&2
+                rm -rf "$verified_assets"
+                exit 1
+              fi
+            done
             downloaded_count=$(find "$verified_assets" -maxdepth 1 -type f | wc -l)
             if [ "$downloaded_count" -ne "${#expected_assets[@]}" ]; then
               echo "Release $tag has unexpected assets" >&2

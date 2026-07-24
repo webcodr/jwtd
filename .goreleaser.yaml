@@ -80,6 +80,19 @@ signs:
       - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
+  # SBOMs cannot be covered by checksums.txt without making it
+  # non-reproducible, so they are signed individually instead. Without this
+  # they would be verified only by presence and count, leaving them the one
+  # release asset an actor with release-write could alter undetected.
+  - id: sbom
+    cmd: cosign
+    artifacts: sbom
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
 
 scoops:
   - name: jwtd

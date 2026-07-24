@@ -1,3 +1,9 @@
+[settings]
+# Record checksums in mise.lock so the release toolchain is pinned by bytes,
+# not only by version. Without it, a retagged or replaced upstream artifact
+# would install silently.
+lockfile = true
+
 [tools]
 go = "1.26.5"
 goreleaser = "2.17.0"
