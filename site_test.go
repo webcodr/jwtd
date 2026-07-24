@@ -137,6 +137,7 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"keys heading":        `<h2 id="key-formats-title">Use the key format you have.</h2>`,
 		"security heading":    `<h2 id="release-security-title">Verifiable releases.</h2>`,
 		"security guidance":   `Release archives and Linux packages are listed in <code>checksums.txt</code>, which is signed with a keyless Cosign bundle. Each archive also includes a Syft SPDX SBOM.`,
+		"ssh key guidance":    `OpenSSH keys, <code>authorized_keys</code> entries, and RFC 4716 armor are recognized and rejected with an error, rather than being used as a symmetric secret.`,
 		"footer copy":         `<p>A focused CLI for JWT, JWS, and JWE inspection.</p>`,
 	} {
 		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
