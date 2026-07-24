@@ -127,6 +127,18 @@ func sbomNames() []string {
 	return names
 }
 
+// sbomSignatureNames returns the keyless Cosign bundle names covering each
+// SBOM. SBOMs cannot be listed in checksums.txt without making it
+// non-reproducible, so an individual signature is what keeps them verifiable
+// rather than merely present.
+func sbomSignatureNames() []string {
+	names := make([]string, 0, len(releaseArchiveNames))
+	for _, sbom := range sbomNames() {
+		names = append(names, sbom+".sigstore.json")
+	}
+	return names
+}
+
 // linuxPackageNames returns the nfpm package names. They deliberately reuse
 // the version-free "jwtd-{os}-{arch}" scheme of the archives rather than
 // nfpm's conventional versioned file name, so every release asset follows one
@@ -313,31 +325,40 @@ func TestGoReleaserSupplyChainInvariants(t *testing.T) {
 		}
 	}
 
-	if len(cfg.Signs) != 1 {
-		t.Fatalf("expected exactly one signs entry, got %d", len(cfg.Signs))
+	// Two signing entries: checksums.txt covers every artifact it lists, and
+	// the SBOMs are signed individually because they cannot go into
+	// checksums.txt without making it non-reproducible. Together they leave no
+	// published asset resting on a presence check alone.
+	if len(cfg.Signs) != 2 {
+		t.Fatalf("expected exactly two signs entries (checksum and sbom), got %d", len(cfg.Signs))
 	}
-	sign := cfg.Signs[0]
-	if sign.Cmd != "cosign" {
-		t.Errorf("signs cmd must be %q, got %q", "cosign", sign.Cmd)
+	signedArtifacts := make(map[string]bool, len(cfg.Signs))
+	for _, sign := range cfg.Signs {
+		signedArtifacts[sign.Artifacts] = true
+		if sign.Cmd != "cosign" {
+			t.Errorf("signs cmd must be %q, got %q", "cosign", sign.Cmd)
+		}
+		if want := "${artifact}.sigstore.json"; sign.Signature != want {
+			t.Errorf("signs signature template must be %q, got %q", want, sign.Signature)
+		}
+		if !slices.Contains(sign.Args, "sign-blob") {
+			t.Errorf("signs args must invoke sign-blob, got %v", sign.Args)
+		}
+		if !slices.Contains(sign.Args, "--bundle=${signature}") {
+			t.Errorf("signs args must write a sigstore bundle via --bundle=${signature}, got %v", sign.Args)
+		}
+		if !slices.Contains(sign.Args, "--yes") {
+			t.Errorf("signs args must pass --yes so keyless signing is non-interactive in CI, got %v", sign.Args)
+		}
+		for _, arg := range sign.Args {
+			if strings.Contains(arg, "--key") {
+				t.Errorf("signing must stay keyless (OIDC); found long-lived key argument %q", arg)
+			}
+		}
 	}
-	if want := "checksum"; sign.Artifacts != want {
-		t.Errorf("signs artifacts must be %q; signing the checksum file covers all listed artifacts, got %q", want, sign.Artifacts)
-	}
-	if want := "${artifact}.sigstore.json"; sign.Signature != want {
-		t.Errorf("signs signature template must be %q, got %q", want, sign.Signature)
-	}
-	if !slices.Contains(sign.Args, "sign-blob") {
-		t.Errorf("signs args must invoke sign-blob, got %v", sign.Args)
-	}
-	if !slices.Contains(sign.Args, "--bundle=${signature}") {
-		t.Errorf("signs args must write a sigstore bundle via --bundle=${signature}, got %v", sign.Args)
-	}
-	if !slices.Contains(sign.Args, "--yes") {
-		t.Errorf("signs args must pass --yes so keyless signing is non-interactive in CI, got %v", sign.Args)
-	}
-	for _, arg := range sign.Args {
-		if strings.Contains(arg, "--key") {
-			t.Errorf("signing must stay keyless (OIDC); found long-lived key argument %q", arg)
+	for _, want := range []string{"checksum", "sbom"} {
+		if !signedArtifacts[want] {
+			t.Errorf("signs must cover %q artifacts; without it those assets ship unsigned", want)
 		}
 	}
 }
@@ -583,6 +604,68 @@ func TestAURInvariants(t *testing.T) {
 	}
 	if got := pushStep.Env["AUR_SSH_KEY"]; !strings.Contains(got, "AUR_SSH_KEY") {
 		t.Errorf("update-aur must authenticate with the AUR_SSH_KEY secret, got %q", got)
+	}
+}
+
+// TestMiseLockInvariants checks that the release toolchain is pinned by
+// checksum rather than by version alone. Every tool that builds and signs a
+// release comes from mise, so a retagged or replaced upstream artifact would
+// otherwise be installed silently. The lockfile is only consulted when the
+// setting is on, and it is only meaningful while it matches the pinned
+// versions, so both are enforced here.
+func TestMiseLockInvariants(t *testing.T) {
+	config, err := os.ReadFile(".mise.toml")
+	if err != nil {
+		t.Fatalf("reading .mise.toml: %v", err)
+	}
+	if !regexp.MustCompile(`(?m)^\s*lockfile\s*=\s*true`).MatchString(string(config)) {
+		t.Error(".mise.toml must set lockfile = true; without it mise.lock is not consulted")
+	}
+
+	lock, err := os.ReadFile("mise.lock")
+	if err != nil {
+		t.Fatalf("reading mise.lock: %v (regenerate with `mise lock --platform linux-x64,macos-arm64`)", err)
+	}
+	body := string(lock)
+
+	tools := map[string]string{}
+	inTools := false
+	for _, line := range strings.Split(string(config), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			inTools = trimmed == "[tools]"
+			continue
+		}
+		if !inTools || trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if name, version, ok := strings.Cut(trimmed, "="); ok {
+			tools[strings.TrimSpace(name)] = strings.Trim(strings.TrimSpace(version), `"`)
+		}
+	}
+	if len(tools) == 0 {
+		t.Fatal(".mise.toml declares no tools")
+	}
+
+	for tool, version := range tools {
+		if !strings.Contains(body, "[[tools."+tool+"]]") {
+			t.Errorf("mise.lock has no entry for %q; regenerate it after changing the tool set", tool)
+			continue
+		}
+		// A lockfile pinning a version other than the configured one is worse
+		// than none: it looks authoritative while the pins disagree.
+		versionRe := regexp.MustCompile(`(?s)\[\[tools\.` + regexp.QuoteMeta(tool) + `\]\].*?version = "([^"]+)"`)
+		if m := versionRe.FindStringSubmatch(body); m == nil {
+			t.Errorf("mise.lock records no version for %q", tool)
+		} else if m[1] != version {
+			t.Errorf("mise.lock pins %s %s but .mise.toml pins %s; regenerate the lockfile", tool, m[1], version)
+		}
+		// linux-x64 is the platform every CI job runs on, so its checksum is
+		// the one that gates releases.
+		checksumRe := regexp.MustCompile(`(?s)\[tools\.` + regexp.QuoteMeta(tool) + `\."platforms\.linux-x64"\].*?checksum = "sha256:[0-9a-f]{64}"`)
+		if !checksumRe.MatchString(body) {
+			t.Errorf("mise.lock has no linux-x64 sha256 checksum for %q; CI would install it unverified", tool)
+		}
 	}
 }
 
@@ -881,6 +964,7 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 	assets := extractBashArray(t, assetsStep.Run, "expected_assets")
 	wantAssets := append([]string{"checksums.txt", cosignBundleName}, releaseArchiveNames...)
 	wantAssets = append(wantAssets, sbomNames()...)
+	wantAssets = append(wantAssets, sbomSignatureNames()...)
 	wantAssets = append(wantAssets, linuxPackageNames()...)
 	if !slices.Equal(slices.Sorted(slices.Values(assets)), slices.Sorted(slices.Values(wantAssets))) {
 		t.Errorf("release job expected_assets must be exactly %v, got %v", wantAssets, assets)
@@ -894,6 +978,7 @@ func TestGoReleaserReleaseWorkflowMigrationInvariants(t *testing.T) {
 	// archives and checksums.txt remain provably immutable.
 	nonReproducible := extractBashArray(t, assetsStep.Run, "nonreproducible_assets")
 	wantNonReproducible := append([]string{cosignBundleName}, sbomNames()...)
+	wantNonReproducible = append(wantNonReproducible, sbomSignatureNames()...)
 	if !slices.Equal(slices.Sorted(slices.Values(nonReproducible)), slices.Sorted(slices.Values(wantNonReproducible))) {
 		t.Errorf("release job nonreproducible_assets must be exactly %v, got %v", wantNonReproducible, nonReproducible)
 	}
