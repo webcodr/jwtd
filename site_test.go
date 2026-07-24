@@ -21,12 +21,33 @@ func readWebsiteFile(t *testing.T, elements ...string) string {
 	return string(data)
 }
 
+var (
+	selfClosingVoid = regexp.MustCompile(`\s*/>`)
+	whitespaceRun   = regexp.MustCompile(`\s+`)
+	whitespaceGT    = regexp.MustCompile(`\s*>\s*`)
+	whitespaceLT    = regexp.MustCompile(`\s+<`)
+)
+
+// normalizeMarkup canonicalizes HTML whitespace and self-closing void
+// elements so the copy/content contracts match regardless of formatter
+// reflows: line wrapping, attribute splitting, whitespace around tag
+// delimiters, and "<tag />" versus "<tag>". Both the document and the
+// expected marker are passed through it before comparison.
+func normalizeMarkup(s string) string {
+	s = selfClosingVoid.ReplaceAllString(s, ">")
+	s = whitespaceRun.ReplaceAllString(s, " ")
+	s = whitespaceGT.ReplaceAllString(s, ">")
+	s = whitespaceLT.ReplaceAllString(s, "<")
+	return strings.TrimSpace(s)
+}
+
 func TestWebsiteContentContract(t *testing.T) {
 	if got, want := readWebsiteFile(t, "site", "CNAME"), "jwtd.webcodr.io\n"; got != want {
 		t.Fatalf("site/CNAME must be exactly %q, got %q", want, got)
 	}
 
 	index := readWebsiteFile(t, "site", "index.html")
+	normalizedIndex := normalizeMarkup(index)
 	for label, required := range map[string]string{
 		"canonical URL":    `<link rel="canonical" href="https://jwtd.webcodr.io/">`,
 		"content security": `default-src 'none'`,
@@ -45,10 +66,10 @@ func TestWebsiteContentContract(t *testing.T) {
 		"structured data":  `<script type="application/ld+json">`,
 		"release version":  `<p class="panel-kicker">Latest release: <a href="https://github.com/webcodr/jwtd/releases/latest">VERSION</a></p>`,
 		"install controls": `data-install-tabs`,
-		"install methods":  `data-install-method="homebrew"`,
-		"install panels":   `data-install-panel="homebrew"`,
+		"install methods":  `data-install-method="macos"`,
+		"install panels":   `data-install-panel="macos"`,
 	} {
-		if !strings.Contains(index, required) {
+		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
 			t.Errorf("site/index.html is missing %s marker %q", label, required)
 		}
 	}
@@ -98,6 +119,7 @@ func TestWebsiteContentContract(t *testing.T) {
 
 func TestWebsiteCopyContract(t *testing.T) {
 	index := readWebsiteFile(t, "site", "index.html")
+	normalizedIndex := normalizeMarkup(index)
 	for label, required := range map[string]string{
 		"page title":          `<title>jwtd - JWT, JWS, and JWE inspection</title>`,
 		"meta description":    `<meta name="description" content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.">`,
@@ -117,7 +139,7 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"security guidance":   `Release archives and Linux packages are listed in <code>checksums.txt</code>, which is signed with a keyless Cosign bundle. Each archive also includes a Syft SPDX SBOM.`,
 		"footer copy":         `<p>A focused CLI for JWT, JWS, and JWE inspection.</p>`,
 	} {
-		if !strings.Contains(index, required) {
+		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
 			t.Errorf("site/index.html is missing refined %s %q", label, required)
 		}
 	}
