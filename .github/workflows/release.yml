@@ -701,8 +701,13 @@ jobs:
           # COPR builds the SRPM in its Fedora chroots and signs the result with
           # its own key; a submitted older version cannot downgrade users because
           # dnf resolves the highest EVR from the repo.
+          # copr-cli is pinned: this step holds COPR_API_TOKEN, so an
+          # unpinned install would let any future copr-cli release run
+          # arbitrary code next to a credential that publishes RPMs. Bump
+          # deliberately. Transitive dependencies remain resolved by pip;
+          # pinning those too needs a hash-locked requirements file.
           python3 -m venv "$RUNNER_TEMP/copr-venv"
-          "$RUNNER_TEMP/copr-venv/bin/pip" install --quiet copr-cli
+          "$RUNNER_TEMP/copr-venv/bin/pip" install --quiet 'copr-cli==2.5'
           mkdir -p ~/.config
           printf '%s' "$COPR_CONFIG" | base64 -d > ~/.config/copr
           chmod 600 ~/.config/copr

@@ -660,6 +660,11 @@ func TestCOPRInvariants(t *testing.T) {
 	if got := submitStep.Env["COPR_CONFIG"]; !strings.Contains(got, "COPR_API_TOKEN") {
 		t.Errorf("update-copr must authenticate with the COPR_API_TOKEN secret, got %q", got)
 	}
+	// This step holds the COPR API token, so the tool it installs must be
+	// version-pinned rather than resolved at release time.
+	if !regexp.MustCompile(`pip['"]? install[^\n]*copr-cli==\d`).MatchString(submitStep.Run) {
+		t.Error("update-copr must install a pinned copr-cli version, not whatever pip resolves at release time")
+	}
 }
 
 // TestReleaseWorkflowSecurityInvariants checks the durable security
