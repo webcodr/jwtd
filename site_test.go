@@ -42,14 +42,14 @@ func normalizeMarkup(s string) string {
 }
 
 func TestWebsiteContentContract(t *testing.T) {
-	if got, want := readWebsiteFile(t, "site", "CNAME"), "jwtd.webcodr.io\n"; got != want {
+	if got, want := readWebsiteFile(t, "site", "CNAME"), "jwtd.sh\n"; got != want {
 		t.Fatalf("site/CNAME must be exactly %q, got %q", want, got)
 	}
 
 	index := readWebsiteFile(t, "site", "index.html")
 	normalizedIndex := normalizeMarkup(index)
 	for label, required := range map[string]string{
-		"canonical URL":    `<link rel="canonical" href="https://jwtd.webcodr.io/">`,
+		"canonical URL":    `<link rel="canonical" href="https://jwtd.sh/">`,
 		"content security": `default-src 'none'`,
 		"skip link":        `href="#main-content"`,
 		"header landmark":  `<header class="site-header">`,
