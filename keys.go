@@ -90,6 +90,39 @@ func symmetricKey(data []byte) (any, error) {
 	return data, nil
 }
 
+// keySource describes how loadKey will read a key argument. The CLI reports
+// it when the reading is not the obvious one, so a key that is silently taken
+// as something other than what the user meant becomes visible.
+type keySource int
+
+const (
+	// keySourceFile is an existing file, the unsurprising case.
+	keySourceFile keySource = iota
+	// keySourceLiteral is a raw: prefixed literal secret.
+	keySourceLiteral
+	// keySourceBase64 is inline base64/base64url key material.
+	keySourceBase64
+	// keySourceUnusable is neither, and loadKey will reject it.
+	keySourceUnusable
+)
+
+// classifyKeyArg reports how loadKey will interpret keyStr, mirroring its
+// precedence: the raw: prefix, then an existing file, then base64. Existence
+// is checked with Stat rather than a read, so classifying never consumes the
+// key source.
+func classifyKeyArg(keyStr string) keySource {
+	if strings.HasPrefix(keyStr, "raw:") {
+		return keySourceLiteral
+	}
+	if info, err := os.Stat(keyStr); err == nil && !info.IsDir() {
+		return keySourceFile
+	}
+	if _, ok := decodeBase64Key([]byte(keyStr)); ok {
+		return keySourceBase64
+	}
+	return keySourceUnusable
+}
+
 // decodeBase64Key decodes base64 or base64url key material, tolerating the
 // line wrapping and surrounding whitespace that encoded keys pick up when they
 // are stored in files or pasted between tools.

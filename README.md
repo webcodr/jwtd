@@ -179,6 +179,8 @@ jwtd --key raw:my-hmac-secret eyJhbGciOiJIUzI1NiIs...
 
 Inline key material is visible to other local users through the process list and lands in shell history. Prefer a key file or `JWTD_KEY` for anything sensitive.
 
+When a key argument is not an existing file, jwtd notes on stderr which reading it applied — literal secret or base64-decoded — so a value meant one way is never silently used another. Key files are the expected case and stay silent. The note goes to stderr, so piped stdout is unaffected.
+
 ### Environment variable
 
 Set `JWTD_KEY` to provide a default key without using `--key` on every invocation:

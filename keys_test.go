@@ -540,6 +540,46 @@ func TestLoadKey_JWKSetFirstKey(t *testing.T) {
 	}
 }
 
+func TestClassifyKeyArg(t *testing.T) {
+	keyPath := writeTextKeyFile(t, "secret.txt", "a-symmetric-secret")
+
+	tests := []struct {
+		name   string
+		keyStr string
+		want   keySource
+	}{
+		{name: "raw prefix", keyStr: "raw:my-secret", want: keySourceLiteral},
+		{name: "existing file", keyStr: keyPath, want: keySourceFile},
+		{name: "base64", keyStr: base64.StdEncoding.EncodeToString([]byte("0123456789abcdef")), want: keySourceBase64},
+		{name: "neither file nor base64", keyStr: "not-a-file-and-not-base64!!!", want: keySourceUnusable},
+		{
+			// The raw: prefix wins even when a file of that name exists, so
+			// the classification matches loadKey's precedence.
+			name:   "raw prefix beats an existing file",
+			keyStr: "raw:" + keyPath,
+			want:   keySourceLiteral,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyKeyArg(tt.keyStr); got != tt.want {
+				t.Errorf("classifyKeyArg(%q) = %d, want %d", tt.keyStr, got, tt.want)
+			}
+		})
+	}
+
+	// loadKey cannot read a directory, so it must not be reported as a key
+	// file. Which of the remaining readings applies depends on whether the
+	// path itself happens to be valid base64, so only the file reading is
+	// ruled out here.
+	t.Run("directory is not a key file", func(t *testing.T) {
+		if got := classifyKeyArg(filepath.Dir(keyPath)); got == keySourceFile {
+			t.Error("a directory must not classify as a key file")
+		}
+	})
+}
+
 // --- public key material must never degrade into a symmetric secret --------
 //
 // Public keys are published values. If key material jwtd cannot parse fell

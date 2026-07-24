@@ -12,6 +12,7 @@ All functionality lives in package `main`, split across four source files:
 
 - `main()` / `newRootCommand()` - Build and execute the Cobra root command with the `--key`/`-k` flag; suppress Cobra's automatic usage/error output so runtime errors are rendered once, while invalid-signature details are not duplicated
 - `run()` / `readToken()` - Resolves the token from arguments, stdin pipe, or interactive readline prompt; falls back to `JWTD_KEY` when `--key` is not set; dispatches to JWT or JWE handling
+- `printKeyInterpretation()` - Notes on stderr how a key argument was read when it was not read as a file, so precedence-based detection cannot silently take a value the user meant one way and use it another; adds the process-list exposure warning for `--key` values, which `JWTD_KEY` does not carry (`/proc/<pid>/cmdline` is world-readable, `/proc/<pid>/environ` is owner-only). Diagnostics go to stderr so stdout stays parseable
 - `readInteractive()` - Prompts for a token interactively using `chzyer/readline`
 - `decodeAndPrint()` - Parses the JWT with `golang-jwt/jwt` (`ParseUnverified`) and orchestrates output; verifies the signature when a key is provided
 - `parseUnverifiedJWT()` / `decodeJSON()` - Strictly decode the header, claims, and other displayed JSON with exact `json.Number` values and reject malformed or trailing JSON data
@@ -27,6 +28,7 @@ All functionality lives in package `main`, split across four source files:
 ### `keys.go` - Key loading and format detection
 
 - `loadKey()` / `parseKeyData()` / `parseDERKey()` / `parseJWK()` - Resolve `raw:<secret>`, then an existing file path, then base64/base64url; parse loaded data as JWK/JWK Set, PEM, or DER (PKCS#1/PKCS#8/SEC 1/PKIX) keys and X.509 certificates; reject recognizable structured parse failures and otherwise allow opaque raw symmetric bytes; trim trailing newlines only for ASCII text key files limited to printable bytes plus tab/CR/LF, while UTF-8/non-ASCII and other binary files remain byte-exact
+- `classifyKeyArg()` - Reports which reading `loadKey` will apply (`raw:` literal, existing file, base64, or unusable), mirroring its precedence so the CLI hint cannot drift from actual behavior; uses `Stat` rather than a read, so classifying never consumes the key source
 - `decodeBase64Key()` / `symmetricKey()` - Decode whitespace-tolerant base64/base64url key material (applied to text key files as well as inline arguments, so the same bytes mean the same key either way) and gate the symmetric fallback, which rejects empty key material
 - `isStructuredKeyData()` / `hasPEMMarker()` / `hasJWKMember()` / `isCompleteDER()` / `isTextKey()` / `isSSHPublicKey()` - Heuristics distinguishing structured key material (PEM/JWK/DER/SSH) from opaque symmetric secrets
 

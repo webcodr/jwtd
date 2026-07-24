@@ -43,7 +43,7 @@ func newRootCommand() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification (file path, base64, JWK, or raw:<secret> for a literal symmetric key)")
+	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification (file path, base64, JWK, or raw:<secret> for a literal symmetric key; inline values are visible to other local users in the process list, so prefer a file or JWTD_KEY)")
 	return rootCmd
 }
 
@@ -62,8 +62,12 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	keyStr, _ := cmd.Flags().GetString("key")
+	fromFlag := keyStr != ""
 	if keyStr == "" {
 		keyStr = os.Getenv("JWTD_KEY")
+	}
+	if keyStr != "" {
+		printKeyInterpretation(cmd.ErrOrStderr(), keyStr, fromFlag)
 	}
 
 	w := cmd.OutOrStdout()
@@ -72,6 +76,38 @@ func run(cmd *cobra.Command, args []string) error {
 		return decodeAndPrintJWE(w, token, keyStr)
 	}
 	return decodeAndPrint(w, token, keyStr)
+}
+
+// printKeyInterpretation notes on stderr how a key argument was read when it
+// was not read as a file. Key detection is precedence-based, so a value meant
+// as a literal secret can be taken as base64 or as a file; saying which
+// applied turns a silent misreading into something the user can see. Inline
+// key material also lands in the process list, where other local users can
+// read it, so that is flagged for flag values.
+//
+// Writes are best effort: a failure here must not disturb decoding.
+func printKeyInterpretation(w io.Writer, keyStr string, fromFlag bool) {
+	origin := "JWTD_KEY"
+	if fromFlag {
+		origin = "--key"
+	}
+
+	var note string
+	switch classifyKeyArg(keyStr) {
+	case keySourceLiteral:
+		note = fmt.Sprintf("Note: %s used as a literal symmetric secret.", origin)
+	case keySourceBase64:
+		note = fmt.Sprintf("Note: %s is not an existing file; decoded as base64 key material.", origin)
+	default:
+		// A file is the expected reading, and unusable values produce an
+		// error that speaks for itself.
+		return
+	}
+
+	if fromFlag {
+		note += "\n      Inline key material is visible to other local users in the process list."
+	}
+	_, _ = fmt.Fprintln(w, note)
 }
 
 // readToken resolves the JWT string from arguments, stdin pipe, or interactive prompt.

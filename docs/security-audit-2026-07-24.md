@@ -99,8 +99,8 @@ The realistic trigger is a botched key conversion: `ssh-keygen -e -m PKCS8 -f id
 
 | # | Severity | Finding |
 |---|----------|---------|
-| A1 | Low | **Inline key material appears in `argv`.** `jwtd -k raw:<secret>` / `-k <base64>` puts the secret in `/proc/<pid>/cmdline`, which is world-readable to other local users by default (unlike `/proc/<pid>/environ`, which is owner-only) — and in shell history. `JWTD_KEY` and file paths are the safer forms. Worth one line in the README's key section; the prior audit's L4 flagged the env var but not the strictly worse argv case. |
-| A2 | Low | Key-argument ambiguity (prior L1, unchanged): `-k mysecret` is silently base64-decoded rather than taken literally. Fails safe (false INVALID), `raw:` is the escape hatch. A stderr hint would help — and would also surface H1 if the message named the interpretation actually chosen. |
+| A1 | Low | **Inline key material appears in `argv`.** `jwtd -k raw:<secret>` / `-k <base64>` puts the secret in `/proc/<pid>/cmdline`, which is world-readable to other local users by default — verified as mode `0444`, against `0400` for `/proc/<pid>/environ` — and in shell history. `JWTD_KEY` and file paths are the safer forms. The prior audit's L4 flagged the env var but not the strictly worse argv case. **Fixed as far as it can be:** the exposure exists before `main()` runs and Go cannot rewrite `argv`, so no in-process mitigation is possible. It is now advisory in three places: the README, the `--key` help text, and a stderr note at the point of use. |
+| A2 | Low | Key-argument ambiguity (prior L1): `-k mysecret` is silently base64-decoded rather than taken literally. Fails safe (false INVALID), `raw:` is the escape hatch. **Fixed:** `printKeyInterpretation` names the reading actually applied whenever the argument is not an existing file. Note the scope: it covers *inline* ambiguity, so it would not have surfaced H1's file-based variants, where the argument is a real file and only the parse fallback surprises. Warning on every file that lands in the symmetric fallback would cover those too, at the cost of a note on every legitimate HMAC key file — see the stronger option under H1. |
 | A3 | Info | JWK Set uses the first key only, with no `kid` matching (prior L2). Fail-closed. If `Keys[0].Key` is `nil`, `validMethodsForKey` returns `nil` and the algorithm restriction is dropped, but verification still fails on the key-type assertion. |
 | A4 | Info | `RSA1_5` is accepted for JWE decryption (prior L3). No practical oracle in a one-shot CLI. |
 | A5 | Info | `readToken` reads stdin unbounded, and `sanitizeToken` copies it. Self-inflicted only. |
@@ -126,9 +126,9 @@ The site is static, self-contained, and served from GitHub Pages.
 
 ## Status
 
-**H1**, **H2**, **S1**, and **S2** are fixed. **A1** is addressed in the README's key-formats section.
+**H1**, **H2**, **S1**, **S2**, **A1**, and **A2** are fixed.
 
-Remaining, both optional:
+Remaining, all optional:
 
-- **A2** — a stderr hint naming how the key argument was interpreted (base64-decoded vs. literal vs. file). Would also make H1-class confusion visible to the user rather than silent.
 - **S3/S4** — sign or checksum the SBOMs; add a `mise.lock` so tools are checksum-pinned rather than only version-pinned.
+- **H1 (stronger form)** — require symmetric secrets to be explicit, so no file can become an HMAC key by accident. This is the only change that would close the class rather than the known instances of it, and it is a breaking UX decision rather than a defect.
