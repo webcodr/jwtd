@@ -478,6 +478,68 @@ func TestVerifySignature_RejectsTrailingJWTClaimsData(t *testing.T) {
 	}
 }
 
+// An attacker who knows a published key file's bytes must not be able to sign
+// an HS256 token with them and have jwtd report it as authentic. This is the
+// classic public-key-as-HMAC-secret forgery, reached through key-format
+// fallback rather than through the "alg" header.
+func TestVerifySignature_RejectsForgedHMACFromPublishedKeyFile(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating ed25519 key: %v", err)
+	}
+	rsaKey := generateRSAKey(t)
+	der, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshaling public key: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		filename string
+		contents string
+	}{
+		{
+			name:     "openssh public key",
+			filename: "id_ed25519.pub",
+			contents: sshEd25519PublicKeyLine(pub, "victim@host") + "\n",
+		},
+		{
+			name:     "authorized_keys entry",
+			filename: "authorized_keys",
+			contents: sshEd25519PublicKeyLine(pub, "victim@host") + "\n",
+		},
+		{
+			name:     "base64 public key in a file",
+			filename: "key.b64",
+			contents: base64.StdEncoding.EncodeToString(der) + "\n",
+		},
+		{
+			name:     "empty key file",
+			filename: "converted.pem",
+			contents: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyPath := writeTextKeyFile(t, tt.filename, tt.contents)
+			// The attacker signs with exactly what the victim's key file
+			// holds, trailing newline trimmed as jwtd trims it.
+			secret := []byte(strings.TrimRight(tt.contents, "\n"))
+			forged := signHS256(t, secret, jwt.MapClaims{"sub": "attacker", "role": "admin"})
+
+			var buf bytes.Buffer
+			err := verifySignature(&buf, forged, keyPath)
+			if err == nil {
+				t.Fatal("forged HMAC token accepted")
+			}
+			if output := stripANSI(buf.String()); strings.Contains(output, "Signature: VALID") {
+				t.Errorf("forged HMAC token reported as valid:\n%s", output)
+			}
+		})
+	}
+}
+
 func TestDecodeAndPrint_SignatureValid_RSA(t *testing.T) {
 	key := generateRSAKey(t)
 	keyPath := writeKeyFile(t, key)
@@ -989,6 +1051,83 @@ func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 	// --key flag should take precedence over JWTD_KEY env var.
 	if !strings.Contains(output, "Signature: VALID") {
 		t.Errorf("expected --key flag to override env var, got:\n%s", output)
+	}
+}
+
+// Key detection is precedence-based, so a value meant one way can be read
+// another. The CLI says which reading applied whenever it is not a file, and
+// flags the process-list exposure that inline key material carries.
+func TestRun_KeyInterpretationHint(t *testing.T) {
+	secret := []byte("a-32-byte-symmetric-test-secret!")
+	token := signHS256(t, secret, jwt.MapClaims{"sub": "hint"})
+	keyPath := writeSymmetricKeyFile(t, secret)
+
+	tests := []struct {
+		name       string
+		args       []string
+		env        string
+		wantStderr []string
+		notStderr  []string
+	}{
+		{
+			name:       "literal secret",
+			args:       []string{token, "--key", "raw:" + string(secret)},
+			wantStderr: []string{"--key used as a literal symmetric secret", "process list"},
+		},
+		{
+			name:       "inline base64",
+			args:       []string{token, "--key", base64.StdEncoding.EncodeToString(secret)},
+			wantStderr: []string{"is not an existing file", "decoded as base64", "process list"},
+		},
+		{
+			name:      "key file stays silent",
+			args:      []string{token, "--key", keyPath},
+			notStderr: []string{"Note:", "process list"},
+		},
+		{
+			// The env var is readable only by the owning user, unlike argv,
+			// so it carries the interpretation note without the exposure line.
+			name:       "env var omits the process-list warning",
+			args:       []string{token},
+			env:        "raw:" + string(secret),
+			wantStderr: []string{"JWTD_KEY used as a literal symmetric secret"},
+			notStderr:  []string{"process list"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env != "" {
+				t.Setenv("JWTD_KEY", tt.env)
+			}
+
+			rootCmd := newRootCommand()
+			var out, errBuf bytes.Buffer
+			rootCmd.SetOut(&out)
+			rootCmd.SetErr(&errBuf)
+			rootCmd.SetArgs(tt.args)
+
+			if err := rootCmd.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			stderr := stripANSI(errBuf.String())
+			for _, want := range tt.wantStderr {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("expected stderr to mention %q, got:\n%s", want, stderr)
+				}
+			}
+			for _, unwanted := range tt.notStderr {
+				if strings.Contains(stderr, unwanted) {
+					t.Errorf("stderr must not mention %q, got:\n%s", unwanted, stderr)
+				}
+			}
+			// The hint is diagnostic output and must never reach stdout,
+			// which is parsed by tooling.
+			if stdout := stripANSI(out.String()); strings.Contains(stdout, "Note:") {
+				t.Errorf("key hint leaked into stdout:\n%s", stdout)
+			}
+		})
 	}
 }
 

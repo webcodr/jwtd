@@ -169,11 +169,17 @@ The `--key` flag accepts:
 - **Base64 strings**: Base64 or base64url encoded key material (PEM, DER, certificate, JWK, or raw symmetric key)
 - **Literal secrets**: `raw:<secret>` uses the text after the prefix as a symmetric key verbatim
 
-Key detection first honors the `raw:` prefix, then tries an existing file path, then standard base64 followed by base64url. File contents and decoded inline data are parsed as JWK/JWK Set, then PEM, then DER keys or X.509 certificates. For signature verification, jwtd extracts the public key from X.509 certificates. Recognizable structured data must parse successfully or jwtd returns an error; opaque unstructured data falls back to raw symmetric bytes. For key files, trailing newlines are trimmed only when the content is printable ASCII text (with tab, CR, and LF allowed). UTF-8/non-ASCII and other binary files remain byte-exact.
+Key detection first honors the `raw:` prefix, then tries an existing file path, then standard base64 followed by base64url. File contents and decoded inline data are parsed as JWK/JWK Set, then PEM, then DER keys or X.509 certificates. Base64-encoded key material is decoded the same way whether it arrives inline or in a text file. For signature verification, jwtd extracts the public key from X.509 certificates. Recognizable structured data must parse successfully or jwtd returns an error; opaque unstructured data falls back to raw symmetric bytes. For key files, trailing newlines are trimmed only when the content is printable ASCII text (with tab, CR, and LF allowed). UTF-8/non-ASCII and other binary files remain byte-exact.
+
+SSH public keys (`id_*.pub`, `authorized_keys`, and RFC 4716 armor) are recognized but not supported, and empty key material is rejected. Both are errors rather than fallbacks: a public key is a published value, so treating unparseable key material as a symmetric secret would let anyone who knows it forge an HMAC signature that verifies. Convert RSA and ECDSA keys with `ssh-keygen -e -m PKCS8 -f <key>`.
 
 ```sh
 jwtd --key raw:my-hmac-secret eyJhbGciOiJIUzI1NiIs...
 ```
+
+Inline key material is visible to other local users through the process list and lands in shell history. Prefer a key file or `JWTD_KEY` for anything sensitive.
+
+When a key argument is not an existing file, jwtd notes on stderr which reading it applied — literal secret or base64-decoded — so a value meant one way is never silently used another. Key files are the expected case and stay silent. The note goes to stderr, so piped stdout is unaffected.
 
 ### Environment variable
 

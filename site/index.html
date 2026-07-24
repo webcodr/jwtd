@@ -870,6 +870,18 @@ scoop install jwtd</code></pre>
               JWE payload.
             </p>
           </article>
+          <article>
+            <h3>Can I use an SSH public key?</h3>
+            <p>
+              Not directly. OpenSSH keys,
+              <code>authorized_keys</code> entries, and RFC 4716 armor are
+              recognized and rejected with an error, rather than being used as a
+              symmetric secret. A public key is a published value, so anyone who
+              knows it could otherwise forge a token that verified. Convert RSA
+              and ECDSA keys with
+              <code>ssh-keygen -e -m PKCS8 -f &lt;key&gt;</code>.
+            </p>
+          </article>
         </div>
       </section>
     </main>

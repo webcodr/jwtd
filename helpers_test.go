@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -343,6 +344,53 @@ func writeEd25519KeyFile(t *testing.T, key ed25519.PrivateKey) string {
 }
 
 // signJWTWithEd25519 creates a signed JWT using Ed25519 with the given private key.
+// sshWireString encodes a value in the SSH wire format: a big-endian length
+// followed by the bytes.
+func sshWireString(b []byte) []byte {
+	out := make([]byte, 4, 4+len(b))
+	binary.BigEndian.PutUint32(out, uint32(len(b)))
+	return append(out, b...)
+}
+
+// sshPublicKeyLine renders a public key in the one-line OpenSSH format, as
+// found in id_*.pub and authorized_keys files. Only the wire-format key type
+// prefix drives jwtd's detection, so body stands in for the remaining key
+// material.
+func sshPublicKeyLine(keyType string, body []byte, comment string) string {
+	blob := append(sshWireString([]byte(keyType)), sshWireString(body)...)
+	line := keyType + " " + base64.StdEncoding.EncodeToString(blob)
+	if comment != "" {
+		line += " " + comment
+	}
+	return line
+}
+
+// sshEd25519PublicKeyLine renders a real ed25519 public key exactly as
+// ssh-keygen writes it to id_ed25519.pub.
+func sshEd25519PublicKeyLine(pub ed25519.PublicKey, comment string) string {
+	return sshPublicKeyLine("ssh-ed25519", pub, comment)
+}
+
+func writeTextKeyFile(t *testing.T, name, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+	return path
+}
+
+// signHS256 signs a token with an HMAC secret, standing in for an attacker who
+// knows the bytes of a published key file.
+func signHS256(t *testing.T, secret []byte, claims jwt.MapClaims) string {
+	t.Helper()
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)
+	if err != nil {
+		t.Fatalf("signing HS256 token: %v", err)
+	}
+	return token
+}
+
 func signJWTWithEd25519(t *testing.T, key ed25519.PrivateKey, claims jwt.MapClaims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
