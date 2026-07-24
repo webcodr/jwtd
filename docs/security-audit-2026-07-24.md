@@ -78,8 +78,8 @@ The realistic trigger is a botched key conversion: `ssh-keygen -e -m PKCS8 -f id
 
 | # | Severity | Finding |
 |---|----------|---------|
-| S1 | Low | **Unpinned `pip install copr-cli`** (`release.yml:705`) runs in the job holding `COPR_API_TOKEN`. A compromised `copr-cli` release or transitive dependency could exfiltrate the token and publish arbitrary RPMs that Fedora users install via `dnf`. Pin an exact version, ideally with `--require-hashes` and a `requirements.txt`. Every other tool in the pipeline is version-pinned; this is the one that is not. |
-| S2 | Low | **Go toolchain pinned to 1.26.1** (`.mise.toml`), which is four patch releases behind and carries known stdlib advisories (`crypto/x509`, `net`, `os`). `govulncheck` symbol analysis confirms **0 reachable** from jwtd's code, and no token-controlled data reaches `crypto/x509` (key material comes only from `--key`/`JWTD_KEY`), so exposure is theoretical — but the pin ships in every released binary. Bump to ≥1.26.5. Unchanged since the 2026-07-22 audit (L5). |
+| S1 | Low | **Unpinned `pip install copr-cli`** (`release.yml:705`) runs in the job holding `COPR_API_TOKEN`. A compromised `copr-cli` release or transitive dependency could exfiltrate the token and publish arbitrary RPMs that Fedora users install via `dnf`. Every other tool in the pipeline is version-pinned; this was the one that was not. **Fixed:** pinned to `copr-cli==2.5`, with the pin enforced by `TestCOPRInvariants`. Transitive dependencies are still pip-resolved; closing that needs a hash-locked `requirements.txt`, whose maintenance cost was judged not to be worth it for this pipeline. |
+| S2 | Low | **Go toolchain pinned to 1.26.1** (`.mise.toml`), four patch releases behind and carrying known stdlib advisories (`crypto/x509`, `net`, `os`). `govulncheck` symbol analysis confirmed **0 reachable** from jwtd's code, and no token-controlled data reaches `crypto/x509` (key material comes only from `--key`/`JWTD_KEY`), so exposure was theoretical — but the pin ships in every released binary. Outstanding since the 2026-07-22 audit (L5). **Fixed:** bumped to 1.26.5. Verified by building, vetting, and testing on 1.26.5, where `govulncheck` reports no vulnerabilities at all (1.26.1: 8 in imported packages, 12 in required modules). |
 | S3 | Info | **SBOMs are neither checksummed nor signed** — deliberate, and documented in `AGENTS.md` (including them would break byte-for-byte verification of the signed `checksums.txt`). The consequence is that the six SBOMs are verified only by presence and count, so an actor with release-write could alter them undetected. The binaries themselves remain covered. |
 | S4 | Info | **No `mise.lock`.** Tools are version-pinned but not checksum-pinned. A lockfile would close the gap between "same version" and "same bytes". |
 | S5 | Info | `test.yml` runs on `pull_request` from forks and executes fork-controlled `.mise.toml` and `.goreleaser.yaml` (arbitrary tool download + build hooks). Bounded correctly: read-only `GITHUB_TOKEN`, no secrets in that workflow, no `pull_request_target`. Noted for awareness, not a defect. |
@@ -124,10 +124,11 @@ The site is static, self-contained, and served from GitHub Pages.
 - **Info:** `frame-ancestors` cannot be set via a meta CSP and GitHub Pages cannot send headers, so clickjacking is unmitigated. Irrelevant for a static page with no interactive state.
 - **Info:** `pages.yml:29-30` interpolates the latest tag name into `sed`. Tag names are maintainer-created and the release workflow constrains them to `v<semver>`; a manually created tag containing `/` would break the build rather than inject. Using a placeholder-safe substitution would remove the sharp edge.
 
-## Remaining work
+## Status
 
-1. **S1** — pin `copr-cli`.
-2. **S2** — bump the Go pin to ≥1.26.5.
-3. **A2** — stderr hint naming how the key argument was interpreted.
+**H1**, **H2**, **S1**, and **S2** are fixed. **A1** is addressed in the README's key-formats section.
 
-**H1** and **H2** are fixed. **A1** is addressed in the README's key-formats section.
+Remaining, both optional:
+
+- **A2** — a stderr hint naming how the key argument was interpreted (base64-decoded vs. literal vs. file). Would also make H1-class confusion visible to the user rather than silent.
+- **S3/S4** — sign or checksum the SBOMs; add a `mise.lock` so tools are checksum-pinned rather than only version-pinned.
