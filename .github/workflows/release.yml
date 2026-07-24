@@ -706,8 +706,15 @@ jobs:
           # arbitrary code next to a credential that publishes RPMs. Bump
           # deliberately. Transitive dependencies remain resolved by pip;
           # pinning those too needs a hash-locked requirements file.
+          #
+          # rich is installed explicitly because copr-cli 2.5 imports it
+          # (copr_cli/main.py) without declaring it, so the entry point fails
+          # with ModuleNotFoundError on a clean install. Drop it once upstream
+          # declares the dependency.
           python3 -m venv "$RUNNER_TEMP/copr-venv"
-          "$RUNNER_TEMP/copr-venv/bin/pip" install --quiet 'copr-cli==2.5'
+          "$RUNNER_TEMP/copr-venv/bin/pip" install --quiet 'copr-cli==2.5' 'rich==15.0.0'
+          # Fail here rather than after authenticating if the CLI cannot start.
+          "$RUNNER_TEMP/copr-venv/bin/copr-cli" --help >/dev/null
           mkdir -p ~/.config
           printf '%s' "$COPR_CONFIG" | base64 -d > ~/.config/copr
           chmod 600 ~/.config/copr
