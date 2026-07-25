@@ -446,6 +446,8 @@ func TestGoReleaserSupplyChainInvariants(t *testing.T) {
 // .github/workflows/release.yml.
 type releaseWorkflowStep struct {
 	Name string            `yaml:"name"`
+	ID   string            `yaml:"id"`
+	If   string            `yaml:"if"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
 	Env  map[string]string `yaml:"env"`
@@ -991,6 +993,25 @@ func TestWinGetInvariants(t *testing.T) {
 	}
 	if got := submitStep.Env["GITHUB_TOKEN"]; !strings.Contains(got, "WINGET_TOKEN") {
 		t.Errorf("update-winget must authenticate with the WINGET_TOKEN secret, got %q", got)
+	}
+
+	// The first WebCodr.jwtd submission is moderated out of band, and komac
+	// update has no base manifest until it merges. A guard step checks whether
+	// the package is already in winget-pkgs and gates the submission on it, so a
+	// release cut during the first-submission window neither fails the job nor
+	// opens a duplicate "New package" PR.
+	guardStep := findStepContainingRun(wingetJob.Steps, "manifests/w/WebCodr/jwtd")
+	if guardStep == nil {
+		t.Fatal("update-winget must check whether WebCodr.jwtd exists in winget-pkgs before submitting")
+	}
+	if guardStep.ID == "" {
+		t.Fatal("the winget-pkgs existence check must have an id so later steps can gate on its output")
+	}
+	gate := "steps." + guardStep.ID + ".outputs.exists == 'true'"
+	for _, step := range []*releaseWorkflowStep{installStep, submitStep} {
+		if !strings.Contains(step.If, gate) {
+			t.Errorf("update-winget step %q must be gated on %q so it is skipped until the first submission merges, got if=%q", step.Name, gate, step.If)
+		}
 	}
 }
 

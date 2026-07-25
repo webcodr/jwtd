@@ -774,11 +774,31 @@ jobs:
     if: needs.validate.outputs.prerelease == 'false'
     runs-on: ubuntu-latest
     steps:
+      - name: Check whether WebCodr.jwtd is already in winget-pkgs
+        id: pkg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The WinGet update needs a merged base manifest as its template and
+          # must not open a second "New package" PR while the first submission
+          # is still under moderation. If WebCodr.jwtd is not yet in winget-pkgs
+          # main, skip the WinGet update: the first submission is reviewed out
+          # of band, and normal automation resumes on its own once it merges.
+          # Every other release channel is an independent job and is unaffected.
+          if gh api repos/microsoft/winget-pkgs/contents/manifests/w/WebCodr/jwtd >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "WebCodr.jwtd found in winget-pkgs; proceeding with the WinGet update."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::WebCodr.jwtd is not yet in winget-pkgs main; skipping the WinGet submission until the first-submission PR merges."
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.pkg.outputs.exists == 'true'
         with:
           name: jwtd-release-assets
           path: artifacts
       - name: Verify installers against checksums
+        if: steps.pkg.outputs.exists == 'true'
         run: |
           # Confirm the published windows zips (and every other asset) match the
           # signed checksums.txt before komac builds the manifest from the same
@@ -786,6 +806,7 @@ jobs:
           # release verified. Release assets are immutable once published.
           (cd artifacts && sha256sum -c checksums.txt)
       - name: Install komac
+        if: steps.pkg.outputs.exists == 'true'
         env:
           KOMAC_VERSION: 2.16.0
           KOMAC_SHA256: 7d2707fa6210f2789a3702de49fbd150b736dbf426ee0b9bc8e098736f9fd82d
@@ -799,6 +820,7 @@ jobs:
           tar -xzf "$asset" komac
           install -Dm755 komac "$RUNNER_TEMP/bin/komac"
       - name: Submit to winget-pkgs
+        if: steps.pkg.outputs.exists == 'true'
         env:
           # A fine-grained/classic PAT that can push to the webcodr/winget-pkgs
           # fork and open a PR against microsoft/winget-pkgs. winget-pkgs PRs are
