@@ -12,6 +12,7 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 - JWK Set key selection by the token's `kid` header (falls back to the first key when the token has none)
 - Supports both private and public keys (private keys are auto-converted for verification)
 - Invalid signatures produce a nonzero exit status when `--key`/`JWTD_KEY` is used
+- Opt-in claim validation with `--verify-claims` (exp/nbf) plus `--aud`/`--iss` assertions, exiting nonzero when a check fails — independent of the signature check
 - Nested token detection: JWT-inside-JWE and JWE-inside-JWE are decoded recursively
 - `JWTD_KEY` environment variable for default key configuration
 - Syntax-highlighted JSON output with a consistent color scheme
@@ -172,6 +173,22 @@ jwtd --key /path/to/public-key.pem eyJhbGciOiJSUzI1NiIs...
 
 An invalid signature prints `Signature: INVALID` and exits with a nonzero status. Claim validity, including expiry, is not part of this cryptographic signature check.
 
+### Validate claims
+
+By default, claim validity never affects the exit code — expiry is shown only as a display annotation. Opt in to enforcement with `--verify-claims`, which validates the temporal claims (`exp`, `nbf`) and exits nonzero when the token is expired or not yet valid:
+
+```sh
+jwtd --verify-claims eyJhbGciOiJIUzI1NiIs...
+```
+
+Add `--aud` and/or `--iss` to also require a specific audience or issuer; either flag implies claim validation, so the temporal checks run too:
+
+```sh
+jwtd --aud my-api --iss https://issuer.example eyJhbGciOiJIUzI1NiIs...
+```
+
+The result is printed as a `Claims: VALID` / `Claims: INVALID` section (with the reason), and reported as `claimsValid` under `--json`. Claim validation is independent of the signature: it runs with or without `--key`, and when both are used the command exits nonzero if either check fails. A token with no `exp` is not treated as expired. The clock matches the displayed `expired` / `not yet valid` annotations, with no leeway. Claim validation applies to JWTs only; it is skipped (with a note) for JWEs.
+
 ### Key formats
 
 The `--key` flag accepts:
@@ -207,7 +224,7 @@ jwtd --json eyJhbGciOiJIUzI1NiIs...
 jwtd --json --key key.pem eyJhbGciOiJSUzI1NiIs... | jq .signatureValid
 ```
 
-A JWT is emitted as `{ "header", "payload", "signature" }`, plus `"signatureValid"` when a key is provided. Timestamps stay as their raw numeric claim values (no RFC3339 conversion) so consumers can do their own date math, and numbers are preserved exactly. A JWE is emitted as `{ "protectedHeader", ... }` with either the encrypted part sizes (no key) or the decrypted payload (with a key). An invalid signature still prints the JSON and then exits nonzero.
+A JWT is emitted as `{ "header", "payload", "signature" }`, plus `"signatureValid"` when a key is provided and `"claimsValid"` when claim validation is requested. Timestamps stay as their raw numeric claim values (no RFC3339 conversion) so consumers can do their own date math, and numbers are preserved exactly. A JWE is emitted as `{ "protectedHeader", ... }` with either the encrypted part sizes (no key) or the decrypted payload (with a key). An invalid signature still prints the JSON and then exits nonzero.
 
 ### Color
 
