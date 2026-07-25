@@ -617,6 +617,30 @@ scoop install jwtd</code></pre>
           <article>
             <div class="usage-number">03</div>
             <div class="usage-copy">
+              <h3>Validate claims</h3>
+              <p>
+                Add <code>--verify-claims</code> to enforce <code>exp</code>
+                and <code>nbf</code>, exiting nonzero when the token is expired
+                or not yet valid. Add <code>--aud</code> or <code>--iss</code>
+                to also require an audience or issuer.
+              </p>
+            </div>
+            <div class="command-block">
+              <pre><code id="verify-claims-command">jwtd --verify-claims --aud my-api eyJhbGciOiJIUzI1NiIs...</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="verify-claims-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+          </article>
+          <article>
+            <div class="usage-number">04</div>
+            <div class="usage-copy">
               <h3>Decrypt a JWE</h3>
               <p>
                 Compact JWEs are detected automatically. Provide a private key
@@ -638,7 +662,7 @@ scoop install jwtd</code></pre>
             </div>
           </article>
           <article>
-            <div class="usage-number">04</div>
+            <div class="usage-number">05</div>
             <div class="usage-copy">
               <h3>Pipe a token from stdin</h3>
               <p>
@@ -660,7 +684,7 @@ scoop install jwtd</code></pre>
             </div>
           </article>
           <article>
-            <div class="usage-number">05</div>
+            <div class="usage-number">06</div>
             <div class="usage-copy">
               <h3>Supply the key from the environment</h3>
               <p>
@@ -683,7 +707,7 @@ scoop install jwtd</code></pre>
             </div>
           </article>
           <article>
-            <div class="usage-number">06</div>
+            <div class="usage-number">07</div>
             <div class="usage-copy">
               <h3>Use the interactive prompt</h3>
               <p>
@@ -705,7 +729,7 @@ scoop install jwtd</code></pre>
             </div>
           </article>
           <article>
-            <div class="usage-number">07</div>
+            <div class="usage-number">08</div>
             <div class="usage-copy">
               <h3>Verify with a raw HMAC secret</h3>
               <p>
@@ -728,7 +752,7 @@ scoop install jwtd</code></pre>
             </div>
           </article>
           <article>
-            <div class="usage-number">08</div>
+            <div class="usage-number">09</div>
             <div class="usage-copy">
               <h3>Emit machine-readable JSON</h3>
               <p>
@@ -751,7 +775,7 @@ scoop install jwtd</code></pre>
             </div>
           </article>
           <article>
-            <div class="usage-number">09</div>
+            <div class="usage-number">10</div>
             <div class="usage-copy">
               <h3>Control color output</h3>
               <p>
