@@ -2,16 +2,16 @@
 
 ## Project Overview
 
-jwtd is a CLI tool written in Go that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web Encryption (JWE) tokens with syntax-highlighted JSON output. It can also verify JWS signatures and decrypt JWEs when given a key via `--key`/`-k` or the `JWTD_KEY` environment variable. `--json` emits a machine-readable object instead of the colored sections, and `--color=auto|always|never` overrides TTY-based color detection.
+jwtd is a CLI tool written in Go that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web Encryption (JWE) tokens with syntax-highlighted JSON output. It can also verify JWS signatures and decrypt JWEs when given a key via `--key`/`-k` or the `JWTD_KEY` environment variable. `--verify-claims` (plus `--aud`/`--iss`) opts into RFC 7519 claim validation with a nonzero exit on failure, independent of the signature check. `--json` emits a machine-readable object instead of the colored sections, and `--color=auto|always|never` overrides TTY-based color detection.
 
 ## Architecture
 
-All functionality lives in package `main`, split across five source files:
+All functionality lives in package `main`, split across six source files:
 
 ### `main.go` - CLI, token input, and the JWT/JWS path
 
 - `main()` / `newRootCommand()` - Build and execute the Cobra root command with the `--key`/`-k`, `--json`, and `--color` flags; suppress Cobra's automatic usage/error output so runtime errors are rendered once, while invalid-signature details are not duplicated
-- `run()` / `readToken()` - Resolves the token from arguments, stdin pipe, or interactive readline prompt; falls back to `JWTD_KEY` when `--key` is not set; applies the color mode, then dispatches to the JWT/JWE handler or, under `--json`, to the JSON handler
+- `run()` / `readToken()` / `decodeJWTHuman()` - Resolves the token from arguments, stdin pipe, or interactive readline prompt; falls back to `JWTD_KEY` when `--key` is not set; applies the color mode, then dispatches to the JWT/JWE handler or, under `--json`, to the JSON handler. `decodeJWTHuman` wraps `decodeAndPrint` and, when claim validation was requested, prints a Claims section after it; both the signature and claim checks run so their sections show together, and the command exits nonzero if either fails (the signature verdict takes precedence for the returned sentinel). Claim flags on a JWE emit a stderr note and are otherwise skipped
 - `applyColorMode()` - Maps `--color` onto `fatih/color`'s global `NoColor`: `auto` leaves TTY/`NO_COLOR` detection untouched, `always` forces color, `never` disables it; `--json` always forces color off
 - `headerKID()` - Extracts the token's `kid` header (or `""`) so JWK Set verification/decryption selects the key the token names
 - `printKeyInterpretation()` - Notes on stderr how a key argument was read when it was not read as a file, so precedence-based detection cannot silently take a value the user meant one way and use it another; adds the process-list exposure warning for `--key` values, which `JWTD_KEY` does not carry (`/proc/<pid>/cmdline` is world-readable, `/proc/<pid>/environ` is owner-only). Diagnostics go to stderr so stdout stays parseable
@@ -25,6 +25,14 @@ All functionality lives in package `main`, split across five source files:
 
 - `decodeJWTJSON()` / `decodeJWEJSON()` - Emit one JSON object per token. A JWT carries `header`, `payload`, `signature`, and (with a key) `signatureValid`; an invalid signature still writes the JSON and then returns `errInvalidSignature` for the exit code. A JWE carries `protectedHeader` plus either encrypted part sizes (no key) or `decryptedPayload` (with a key)
 - `jsonPayloadValue()` / `base64URLLen()` / `writeJSON()` - Decode a decrypted payload as structured JSON when possible (else a string); report part sizes; and encode with `encoding/json`, which preserves `json.Number` exactly and escapes control characters including ESC. Timestamps are left as raw numeric claim values here — `formatTimestamps` is intentionally not applied — so consumers do their own date math
+
+### `claims.go` - Opt-in claim validation
+
+- `claimChecks` / `requested()` - Holds the `--verify-claims`, `--aud`, and `--iss` flag values. The zero value requests nothing, so the default stays decode-only and the exit code keeps reflecting the signature alone; `requested()` treats an expected audience or issuer as implying validation, so those flags work without also passing `--verify-claims`
+- `validateClaimsSet()` - Runs the requested RFC 7519 checks against the already-parsed claims via `jwt.NewValidator` with `jwt.WithTimeFunc(timeNow)` (so the verdict shares the display clock and is deterministic under `pinTime`), returning `valid` plus a reason. Temporal claims (`exp`, `nbf`) that are present are always checked; an expected `aud`/`iss` is additionally required to be present and match. A missing `exp` is not treated as expired. No signature verification happens here — the human and `--json` paths share this core
+- `verifyClaims()` / `claimReason()` - `verifyClaims` parses the token, calls the core, and renders `Claims: VALID`/`INVALID` with the reason, returning the `errInvalidClaims` sentinel on failure (and a hard error on an unparseable token). `claimReason` flattens the validator's newline-joined multi-error onto one `; `-separated line so the dim reason and wrapped error stay readable
+
+**Claim validation is display-and-exit-code only, and deliberately separate from signature verification.** It performs no cryptography and runs whether or not a key is given, so `--verify-claims` on an unverified token still reports expiry — the two verdicts (`Signature:` and `Claims:`) are shown independently and either failing exits nonzero. This keeps the pre-existing invariant that a bare decode never fails on expiry intact: nothing validates claims unless a claim flag is passed.
 
 ### `jwe.go` - JWE parsing and decryption
 
@@ -132,8 +140,8 @@ JWTD_KEY=key.pem jwtd <token> # same, via environment variable
 
 ## Conventions
 
-- **Single package.** All code stays in package `main`, split across topical files (`main.go`, `jwe.go`, `keys.go`, `output.go`, `jsonout.go`).
-- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, `jsonout_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` and GoReleaser/release-workflow invariants in `workflow_test.go`. Use table-driven tests where multiple cases share the same structure.
+- **Single package.** All code stays in package `main`, split across topical files (`main.go`, `jwe.go`, `keys.go`, `output.go`, `jsonout.go`, `claims.go`).
+- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, `jsonout_test.go`, `claims_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` and GoReleaser/release-workflow invariants in `workflow_test.go`. Use table-driven tests where multiple cases share the same structure.
 - **Color scheme** is configured in `newFormatter()` via `go-prettyjson` and `fatih/color`. Colors auto-disable when stdout is not a TTY.
 - **Error handling:** Return errors up the call stack with `fmt.Errorf` wrapping (`%w`). The root command suppresses Cobra's automatic error and usage output; `main()` renders non-signature errors and exits nonzero, while invalid signatures print their own details and return `errInvalidSignature`.
 - **Formatting:** Use `gofmt`/`goimports` standard formatting. No special linter configuration.

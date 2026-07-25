@@ -19,6 +19,7 @@ type jwtJSON struct {
 	Payload        map[string]any `json:"payload"`
 	Signature      string         `json:"signature"`
 	SignatureValid *bool          `json:"signatureValid,omitempty"`
+	ClaimsValid    *bool          `json:"claimsValid,omitempty"`
 }
 
 // jweJSON is the machine-readable form of a JWE. Without a key it reports the
@@ -38,10 +39,12 @@ type jweEncrypted struct {
 }
 
 // decodeJWTJSON writes a JWT as a single JSON object. When a key is supplied the
-// signature is verified and reported in signatureValid; an invalid signature
-// still emits the JSON and then returns errInvalidSignature so the exit code
-// matches the human path.
-func decodeJWTJSON(w io.Writer, tokenStr, keyStr string) error {
+// signature is verified and reported in signatureValid; when claim validation is
+// requested the verdict is reported in claimsValid. A failing check still emits
+// the JSON and then returns a sentinel (errInvalidSignature or errInvalidClaims)
+// so the exit code matches the human path; the signature verdict takes
+// precedence when both fail, though either way the exit is nonzero.
+func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
 	token, parts, claims, err := parseUnverifiedJWT(tokenStr)
 	if err != nil {
 		return err
@@ -62,6 +65,14 @@ func decodeJWTJSON(w io.Writer, tokenStr, keyStr string) error {
 		out.SignatureValid = &valid
 		if !valid {
 			invalid = fmt.Errorf("%w: %v", errInvalidSignature, reason)
+		}
+	}
+
+	if checks.requested() {
+		valid, reason := validateClaimsSet(claims, checks)
+		out.ClaimsValid = &valid
+		if !valid && invalid == nil {
+			invalid = fmt.Errorf("%w: %s", errInvalidClaims, claimReason(reason))
 		}
 	}
 

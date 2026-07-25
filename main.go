@@ -46,11 +46,14 @@ func newRootCommand() *cobra.Command {
 	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification: a PEM/DER/JWK file or inline base64, hmac:<file> for a symmetric secret file, or raw:<secret> for a literal one (inline values are visible to other local users in the process list, so prefer a file or JWTD_KEY)")
 	rootCmd.Flags().Bool("json", false, "emit machine-readable JSON instead of colorized sections")
 	rootCmd.Flags().String("color", "auto", "colorize output: auto (color only on a TTY), always, or never")
+	rootCmd.Flags().Bool("verify-claims", false, "validate the temporal claims (exp, nbf) and exit nonzero if the token is expired or not yet valid")
+	rootCmd.Flags().String("aud", "", "require this audience in the aud claim (implies --verify-claims)")
+	rootCmd.Flags().String("iss", "", "require this issuer in the iss claim (implies --verify-claims)")
 	return rootCmd
 }
 
 func printExecutionError(w io.Writer, err error) error {
-	if errors.Is(err, errInvalidSignature) {
+	if errors.Is(err, errInvalidSignature) || errors.Is(err, errInvalidClaims) {
 		return nil
 	}
 	_, writeErr := fmt.Fprintf(w, "Error: %v\n", err)
@@ -78,19 +81,55 @@ func run(cmd *cobra.Command, args []string) error {
 		printKeyInterpretation(cmd.ErrOrStderr(), keyStr, fromFlag)
 	}
 
+	verifyClaimsFlag, _ := cmd.Flags().GetBool("verify-claims")
+	aud, _ := cmd.Flags().GetString("aud")
+	iss, _ := cmd.Flags().GetString("iss")
+	checks := claimChecks{verify: verifyClaimsFlag, audience: aud, issuer: iss}
+
 	w := cmd.OutOrStdout()
 
-	if jsonOut {
-		if isJWE(token) {
+	if isJWE(token) {
+		if checks.requested() {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Note: claim validation (--verify-claims/--aud/--iss) applies to JWTs only and is skipped for JWE.")
+		}
+		if jsonOut {
 			return decodeJWEJSON(w, token, keyStr)
 		}
-		return decodeJWTJSON(w, token, keyStr)
-	}
-
-	if isJWE(token) {
 		return decodeAndPrintJWE(w, token, keyStr)
 	}
-	return decodeAndPrint(w, token, keyStr)
+
+	if jsonOut {
+		return decodeJWTJSON(w, token, keyStr, checks)
+	}
+	return decodeJWTHuman(w, token, keyStr, checks)
+}
+
+// decodeJWTHuman prints the decoded JWT and, when claim validation was
+// requested, a Claims section after it. Both the signature check and the claim
+// check run so their sections are shown together; the command exits nonzero if
+// either fails, with the signature verdict taking precedence for the returned
+// sentinel (both are suppressed by the top-level error printer).
+func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
+	derr := decodeAndPrint(w, tokenStr, keyStr)
+	if derr != nil && !errors.Is(derr, errInvalidSignature) {
+		return derr
+	}
+
+	var cerr error
+	if checks.requested() {
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+		cerr = verifyClaims(w, tokenStr, checks)
+		if cerr != nil && !errors.Is(cerr, errInvalidClaims) {
+			return cerr
+		}
+	}
+
+	if derr != nil {
+		return derr
+	}
+	return cerr
 }
 
 // applyColorMode maps the --color flag onto fatih/color's global switch. "auto"

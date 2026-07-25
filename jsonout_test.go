@@ -16,7 +16,7 @@ import (
 func decodeJWTJSONMap(t *testing.T, token, key string) (map[string]any, error) {
 	t.Helper()
 	var buf bytes.Buffer
-	err := decodeJWTJSON(&buf, token, key)
+	err := decodeJWTJSON(&buf, token, key, claimChecks{})
 
 	var out map[string]any
 	dec := json.NewDecoder(bytes.NewReader(buf.Bytes()))
@@ -152,7 +152,7 @@ func TestDecodeJWTJSON_EscapesTerminalControls(t *testing.T) {
 	token := makeJWT(`{"alg":"HS256"}`, string(payload), "sig")
 
 	var buf bytes.Buffer
-	if err := decodeJWTJSON(&buf, token, ""); err != nil {
+	if err := decodeJWTJSON(&buf, token, "", claimChecks{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if bytes.ContainsRune(buf.Bytes(), 0x1b) {
