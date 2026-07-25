@@ -110,8 +110,8 @@ func pinTime(t *testing.T, unix int64) {
 }
 
 func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
-	// Pin now to nbf's instant: exp is in the future (not expired) and nbf is
-	// already valid, so both format without an annotation.
+	// Pin now to nbf's instant: nbf is already valid (no note) and exp is in the
+	// future, so exp carries an "expires in" note while iat/nbf are bare.
 	pinTime(t, 1516239022)
 	data := map[string]any{
 		"iat": float64(1516239022),
@@ -129,7 +129,8 @@ func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
 		t.Errorf("nbf: expected %q, got %v", expected, data["nbf"])
 	}
 
-	expectedExp := fmt.Sprintf("%s (%d)", time.Unix(1716239022, 0).UTC().Format(time.RFC3339), 1716239022)
+	// 1716239022 - 1516239022 = 200000000s -> 2314 days.
+	expectedExp := fmt.Sprintf("%s (%d, expires in 2314d)", time.Unix(1716239022, 0).UTC().Format(time.RFC3339), 1716239022)
 	if data["exp"] != expectedExp {
 		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
 	}
@@ -148,12 +149,14 @@ func TestFormatTimestamps_AnnotatesExpiredAndNotYetValid(t *testing.T) {
 	formatTimestamps(data)
 
 	exp, _ := data["exp"].(string)
-	if !strings.HasSuffix(exp, ", expired)") {
-		t.Errorf("exp should be annotated expired, got %q", exp)
+	// now=1000, exp=900 -> expired 100s ago.
+	if !strings.HasSuffix(exp, ", expired 1m ago)") {
+		t.Errorf("exp should be annotated expired with elapsed time, got %q", exp)
 	}
 	nbf, _ := data["nbf"].(string)
-	if !strings.HasSuffix(nbf, ", not yet valid)") {
-		t.Errorf("nbf should be annotated not yet valid, got %q", nbf)
+	// now=1000, nbf=1500 -> not yet valid, in 500s.
+	if !strings.HasSuffix(nbf, ", not yet valid, in 8m)") {
+		t.Errorf("nbf should be annotated not yet valid with remaining time, got %q", nbf)
 	}
 	// iat is never annotated: it has no validity meaning relative to now.
 	iat, _ := data["iat"].(string)
@@ -162,7 +165,7 @@ func TestFormatTimestamps_AnnotatesExpiredAndNotYetValid(t *testing.T) {
 	}
 }
 
-func TestFormatTimestamps_NoAnnotationWhenCurrentlyValid(t *testing.T) {
+func TestFormatTimestamps_InsideValidityWindow(t *testing.T) {
 	// now sits inside the validity window: nbf already passed, exp not reached.
 	pinTime(t, 1000)
 	data := map[string]any{
@@ -172,11 +175,23 @@ func TestFormatTimestamps_NoAnnotationWhenCurrentlyValid(t *testing.T) {
 
 	formatTimestamps(data)
 
+	// A live token is never "expired" or "not yet valid"...
 	for _, key := range []string{"exp", "nbf"} {
 		v, _ := data[key].(string)
 		if strings.Contains(v, "expired") || strings.Contains(v, "not yet valid") {
-			t.Errorf("%s should not be annotated inside the validity window, got %q", key, v)
+			t.Errorf("%s should not be flagged inside the validity window, got %q", key, v)
 		}
+	}
+	// ...but exp still shows the time remaining (1000s -> 16m), while an
+	// already-valid nbf carries no note.
+	exp, _ := data["exp"].(string)
+	if !strings.HasSuffix(exp, ", expires in 16m)") {
+		t.Errorf("exp should show time remaining, got %q", exp)
+	}
+	nbf, _ := data["nbf"].(string)
+	expectedNbf := fmt.Sprintf("%s (%d)", time.Unix(500, 0).UTC().Format(time.RFC3339), 500)
+	if nbf != expectedNbf {
+		t.Errorf("nbf should be bare when already valid: expected %q, got %q", expectedNbf, nbf)
 	}
 }
 
@@ -201,7 +216,7 @@ func TestFormatTimestamps_NonTimestampFieldsUnchanged(t *testing.T) {
 }
 
 func TestFormatTimestamps_MixedFields(t *testing.T) {
-	// Pin now before exp so it formats without an expired annotation.
+	// Pin now before exp so it formats with an "expires in" (not expired) note.
 	pinTime(t, 1600000000)
 	data := map[string]any{
 		"sub": "user123",
@@ -220,7 +235,8 @@ func TestFormatTimestamps_MixedFields(t *testing.T) {
 		t.Errorf("iat: expected %q, got %v", expectedIat, data["iat"])
 	}
 
-	expectedExp := fmt.Sprintf("%s (%d)", time.Unix(1700000000, 0).UTC().Format(time.RFC3339), 1700000000)
+	// 1700000000 - 1600000000 = 100000000s -> 1157 days.
+	expectedExp := fmt.Sprintf("%s (%d, expires in 1157d)", time.Unix(1700000000, 0).UTC().Format(time.RFC3339), 1700000000)
 	if data["exp"] != expectedExp {
 		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
 	}
@@ -352,6 +368,44 @@ func TestFormatTimestamps_FractionalFloat64(t *testing.T) {
 	const expected = "2018-01-18T01:30:22.75Z (1516239022.75)"
 	if data["iat"] != expected {
 		t.Errorf("expected %q, got %q", expected, data["iat"])
+	}
+}
+
+func TestHumanizeDuration(t *testing.T) {
+	tests := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{"sub-minute seconds", 45 * time.Second, "45s"},
+		{"zero", 0, "0s"},
+		{"minute boundary rounds down", 119 * time.Second, "1m"},
+		{"minutes", 14 * time.Minute, "14m"},
+		{"hour boundary rounds down", 119 * time.Minute, "1h"},
+		{"hours", 5 * time.Hour, "5h"},
+		{"day boundary rounds down", 47 * time.Hour, "1d"},
+		{"days", 10 * 24 * time.Hour, "10d"},
+		{"negative magnitude", -90 * time.Second, "1m"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := humanizeDuration(tt.d); got != tt.want {
+				t.Errorf("humanizeDuration(%v) = %q, want %q", tt.d, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatTimestamps_ExpiredShowsElapsed(t *testing.T) {
+	// now=5000, exp=1400 -> expired 3600s (1h) ago.
+	pinTime(t, 5000)
+	data := map[string]any{"exp": float64(1400)}
+
+	formatTimestamps(data)
+
+	exp, _ := data["exp"].(string)
+	if !strings.HasSuffix(exp, ", expired 1h ago)") {
+		t.Errorf("exp should report elapsed time since expiry, got %q", exp)
 	}
 }
 

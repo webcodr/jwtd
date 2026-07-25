@@ -152,8 +152,11 @@ func readToken(args []string) (string, error) {
 		return sanitizeToken(args[0]), nil
 	}
 
-	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
+	// A nil FileInfo (Stat failed, e.g. a closed or detached stdin) is treated
+	// as "no pipe" and falls through to the interactive prompt rather than
+	// dereferencing nil.
+	stat, err := os.Stdin.Stat()
+	if err == nil && stat != nil && (stat.Mode()&os.ModeCharDevice) == 0 {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return "", fmt.Errorf("reading stdin: %w", err)

@@ -202,23 +202,46 @@ func formatTimestamps(data map[string]any) {
 	}
 }
 
-// timestampStatus returns an informational note when a claim's time has a
-// meaning relative to now: "exp" in the past is expired, "nbf" in the future is
-// not yet valid. It is display-only and never affects signature verification or
+// timestampStatus returns an informational note describing a claim's time
+// relative to now: an "exp" is annotated with how long ago it expired or how
+// long until it does, and an "nbf" still in the future with how long until it
+// becomes valid. An "nbf" already in the past is the ordinary active state and
+// gets no note. It is display-only and never affects signature verification or
 // the exit code, which stay purely cryptographic.
 func timestampStatus(key string, t time.Time) string {
 	now := timeNow()
 	switch key {
 	case "exp":
 		if t.Before(now) {
-			return "expired"
+			return "expired " + humanizeDuration(now.Sub(t)) + " ago"
 		}
+		return "expires in " + humanizeDuration(t.Sub(now))
 	case "nbf":
 		if now.Before(t) {
-			return "not yet valid"
+			return "not yet valid, in " + humanizeDuration(t.Sub(now))
 		}
 	}
 	return ""
+}
+
+// humanizeDuration renders a non-negative approximation of d using its largest
+// whole unit (seconds, minutes, hours, or days), truncating toward zero so the
+// output is deterministic. It is meant for a compact at-a-glance annotation, not
+// exact arithmetic; the raw epoch value stays alongside it for that.
+func humanizeDuration(d time.Duration) string {
+	if d < 0 {
+		d = -d
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int64(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int64(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int64(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int64(d.Hours())/24)
+	}
 }
 
 // printSection outputs a labeled, pretty-printed JSON section.

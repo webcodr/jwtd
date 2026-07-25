@@ -16,7 +16,7 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 - `JWTD_KEY` environment variable for default key configuration
 - Syntax-highlighted JSON output with a consistent color scheme
 - Machine-readable output with `--json` for scripting and piping into tools like `jq`
-- Automatic conversion of `iat`, `exp`, and `nbf` timestamps to human-readable RFC3339 dates, with `expired` / `not yet valid` annotations
+- Automatic conversion of `iat`, `exp`, and `nbf` timestamps to human-readable RFC3339 dates, annotated with the time remaining or elapsed (`expires in 14m`, `expired 2h ago`, `not yet valid, in 5m`)
 - Accepts tokens as arguments, from stdin pipes, or via an interactive prompt
 - Colors auto-disable when output is not a TTY, or are controlled explicitly with `--color`
 - Shell completions (bash, zsh, fish) shipped in the Homebrew formula and the `.deb`/`.rpm` packages
