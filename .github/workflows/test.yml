@@ -54,13 +54,22 @@ jobs:
 
       - name: Verify GoReleaser artifact contract
         run: |
-          expected_archives=(
+          # tar.gz archives carry a Syft SBOM each; the windows zips (for WinGet)
+          # wrap the same binary as the windows tar.gz, so they are deliberately
+          # not SBOM'd separately.
+          expected_tarballs=(
             "jwtd-linux-amd64.tar.gz"
             "jwtd-linux-arm64.tar.gz"
             "jwtd-darwin-amd64.tar.gz"
             "jwtd-darwin-arm64.tar.gz"
             "jwtd-windows-amd64.tar.gz"
             "jwtd-windows-arm64.tar.gz"
+          )
+
+          expected_archives=(
+            "${expected_tarballs[@]}"
+            "jwtd-windows-amd64.zip"
+            "jwtd-windows-arm64.zip"
           )
 
           actual_archives=$(jq -r '[.[] | select(.type == "Archive") | .name] | sort | .[]' dist/artifacts.json)
@@ -79,7 +88,7 @@ jobs:
           fi
 
           expected_sboms=()
-          for archive in "${expected_archives[@]}"; do
+          for archive in "${expected_tarballs[@]}"; do
             expected_sboms+=("$archive.sbom.json")
           done
           actual_sboms=$(jq -r '[.[] | select(.type == "SBOM") | .name] | sort | .[]' dist/artifacts.json)
@@ -128,7 +137,10 @@ jobs:
               *windows*) expected_entry="jwtd.exe" ;;
               *) expected_entry="jwtd" ;;
             esac
-            entries=$(tar -tzf "dist/$archive")
+            case "$archive" in
+              *.zip) entries=$(unzip -Z1 "dist/$archive") ;;
+              *) entries=$(tar -tzf "dist/$archive") ;;
+            esac
             if [ "$entries" != "$expected_entry" ]; then
               echo "Archive $archive must contain only $expected_entry, got:" >&2
               echo "$entries" >&2

@@ -30,6 +30,25 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
+  # Windows-only build feeding the WinGet zip archive. Its settings are
+  # identical to the jwtd build, so the jwtd.exe inside the zip is byte-for-byte
+  # the same binary shipped in the windows tar.gz. Kept separate so the zip has
+  # its own archive id and Scoop can stay pinned to the tar.gz archive.
+  - id: jwtd-windows
+    main: .
+    binary: jwtd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
   - id: jwtd
@@ -37,6 +56,22 @@ archives:
       - jwtd
     formats:
       - tar.gz
+    name_template: "jwtd-{{ .Os }}-{{ .Arch }}"
+    files:
+      - none*
+    builds_info:
+      owner: root
+      group: root
+      mtime: "1970-01-01T00:00:00Z"
+  # WinGet cannot consume tar.gz, so the windows targets ship an additional zip
+  # archive. It has its own id (jwtd-windows build) so Scoop can stay pinned to
+  # the tar.gz archive above; its hash is taken from the signed checksums.txt
+  # like every other channel. Deterministic, binary-only, epoch mtime.
+  - id: jwtd-zip
+    ids:
+      - jwtd-windows
+    formats:
+      - zip
     name_template: "jwtd-{{ .Os }}-{{ .Arch }}"
     files:
       - none*
@@ -93,10 +128,16 @@ checksum:
   # byte-for-byte rerun verification of the file Cosign signs.
   ids:
     - jwtd
+    - jwtd-zip
 
 sboms:
   - id: archive
     artifacts: archive
+    # Catalog only the tar.gz archives. The windows zip wraps the same binary
+    # already covered by the windows tar.gz SBOM, so a second SBOM would be
+    # redundant; scoping here keeps one SBOM per platform/arch.
+    ids:
+      - jwtd
 
 # Signing the checksum file transitively covers every artifact it lists.
 # Keyless (OIDC) signing works in CI only; local runs use --skip=sign.
@@ -126,6 +167,8 @@ signs:
 
 scoops:
   - name: jwtd
+    # Pin to the tar.gz archive id. Windows now also produces a zip (jwtd-zip)
+    # for WinGet; without this, Scoop sees two windows archives and fails.
     ids:
       - jwtd
     repository:
