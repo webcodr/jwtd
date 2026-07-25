@@ -15,6 +15,20 @@
       content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal."
     />
     <meta property="og:url" content="https://jwtd.sh/" />
+    <meta property="og:image" content="https://jwtd.sh/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="jwtd terminal output: decode JWTs, verify JWS signatures, and decrypt JWEs"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="jwtd - JWT, JWS, and JWE inspection" />
+    <meta
+      name="twitter:description"
+      content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal."
+    />
+    <meta name="twitter:image" content="https://jwtd.sh/og.png" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests"
@@ -849,33 +863,35 @@ scoop install jwtd</code></pre>
           </p>
         </div>
         <div class="faq-list">
-          <article>
-            <h3>Does jwtd send my token anywhere?</h3>
+          <details>
+            <summary><h3>Does jwtd send my token anywhere?</h3></summary>
             <p>
               No. jwtd runs entirely on your machine and makes no network
               requests. Decoding, verification, and decryption all happen
               locally, so the secrets inside a token never leave your terminal.
             </p>
-          </article>
-          <article>
-            <h3>Does verifying a signature also check expiry?</h3>
+          </details>
+          <details>
+            <summary><h3>Does verifying a signature also check expiry?</h3></summary>
             <p>
               No. Signature verification reports only whether the cryptographic
               signature is valid. Claim checks such as expiry are kept separate,
               so an expired but authentic token still verifies. An invalid
               signature exits nonzero.
             </p>
-          </article>
-          <article>
-            <h3>Do I need a key to decode a token?</h3>
+          </details>
+          <details>
+            <summary><h3>Do I need a key to decode a token?</h3></summary>
             <p>
               No. Decoding a JWT and inspecting a JWE protected header need no
               key. A key is only required to verify a JWS signature or decrypt a
               JWE payload.
             </p>
-          </article>
-          <article>
-            <h3>How do I verify an HS256 token with a shared secret?</h3>
+          </details>
+          <details>
+            <summary>
+              <h3>How do I verify an HS256 token with a shared secret?</h3>
+            </summary>
             <p>
               Pass the secret explicitly: <code>hmac:&lt;file&gt;</code> for a
               file of secret bytes, or <code>raw:&lt;secret&gt;</code> for an
@@ -884,9 +900,9 @@ scoop install jwtd</code></pre>
               so guessing would let anyone who knows it forge a token that
               verified.
             </p>
-          </article>
-          <article>
-            <h3>Can I use an SSH public key?</h3>
+          </details>
+          <details>
+            <summary><h3>Can I use an SSH public key?</h3></summary>
             <p>
               Not directly. OpenSSH keys,
               <code>authorized_keys</code> entries, and RFC 4716 armor are
@@ -895,7 +911,7 @@ scoop install jwtd</code></pre>
               <code>ssh-keygen -e -m PKCS8 -f &lt;key&gt;</code>, then pass the
               result.
             </p>
-          </article>
+          </details>
         </div>
       </section>
     </main>

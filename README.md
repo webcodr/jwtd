@@ -9,14 +9,17 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 - JWS signature verification with `--key` flag
 - Supports RSA, ECDSA, Ed25519, and HMAC signature algorithms
 - Key loading from PEM/DER keys, X.509 certificates, JWK/JWK Sets, or base64-encoded input
+- JWK Set key selection by the token's `kid` header (falls back to the first key when the token has none)
 - Supports both private and public keys (private keys are auto-converted for verification)
 - Invalid signatures produce a nonzero exit status when `--key`/`JWTD_KEY` is used
 - Nested token detection: JWT-inside-JWE and JWE-inside-JWE are decoded recursively
 - `JWTD_KEY` environment variable for default key configuration
 - Syntax-highlighted JSON output with a consistent color scheme
-- Automatic conversion of `iat`, `exp`, and `nbf` timestamps to human-readable RFC3339 dates
+- Machine-readable output with `--json` for scripting and piping into tools like `jq`
+- Automatic conversion of `iat`, `exp`, and `nbf` timestamps to human-readable RFC3339 dates, with `expired` / `not yet valid` annotations
 - Accepts tokens as arguments, from stdin pipes, or via an interactive prompt
-- Colors auto-disable when output is not a TTY
+- Colors auto-disable when output is not a TTY, or are controlled explicitly with `--color`
+- Shell completions (bash, zsh, fish) shipped in the Homebrew formula and the `.deb`/`.rpm` packages
 
 ## Installation
 
@@ -165,7 +168,7 @@ The `--key` flag accepts:
 
 - **PEM files**: RSA, EC, or Ed25519 keys (private or public), and X.509 certificates
 - **DER files**: PKCS#1, PKCS#8, SEC 1, or PKIX encoded keys, and X.509 certificates
-- **JWK files**: Single JSON Web Key or JWK Set (first key is used)
+- **JWK files**: Single JSON Web Key or JWK Set (the entry matching the token's `kid` is used; the first key when the token has no `kid`)
 - **Base64 strings**: Base64 or base64url encoded key material (PEM, DER, certificate, or JWK)
 - **Symmetric key files**: `hmac:<file>` uses the file's bytes as a symmetric key
 - **Literal secrets**: `raw:<secret>` uses the text after the prefix as a symmetric key verbatim
@@ -184,6 +187,28 @@ jwtd --key hmac:/path/to/secret.key eyJhbGciOiJIUzI1NiIs...
 Inline key material is visible to other local users through the process list and lands in shell history. Prefer a key file or `JWTD_KEY` for anything sensitive.
 
 When a key argument is not an existing file, jwtd notes on stderr which reading it applied — literal secret or base64-decoded — so a value meant one way is never silently used another. Key files are the expected case and stay silent. The note goes to stderr, so piped stdout is unaffected.
+
+### Machine-readable output
+
+Use `--json` to emit a single JSON object instead of the colored sections, for scripting or piping into tools like `jq`:
+
+```sh
+jwtd --json eyJhbGciOiJIUzI1NiIs...
+jwtd --json --key key.pem eyJhbGciOiJSUzI1NiIs... | jq .signatureValid
+```
+
+A JWT is emitted as `{ "header", "payload", "signature" }`, plus `"signatureValid"` when a key is provided. Timestamps stay as their raw numeric claim values (no RFC3339 conversion) so consumers can do their own date math, and numbers are preserved exactly. A JWE is emitted as `{ "protectedHeader", ... }` with either the encrypted part sizes (no key) or the decrypted payload (with a key). An invalid signature still prints the JSON and then exits nonzero.
+
+### Color
+
+Colors auto-disable when stdout is not a TTY. Override this with `--color`:
+
+```sh
+jwtd --color=always eyJhbGciOiJIUzI1NiIs... | less -R   # force color through a pager
+jwtd --color=never  eyJhbGciOiJIUzI1NiIs...             # disable color
+```
+
+`--color` accepts `auto` (the default), `always`, or `never`. `--json` output is always plain, regardless of `--color`.
 
 ### Environment variable
 

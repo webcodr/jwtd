@@ -64,6 +64,9 @@ func TestWebsiteContentContract(t *testing.T) {
 		"local script":     `src="/script.js"`,
 		"local favicon":    `href="/favicon.svg"`,
 		"structured data":  `<script type="application/ld+json">`,
+		"Open Graph image": `<meta property="og:image" content="https://jwtd.sh/og.png">`,
+		"Twitter card":     `<meta name="twitter:card" content="summary_large_image">`,
+		"FAQ accordion":    `<summary><h3>Does jwtd send my token anywhere?</h3></summary>`,
 		"release version":  `<p class="panel-kicker">Latest release: <a href="https://github.com/webcodr/jwtd/releases/latest">VERSION</a></p>`,
 		"install controls": `data-install-tabs`,
 		"install methods":  `data-install-method="macos"`,
@@ -110,7 +113,7 @@ func TestWebsiteContentContract(t *testing.T) {
 		}
 	}
 
-	for _, asset := range []string{"styles.css", "script.js", "favicon.svg", "robots.txt", "sitemap.xml"} {
+	for _, asset := range []string{"styles.css", "script.js", "favicon.svg", "robots.txt", "sitemap.xml", "og.png"} {
 		if _, err := os.Stat(filepath.Join("site", asset)); err != nil {
 			t.Errorf("local asset site/%s must exist: %v", asset, err)
 		}

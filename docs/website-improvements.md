@@ -7,11 +7,12 @@ content contract in `site_test.go`. Suggestions below are ordered by impact.
 
 ## Functional issues worth fixing
 
-> Status: items 1–5 and 7–9 are implemented (script.js hash handling +
-> OS-aware hero command, combined curl/install snippets in the Linux panel,
-> tabpanel `tabindex`, outside-click close for the mobile nav, JSON-LD
-> structured data, robots.txt/sitemap.xml, deploy-time release version).
-> Remaining: 6 (og:image), 10–14.
+> Status: items 1–10 are implemented. Item 6 shipped a static `og.png`
+> (1200×630 Tokyo Night terminal mockup) with `og:image` and
+> `summary_large_image` Twitter card meta; item 10 converted the FAQ to native
+> `<details>`/`<summary>`. `sitemap.xml` also gained a `<lastmod>`.
+> Remaining: 11 (favicon.ico fallback), 12 (light theme), 13–14 (bigger swings),
+> and the clickjacking comment under the security note.
 
 ### 1. Install tabs ignore the URL hash
 

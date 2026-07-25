@@ -1,6 +1,7 @@
 jwtd
 .idea/
 dist/
+completions/
 .worktrees/
 result
 result-*

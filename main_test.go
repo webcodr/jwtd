@@ -290,8 +290,10 @@ func TestDecodeAndPrint_TimestampsFormatted(t *testing.T) {
 	if !strings.Contains(plain, "(1516239022)") {
 		t.Error("output missing original iat/nbf epoch value")
 	}
-	if !strings.Contains(plain, "(1716239022)") {
-		t.Error("output missing original exp epoch value")
+	// exp is in the past, so it carries the expired annotation alongside the
+	// original epoch value.
+	if !strings.Contains(plain, "(1716239022, expired)") {
+		t.Error("output missing original exp epoch value with expired annotation")
 	}
 }
 
@@ -475,6 +477,51 @@ func TestVerifySignature_RejectsTrailingJWTClaimsData(t *testing.T) {
 				t.Errorf("malformed claims reported an invalid signature:\n%s", output)
 			}
 		})
+	}
+}
+
+// A JWK Set commonly carries several rotated keys. jwtd must verify against the
+// entry named by the token's kid header, not blindly against the first key.
+func TestVerifySignature_JWKSetSelectsKeyByKID(t *testing.T) {
+	path, _, priv2 := writeJWKSet(t) // entries key-1, key-2
+
+	// Sign with key-2's private key and name it in the header, so verifying
+	// against the set only succeeds if kid selection picks the second entry.
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": "kid-test"})
+	token.Header["kid"] = "key-2"
+	signed, err := token.SignedString(priv2)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := verifySignature(&buf, signed, path); err != nil {
+		t.Fatalf("expected valid signature via kid selection, got: %v", err)
+	}
+	if output := stripANSI(buf.String()); !strings.Contains(output, "Signature: VALID") {
+		t.Errorf("kid-selected verification did not report VALID:\n%s", output)
+	}
+}
+
+// A kid that names no entry in the set must fail closed with a clear error
+// rather than silently verifying against some other key.
+func TestVerifySignature_JWKSetUnknownKIDFails(t *testing.T) {
+	path, _, priv2 := writeJWKSet(t)
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": "kid-test"})
+	token.Header["kid"] = "key-99"
+	signed, err := token.SignedString(priv2)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+
+	var buf bytes.Buffer
+	err = verifySignature(&buf, signed, path)
+	if err == nil {
+		t.Fatal("expected an error when the token's kid matches no JWK Set entry")
+	}
+	if !strings.Contains(err.Error(), "key-99") {
+		t.Errorf("error should name the unmatched kid, got: %v", err)
 	}
 }
 

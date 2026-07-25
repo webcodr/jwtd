@@ -533,6 +533,98 @@ func TestLoadKey_JWKSetFirstKey(t *testing.T) {
 	}
 }
 
+// writeJWKSet marshals a two-key RSA JWK Set to a temp file and returns the
+// path together with both private keys, so tests can assert which entry a kid
+// selects.
+func writeJWKSet(t *testing.T) (path string, priv1, priv2 *rsa.PrivateKey) {
+	t.Helper()
+	priv1 = generateRSAKey(t)
+	priv2 = generateRSAKey(t)
+	jwks := jose.JSONWebKeySet{
+		Keys: []jose.JSONWebKey{
+			{Key: &priv1.PublicKey, KeyID: "key-1"},
+			{Key: &priv2.PublicKey, KeyID: "key-2"},
+		},
+	}
+	data, err := json.Marshal(jwks)
+	if err != nil {
+		t.Fatalf("marshaling JWK Set: %v", err)
+	}
+	path = filepath.Join(t.TempDir(), "jwks.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("writing JWK Set file: %v", err)
+	}
+	return path, priv1, priv2
+}
+
+func TestLoadKeyForKID_SelectsMatchingSetEntry(t *testing.T) {
+	path, priv1, priv2 := writeJWKSet(t)
+
+	loaded, err := loadKeyForKID(path, "key-2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rsaPub, ok := loaded.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+	if rsaPub.N.Cmp(priv2.PublicKey.N) != 0 {
+		t.Error("kid \"key-2\" did not select the second key in the JWK Set")
+	}
+	if rsaPub.N.Cmp(priv1.PublicKey.N) == 0 {
+		t.Error("kid selection returned the first key instead of the requested one")
+	}
+}
+
+func TestLoadKeyForKID_EmptyKIDUsesFirstKey(t *testing.T) {
+	path, priv1, _ := writeJWKSet(t)
+
+	loaded, err := loadKeyForKID(path, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rsaPub, ok := loaded.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+	if rsaPub.N.Cmp(priv1.PublicKey.N) != 0 {
+		t.Error("empty kid must fall back to the first key in the JWK Set")
+	}
+}
+
+func TestLoadKeyForKID_UnknownKIDFailsClosed(t *testing.T) {
+	path, _, _ := writeJWKSet(t)
+
+	if _, err := loadKeyForKID(path, "no-such-kid"); err == nil {
+		t.Fatal("expected an error when no JWK Set entry matches the kid")
+	} else if !strings.Contains(err.Error(), "no-such-kid") {
+		t.Errorf("error should name the unmatched kid, got %v", err)
+	}
+}
+
+// A single JWK is returned regardless of the token's kid: the historical
+// behavior is preserved and verification fails naturally on a genuine mismatch.
+func TestLoadKeyForKID_SingleJWKIgnoresKID(t *testing.T) {
+	priv := generateRSAKey(t)
+	jwk := jose.JSONWebKey{Key: &priv.PublicKey, KeyID: "the-only-key"}
+	data, err := json.Marshal(jwk)
+	if err != nil {
+		t.Fatalf("marshaling JWK: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "jwk.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("writing JWK file: %v", err)
+	}
+
+	loaded, err := loadKeyForKID(path, "some-other-kid")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := loaded.(*rsa.PublicKey); !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", loaded)
+	}
+}
+
 func TestClassifyKeyArg(t *testing.T) {
 	keyPath := writeTextKeyFile(t, "secret.txt", "a-symmetric-secret")
 

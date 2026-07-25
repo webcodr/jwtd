@@ -44,6 +44,8 @@ func newRootCommand() *cobra.Command {
 	}
 
 	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification: a PEM/DER/JWK file or inline base64, hmac:<file> for a symmetric secret file, or raw:<secret> for a literal one (inline values are visible to other local users in the process list, so prefer a file or JWTD_KEY)")
+	rootCmd.Flags().Bool("json", false, "emit machine-readable JSON instead of colorized sections")
+	rootCmd.Flags().String("color", "auto", "colorize output: auto (color only on a TTY), always, or never")
 	return rootCmd
 }
 
@@ -56,6 +58,12 @@ func printExecutionError(w io.Writer, err error) error {
 }
 
 func run(cmd *cobra.Command, args []string) error {
+	jsonOut, _ := cmd.Flags().GetBool("json")
+	colorMode, _ := cmd.Flags().GetString("color")
+	if err := applyColorMode(colorMode, jsonOut); err != nil {
+		return err
+	}
+
 	token, err := readToken(args)
 	if err != nil {
 		return err
@@ -72,10 +80,38 @@ func run(cmd *cobra.Command, args []string) error {
 
 	w := cmd.OutOrStdout()
 
+	if jsonOut {
+		if isJWE(token) {
+			return decodeJWEJSON(w, token, keyStr)
+		}
+		return decodeJWTJSON(w, token, keyStr)
+	}
+
 	if isJWE(token) {
 		return decodeAndPrintJWE(w, token, keyStr)
 	}
 	return decodeAndPrint(w, token, keyStr)
+}
+
+// applyColorMode maps the --color flag onto fatih/color's global switch. "auto"
+// leaves its default TTY and NO_COLOR detection untouched; "always" forces
+// color even when piped; "never" disables it. --json output is plain JSON, so
+// color is always off there regardless of the flag.
+func applyColorMode(mode string, jsonOut bool) error {
+	if jsonOut {
+		color.NoColor = true
+		return nil
+	}
+	switch mode {
+	case "auto":
+	case "always":
+		color.NoColor = false
+	case "never":
+		color.NoColor = true
+	default:
+		return fmt.Errorf("invalid --color value %q: use auto, always, or never", mode)
+	}
+	return nil
 }
 
 // printKeyInterpretation notes on stderr how a key argument was read when it
@@ -233,16 +269,43 @@ func parseUnverifiedJWT(tokenStr string) (*jwt.Token, []string, jwt.MapClaims, e
 
 // verifySignature verifies a JWT signature using the provided key and prints the result.
 func verifySignature(w io.Writer, tokenStr, keyStr string) error {
-	key, err := loadKey(keyStr)
+	valid, reason, err := verifyJWTSignature(tokenStr, keyStr)
 	if err != nil {
-		return fmt.Errorf("signature verification: error loading key: %w", err)
+		return fmt.Errorf("signature verification: %w", err)
+	}
+
+	if !valid {
+		if _, werr := color.New(color.FgRed, color.Bold).Fprintln(w, "Signature: INVALID"); werr != nil {
+			return werr
+		}
+		if _, werr := dimColor.Fprintf(w, "  %v\n", reason); werr != nil {
+			return werr
+		}
+		return fmt.Errorf("%w: %v", errInvalidSignature, reason)
+	}
+	_, werr := color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
+	return werr
+}
+
+// verifyJWTSignature performs the cryptographic signature check and reports the
+// outcome without printing anything, so both the human and --json paths share
+// one verification. It returns valid=true on success; valid=false with a
+// non-nil reason for a genuinely invalid signature; and a non-nil err only for
+// hard failures (unparseable token, unusable key) that are not a verdict on the
+// signature itself.
+func verifyJWTSignature(tokenStr, keyStr string) (valid bool, reason error, err error) {
+	token, _, _, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return false, nil, err
+	}
+
+	key, err := loadKeyForKID(keyStr, headerKID(token.Header))
+	if err != nil {
+		return false, nil, fmt.Errorf("error loading key: %w", err)
 	}
 
 	// Extract the public key from private keys for verification.
 	key = publicKeyForVerification(key)
-	if _, _, _, err := parseUnverifiedJWT(tokenStr); err != nil {
-		return fmt.Errorf("signature verification: %w", err)
-	}
 
 	// Claims validation is disabled so the result reflects only the
 	// cryptographic signature, not token expiry. Accepted algorithms are
@@ -253,21 +316,21 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 		opts = append(opts, jwt.WithValidMethods(methods))
 	}
 	parser := jwt.NewParser(opts...)
-	_, err = parser.Parse(tokenStr, func(token *jwt.Token) (any, error) {
+	if _, perr := parser.Parse(tokenStr, func(*jwt.Token) (any, error) {
 		return key, nil
-	})
-
-	if err != nil {
-		if _, werr := color.New(color.FgRed, color.Bold).Fprintln(w, "Signature: INVALID"); werr != nil {
-			return werr
-		}
-		if _, werr := dimColor.Fprintf(w, "  %v\n", err); werr != nil {
-			return werr
-		}
-		return fmt.Errorf("%w: %v", errInvalidSignature, err)
+	}); perr != nil {
+		return false, perr, nil
 	}
-	_, werr := color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
-	return werr
+	return true, nil, nil
+}
+
+// headerKID returns the token's "kid" header as a string, or "" when it is
+// absent or not a string. It selects the matching key from a JWK Set.
+func headerKID(header map[string]any) string {
+	if kid, ok := header["kid"].(string); ok {
+		return kid
+	}
+	return ""
 }
 
 // validMethodsForKey returns the JWS algorithm names compatible with the

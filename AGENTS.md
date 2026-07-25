@@ -2,22 +2,29 @@
 
 ## Project Overview
 
-jwtd is a CLI tool written in Go that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web Encryption (JWE) tokens with syntax-highlighted JSON output. It can also verify JWS signatures and decrypt JWEs when given a key via `--key`/`-k` or the `JWTD_KEY` environment variable.
+jwtd is a CLI tool written in Go that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web Encryption (JWE) tokens with syntax-highlighted JSON output. It can also verify JWS signatures and decrypt JWEs when given a key via `--key`/`-k` or the `JWTD_KEY` environment variable. `--json` emits a machine-readable object instead of the colored sections, and `--color=auto|always|never` overrides TTY-based color detection.
 
 ## Architecture
 
-All functionality lives in package `main`, split across four source files:
+All functionality lives in package `main`, split across five source files:
 
 ### `main.go` - CLI, token input, and the JWT/JWS path
 
-- `main()` / `newRootCommand()` - Build and execute the Cobra root command with the `--key`/`-k` flag; suppress Cobra's automatic usage/error output so runtime errors are rendered once, while invalid-signature details are not duplicated
-- `run()` / `readToken()` - Resolves the token from arguments, stdin pipe, or interactive readline prompt; falls back to `JWTD_KEY` when `--key` is not set; dispatches to JWT or JWE handling
+- `main()` / `newRootCommand()` - Build and execute the Cobra root command with the `--key`/`-k`, `--json`, and `--color` flags; suppress Cobra's automatic usage/error output so runtime errors are rendered once, while invalid-signature details are not duplicated
+- `run()` / `readToken()` - Resolves the token from arguments, stdin pipe, or interactive readline prompt; falls back to `JWTD_KEY` when `--key` is not set; applies the color mode, then dispatches to the JWT/JWE handler or, under `--json`, to the JSON handler
+- `applyColorMode()` - Maps `--color` onto `fatih/color`'s global `NoColor`: `auto` leaves TTY/`NO_COLOR` detection untouched, `always` forces color, `never` disables it; `--json` always forces color off
+- `headerKID()` - Extracts the token's `kid` header (or `""`) so JWK Set verification/decryption selects the key the token names
 - `printKeyInterpretation()` - Notes on stderr how a key argument was read when it was not read as a file, so precedence-based detection cannot silently take a value the user meant one way and use it another; adds the process-list exposure warning for `--key` values, which `JWTD_KEY` does not carry (`/proc/<pid>/cmdline` is world-readable, `/proc/<pid>/environ` is owner-only). Diagnostics go to stderr so stdout stays parseable
 - `readInteractive()` - Prompts for a token interactively using `chzyer/readline`
 - `decodeAndPrint()` - Parses the JWT with `golang-jwt/jwt` (`ParseUnverified`) and orchestrates output; verifies the signature when a key is provided
 - `parseUnverifiedJWT()` / `decodeJSON()` - Strictly decode the header, claims, and other displayed JSON with exact `json.Number` values and reject malformed or trailing JSON data
-- `verifySignature()` - Verifies a JWS signature with `jwt.WithoutClaimsValidation()` so the result reflects only the cryptographic signature, not expiry; prints `Signature: VALID`/`INVALID` and returns an `errInvalidSignature` sentinel on failure so the CLI exits nonzero
+- `verifyJWTSignature()` / `verifySignature()` - `verifyJWTSignature` does the cryptographic check without printing, with `jwt.WithoutClaimsValidation()` so the result reflects only the signature, not expiry; it returns `valid`, an invalid-signature `reason`, and a separate hard `err` (unparseable token/unusable key). `verifySignature` renders `Signature: VALID`/`INVALID` from it and returns the `errInvalidSignature` sentinel on failure so the CLI exits nonzero; the `--json` path reuses the same core
 - `publicKeyForVerification()` - Extracts the public key from RSA/ECDSA/Ed25519 private keys
+
+### `jsonout.go` - Machine-readable `--json` output
+
+- `decodeJWTJSON()` / `decodeJWEJSON()` - Emit one JSON object per token. A JWT carries `header`, `payload`, `signature`, and (with a key) `signatureValid`; an invalid signature still writes the JSON and then returns `errInvalidSignature` for the exit code. A JWE carries `protectedHeader` plus either encrypted part sizes (no key) or `decryptedPayload` (with a key)
+- `jsonPayloadValue()` / `base64URLLen()` / `writeJSON()` - Decode a decrypted payload as structured JSON when possible (else a string); report part sizes; and encode with `encoding/json`, which preserves `json.Number` exactly and escapes control characters including ESC. Timestamps are left as raw numeric claim values here — `formatTimestamps` is intentionally not applied — so consumers do their own date math
 
 ### `jwe.go` - JWE parsing and decryption
 
@@ -27,7 +34,7 @@ All functionality lives in package `main`, split across four source files:
 
 ### `keys.go` - Key loading and format detection
 
-- `loadKey()` / `parseKeyData()` / `parseDERKey()` / `parseJWK()` - Resolve `raw:<secret>` and `hmac:<file>`, then an existing file path, then base64/base64url; parse loaded data as JWK/JWK Set, PEM, or DER (PKCS#1/PKCS#8/SEC 1/PKIX) keys and X.509 certificates, and error on anything else; trim trailing newlines only for ASCII `hmac:` files limited to printable bytes plus tab/CR/LF, while UTF-8/non-ASCII and other binary files remain byte-exact
+- `loadKey()` / `loadKeyForKID()` / `parseKeyData()` / `parseDERKey()` / `parseJWK()` - Resolve `raw:<secret>` and `hmac:<file>`, then an existing file path, then base64/base64url; parse loaded data as JWK/JWK Set, PEM, or DER (PKCS#1/PKCS#8/SEC 1/PKIX) keys and X.509 certificates, and error on anything else; trim trailing newlines only for ASCII `hmac:` files limited to printable bytes plus tab/CR/LF, while UTF-8/non-ASCII and other binary files remain byte-exact. `loadKeyForKID` threads the token's `kid` so a JWK Set selects the matching entry (`loadKey` is the `kid=""` wrapper); a `kid` that matches nothing returns the `errKIDNotFound` sentinel, which short-circuits the base64/unsupported-format fallbacks so a JWK Set miss fails closed with a clear message instead of degrading into other key material
 - `unsupportedKeyError()` - Explains a rejection and names the explicit symmetric form to use, substituting the user's own path so the fix is copy-pasteable; SSH keys get a conversion hint instead
 - `classifyKeyArg()` - Reports which reading `loadKey` will apply (`raw:` literal, `hmac:` secret file, existing file, base64, or unusable), mirroring its precedence so the CLI hint cannot drift from actual behavior; uses `Stat` rather than a read, so classifying never consumes the key source
 - `decodeBase64Key()` / `symmetricKey()` - Decode whitespace-tolerant base64/base64url key material (applied to text key files as well as inline arguments, so the same bytes mean the same key either way) and gate symmetric secrets, rejecting empty key material
@@ -40,7 +47,7 @@ Removing the fallback deleted the heuristics that existed only to decide it (`is
 ### `output.go` - Formatting, escaping, and colored printing
 
 - `printDecryptedPayload()` / `escapeTerminalText()` / `escapeFormattedJSONControls()` - Recursively decode nested JWTs/JWEs and pretty-print JSON objects or arrays; raw plaintext escapes C0 controls except newline/tab, DEL, C1 controls, invalid UTF-8 bytes, and targeted bidi controls, while formatted JSON sanitizes C1, DEL, and the same targeted bidi controls
-- `formatTimestamps()` - Converts exact `iat`, `exp`, `nbf` Unix numeric values, including fractions, to RFC3339 strings (original value shown in parentheses)
+- `formatTimestamps()` / `timestampStatus()` - Convert exact `iat`, `exp`, `nbf` Unix numeric values, including fractions, to RFC3339 strings (original value shown in parentheses); `exp` in the past is annotated `expired` and `nbf` in the future `not yet valid`. This is display-only and never affects verification or the exit code; `timeNow` is a package variable so the annotations are testable. The `--json` path skips this entirely and keeps raw numeric claims
 - `newFormatter()` - Creates a `go-prettyjson` formatter with the project color scheme
 - `printSection()` / `printSignature()` - Formatted output using `fatih/color`
 
@@ -51,6 +58,8 @@ Cross-compilation, archive naming, checksums, SBOMs, and signing are owned by `.
 The mise-pinned toolchain is checksum-locked: `.mise.toml` sets `lockfile = true` and `mise.lock` records a SHA256 per tool per platform (linux-x64 for CI, macos-arm64 for local work). Regenerate it with `mise lock --platform linux-x64,macos-arm64` after changing any tool version, or `TestMiseLockInvariants` fails — a lockfile that disagrees with `.mise.toml` is worse than none, since it looks authoritative while the pins diverge.
 
 The nfpm packages share the `jwtd` build id with the archives, so `checksum.ids` covers both; they pin `mtime` to the epoch and are byte-reproducible, which keeps them in the strict comparison tier.
+
+The `.deb`/`.rpm` packages also ship bash, zsh, and fish completions. A top-level `before.hooks` generates them with `go run . completion <shell> > completions/jwtd.<shell>`, and nfpm `contents` installs each at its shell's conventional path with mode `0644` and `mtime` pinned to the epoch. The completion scripts are static (no version or timestamp baked in), so the packages stay byte-reproducible in the strict tier. The **archives stay binary-only** — completions are not added to them — so the six-archive contract is unchanged; Homebrew instead calls `generate_completions_from_executable(bin/"jwtd", "completion")` at install time from the archived binary. AUR, COPR, and Scoop do not ship completions. `TestShellCompletionsPackaged` (nfpm contents + before-hooks) and the Homebrew check in `workflow_test.go` enforce this.
 
 `checksum.ids` deliberately restricts `checksums.txt` to the `jwtd` id (archives and packages). Syft SBOMs embed a random `documentNamespace` UUID and a creation timestamp, so including them would make the signed checksum file differ on every run and break byte-for-byte release verification. Consequently the release job verifies assets in two tiers: the six archives and `checksums.txt` must match the build byte-for-byte, while the SBOMs and the Cosign bundles are verified by presence, exact count, and `cosign verify-blob`. Because SBOMs cannot ride on `checksums.txt`, a second `signs` entry (`artifacts: sbom`) gives each one its own keyless bundle, so no published asset rests on a presence check alone — an actor with release-write cannot alter an SBOM without breaking its signature. `.github/workflows/release.yml` owns everything GoReleaser does not: version/ref validation, tag provenance (a local, unpushed tag drives GoReleaser's version discovery), draft release creation and reconciliation, byte-for-byte asset verification, semantic latest-release handling, and Homebrew tap publication. GoReleaser never publishes: `release.disable: true` in the config, `skip_upload: true` on the Scoop manifest, and `--skip=publish`/`--snapshot` at every invocation site all enforce this, and the GoReleaser build step never receives a write-capable token.
 
@@ -119,8 +128,8 @@ JWTD_KEY=key.pem jwtd <token> # same, via environment variable
 
 ## Conventions
 
-- **Single package.** All code stays in package `main`, split across topical files (`main.go`, `jwe.go`, `keys.go`, `output.go`).
-- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` and GoReleaser/release-workflow invariants in `workflow_test.go`. Use table-driven tests where multiple cases share the same structure.
+- **Single package.** All code stays in package `main`, split across topical files (`main.go`, `jwe.go`, `keys.go`, `output.go`, `jsonout.go`).
+- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, `jsonout_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` and GoReleaser/release-workflow invariants in `workflow_test.go`. Use table-driven tests where multiple cases share the same structure.
 - **Color scheme** is configured in `newFormatter()` via `go-prettyjson` and `fatih/color`. Colors auto-disable when stdout is not a TTY.
 - **Error handling:** Return errors up the call stack with `fmt.Errorf` wrapping (`%w`). The root command suppresses Cobra's automatic error and usage output; `main()` renders non-signature errors and exits nonzero, while invalid signatures print their own details and return `errInvalidSignature`.
 - **Formatting:** Use `gofmt`/`goimports` standard formatting. No special linter configuration.

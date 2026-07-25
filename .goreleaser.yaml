@@ -1,6 +1,17 @@
 version: 2
 project_name: jwtd
 
+# Generate shell completions from the CLI itself so the deb/rpm packages can
+# ship them. The scripts are static (no version or timestamp baked in), so they
+# stay byte-reproducible across runs, which keeps the packages in the strict
+# comparison tier.
+before:
+  hooks:
+    - mkdir -p completions
+    - sh -c "go run . completion bash > completions/jwtd.bash"
+    - sh -c "go run . completion zsh > completions/jwtd.zsh"
+    - sh -c "go run . completion fish > completions/jwtd.fish"
+
 builds:
   - id: jwtd
     main: .
@@ -53,6 +64,25 @@ nfpms:
     # one convention and the workflow allowlists stay static.
     file_name_template: "jwtd-{{ .Os }}-{{ .Arch }}"
     mtime: "1970-01-01T00:00:00Z"
+    # Shell completions ride along in the deb/rpm packages only; the tar.gz
+    # archives stay binary-only. mtime is pinned so packages remain
+    # byte-reproducible.
+    contents:
+      - src: ./completions/jwtd.bash
+        dst: /usr/share/bash-completion/completions/jwtd
+        file_info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: ./completions/jwtd.zsh
+        dst: /usr/share/zsh/site-functions/_jwtd
+        file_info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: ./completions/jwtd.fish
+        dst: /usr/share/fish/vendor_completions.d/jwtd.fish
+        file_info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
 
 checksum:
   name_template: checksums.txt
