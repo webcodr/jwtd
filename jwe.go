@@ -73,7 +73,7 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 		return printEncryptedParts(w, tokenStr)
 	}
 
-	key, err := loadKey(keyStr)
+	key, err := loadKeyForKID(keyStr, headerKID(header))
 	if err != nil {
 		return fmt.Errorf("loading decryption key: %w", err)
 	}

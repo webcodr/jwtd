@@ -100,7 +100,19 @@ func TestEscapeFormattedJSONControls(t *testing.T) {
 
 // --- formatTimestamps --------------------------------------------------------
 
+// pinTime fixes timeNow for the duration of a test so the expired /
+// not-yet-valid annotations are deterministic regardless of the wall clock.
+func pinTime(t *testing.T, unix int64) {
+	t.Helper()
+	prev := timeNow
+	timeNow = func() time.Time { return time.Unix(unix, 0) }
+	t.Cleanup(func() { timeNow = prev })
+}
+
 func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
+	// Pin now to nbf's instant: exp is in the future (not expired) and nbf is
+	// already valid, so both format without an annotation.
+	pinTime(t, 1516239022)
 	data := map[string]any{
 		"iat": float64(1516239022),
 		"exp": float64(1716239022),
@@ -120,6 +132,51 @@ func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
 	expectedExp := fmt.Sprintf("%s (%d)", time.Unix(1716239022, 0).UTC().Format(time.RFC3339), 1716239022)
 	if data["exp"] != expectedExp {
 		t.Errorf("exp: expected %q, got %v", expectedExp, data["exp"])
+	}
+}
+
+func TestFormatTimestamps_AnnotatesExpiredAndNotYetValid(t *testing.T) {
+	// now sits between nbf (future) and exp (past): the token is both expired
+	// and not yet valid at this instant, exercising both annotations at once.
+	pinTime(t, 1000)
+	data := map[string]any{
+		"iat": float64(500),
+		"exp": float64(900),  // before now -> expired
+		"nbf": float64(1500), // after now -> not yet valid
+	}
+
+	formatTimestamps(data)
+
+	exp, _ := data["exp"].(string)
+	if !strings.HasSuffix(exp, ", expired)") {
+		t.Errorf("exp should be annotated expired, got %q", exp)
+	}
+	nbf, _ := data["nbf"].(string)
+	if !strings.HasSuffix(nbf, ", not yet valid)") {
+		t.Errorf("nbf should be annotated not yet valid, got %q", nbf)
+	}
+	// iat is never annotated: it has no validity meaning relative to now.
+	iat, _ := data["iat"].(string)
+	if strings.Contains(iat, "expired") || strings.Contains(iat, "not yet valid") {
+		t.Errorf("iat must not be annotated, got %q", iat)
+	}
+}
+
+func TestFormatTimestamps_NoAnnotationWhenCurrentlyValid(t *testing.T) {
+	// now sits inside the validity window: nbf already passed, exp not reached.
+	pinTime(t, 1000)
+	data := map[string]any{
+		"exp": float64(2000),
+		"nbf": float64(500),
+	}
+
+	formatTimestamps(data)
+
+	for _, key := range []string{"exp", "nbf"} {
+		v, _ := data[key].(string)
+		if strings.Contains(v, "expired") || strings.Contains(v, "not yet valid") {
+			t.Errorf("%s should not be annotated inside the validity window, got %q", key, v)
+		}
 	}
 }
 
@@ -144,6 +201,8 @@ func TestFormatTimestamps_NonTimestampFieldsUnchanged(t *testing.T) {
 }
 
 func TestFormatTimestamps_MixedFields(t *testing.T) {
+	// Pin now before exp so it formats without an expired annotation.
+	pinTime(t, 1600000000)
 	data := map[string]any{
 		"sub": "user123",
 		"iat": float64(0),

@@ -7,12 +7,19 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/go-jose/go-jose/v4"
 )
+
+// errKIDNotFound marks a definitive failure: the material parsed as a JWK Set,
+// but no entry matched the token's kid. It must not degrade into a generic
+// "unsupported format" error or a base64/HMAC fallback attempt, so loadKeyForKID
+// surfaces it as-is.
+var errKIDNotFound = errors.New("kid not found in JWK Set")
 
 // loadKey resolves a key argument. Symmetric secrets must be requested
 // explicitly, with "raw:<secret>" for a literal or "hmac:<file>" for a file of
@@ -26,6 +33,14 @@ import (
 // HS256 token that verified against it. Unparseable material is now an error,
 // so the failure direction is always closed no matter what format shows up.
 func loadKey(keyStr string) (any, error) {
+	return loadKeyForKID(keyStr, "")
+}
+
+// loadKeyForKID resolves a key argument, selecting the entry that matches kid
+// when the material is a JWK Set. kid is the token's "kid" header ("" when the
+// token carries none); it only affects JWK Set selection and is ignored for
+// every other key form.
+func loadKeyForKID(keyStr, kid string) (any, error) {
 	// Explicit literal secret; no file or base64 detection.
 	if secret, ok := strings.CutPrefix(keyStr, "raw:"); ok {
 		return symmetricKey([]byte(secret))
@@ -52,15 +67,21 @@ func loadKey(keyStr string) (any, error) {
 		if len(data) == 0 {
 			return nil, fmt.Errorf("key file %q is empty", keyStr)
 		}
-		if key, err := parseKeyData(data); err == nil {
+		if key, err := parseKeyData(data, kid); err == nil {
 			return key, nil
+		} else if errors.Is(err, errKIDNotFound) {
+			// The file is a valid JWK Set; a kid miss is final, not a reason
+			// to try base64 or fall through to the unsupported-format error.
+			return nil, err
 		}
 		// A text file may hold base64-encoded key material just as an inline
 		// key argument can, so the same bytes mean the same key either way.
 		if isTextKey(data) {
 			if decoded, ok := decodeBase64Key(bytes.TrimRight(data, "\r\n")); ok {
-				if key, err := parseKeyData(decoded); err == nil {
+				if key, err := parseKeyData(decoded, kid); err == nil {
 					return key, nil
+				} else if errors.Is(err, errKIDNotFound) {
+					return nil, err
 				}
 			}
 		}
@@ -72,8 +93,11 @@ func loadKey(keyStr string) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("key is neither a valid file path nor base64-encoded data")
 	}
-	key, err := parseKeyData(decoded)
+	key, err := parseKeyData(decoded, kid)
 	if err != nil {
+		if errors.Is(err, errKIDNotFound) {
+			return nil, err
+		}
 		return nil, unsupportedKeyError(decoded, "inline key", "raw:<secret> or hmac:<file>")
 	}
 	return key, nil
@@ -221,11 +245,16 @@ func isTextKey(data []byte) bool {
 }
 
 // parseKeyData attempts to parse key data as JWK, JWK Set, PEM, or DER encoded
-// key material. Supports both private and public keys.
-func parseKeyData(data []byte) (any, error) {
+// key material. Supports both private and public keys. For a JWK Set, kid
+// selects the matching key ("" falls back to the first key).
+func parseKeyData(data []byte, kid string) (any, error) {
 	// Try JWK / JWK Set (JSON-based formats).
-	if key, err := parseJWK(data); err == nil {
+	if key, err := parseJWK(data, kid); err == nil {
 		return key, nil
+	} else if errors.Is(err, errKIDNotFound) {
+		// The data is a valid JWK Set; the kid simply did not match. That is
+		// a final answer, not a reason to reinterpret the bytes as PEM/DER.
+		return nil, err
 	}
 
 	// Try PEM decoding.
@@ -309,9 +338,13 @@ func parseDERKey(der []byte, blockType string) (any, error) {
 	}
 }
 
-// parseJWK attempts to parse data as a JWK (JSON Web Key) or JWK Set.
-// For a JWK Set, the first key is returned.
-func parseJWK(data []byte) (any, error) {
+// parseJWK attempts to parse data as a JWK (JSON Web Key) or JWK Set. For a JWK
+// Set, kid selects the entry whose "kid" matches the token; when the token
+// carries no kid ("") the first key is used, preserving the historical
+// single-key behavior. A kid that matches nothing is an error rather than a
+// silent fallback to the wrong key, so verification never runs against a key
+// the token did not name.
+func parseJWK(data []byte, kid string) (any, error) {
 	// Try single JWK.
 	var jwk jose.JSONWebKey
 	if err := json.Unmarshal(data, &jwk); err == nil && jwk.Key != nil {
@@ -321,6 +354,15 @@ func parseJWK(data []byte) (any, error) {
 	// Try JWK Set ({"keys": [...]}).
 	var jwks jose.JSONWebKeySet
 	if err := json.Unmarshal(data, &jwks); err == nil && len(jwks.Keys) > 0 {
+		if kid != "" {
+			matches := jwks.Key(kid)
+			if len(matches) == 0 {
+				return nil, fmt.Errorf("%w (kid %q)", errKIDNotFound, kid)
+			}
+			// Multiple entries can share a kid (e.g. one per use/alg). The
+			// first match is deterministic and matches go-jose's own order.
+			return matches[0].Key, nil
+		}
 		return jwks.Keys[0].Key, nil
 	}
 

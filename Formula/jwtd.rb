@@ -26,6 +26,7 @@ class Jwtd < Formula
 
   def install
     bin.install "jwtd"
+    generate_completions_from_executable(bin/"jwtd", "completion")
   end
 
   test do

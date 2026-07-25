@@ -64,6 +64,9 @@ func TestWebsiteContentContract(t *testing.T) {
 		"local script":     `src="/script.js"`,
 		"local favicon":    `href="/favicon.svg"`,
 		"structured data":  `<script type="application/ld+json">`,
+		"Open Graph image": `<meta property="og:image" content="https://jwtd.sh/og.png">`,
+		"Twitter card":     `<meta name="twitter:card" content="summary_large_image">`,
+		"FAQ accordion":    `<summary><h3>Does jwtd send my token anywhere?</h3></summary>`,
 		"release version":  `<p class="panel-kicker">Latest release: <a href="https://github.com/webcodr/jwtd/releases/latest">VERSION</a></p>`,
 		"install controls": `data-install-tabs`,
 		"install methods":  `data-install-method="macos"`,
@@ -110,7 +113,7 @@ func TestWebsiteContentContract(t *testing.T) {
 		}
 	}
 
-	for _, asset := range []string{"styles.css", "script.js", "favicon.svg", "robots.txt", "sitemap.xml"} {
+	for _, asset := range []string{"styles.css", "script.js", "favicon.svg", "robots.txt", "sitemap.xml", "og.png"} {
 		if _, err := os.Stat(filepath.Join("site", asset)); err != nil {
 			t.Errorf("local asset site/%s must exist: %v", asset, err)
 		}
@@ -140,6 +143,12 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"symmetric key guidance": `Pass the secret explicitly: <code>hmac:&lt;file&gt;</code> for a file of secret bytes, or <code>raw:&lt;secret&gt;</code> for an inline one.`,
 		"ssh key guidance":       `OpenSSH keys, <code>authorized_keys</code> entries, and RFC 4716 armor are detected and reported with a conversion hint.`,
 		"footer copy":            `<p>A focused CLI for JWT, JWS, and JWE inspection.</p>`,
+		"json capability":        `<h3>Script with JSON</h3>`,
+		"json workflow":          `<h3>Emit machine-readable JSON</h3>`,
+		"color workflow":         `<h3>Control color output</h3>`,
+		"kid key format":         `Single keys, or the set entry matching the token's kid`,
+		"completions note":       `packages install shell completions for bash, zsh, and fish.`,
+		"json faq":               `<summary><h3>Can I get machine-readable output?</h3></summary>`,
 	} {
 		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
 			t.Errorf("site/index.html is missing refined %s %q", label, required)

@@ -19,7 +19,10 @@ import (
 type goReleaserConfig struct {
 	Version     int    `yaml:"version"`
 	ProjectName string `yaml:"project_name"`
-	Builds      []struct {
+	Before      struct {
+		Hooks []string `yaml:"hooks"`
+	} `yaml:"before"`
+	Builds []struct {
 		ID           string   `yaml:"id"`
 		Main         string   `yaml:"main"`
 		Binary       string   `yaml:"binary"`
@@ -59,6 +62,14 @@ type goReleaserConfig struct {
 		Bindir           string   `yaml:"bindir"`
 		FileNameTemplate string   `yaml:"file_name_template"`
 		Mtime            string   `yaml:"mtime"`
+		Contents         []struct {
+			Src      string `yaml:"src"`
+			Dst      string `yaml:"dst"`
+			FileInfo struct {
+				Mode  int    `yaml:"mode"`
+				Mtime string `yaml:"mtime"`
+			} `yaml:"file_info"`
+		} `yaml:"contents"`
 	} `yaml:"nfpms"`
 	Sboms []struct {
 		ID        string   `yaml:"id"`
@@ -448,6 +459,68 @@ func TestHomebrewFormulaInvariants(t *testing.T) {
 	for _, stanza := range []string{"on_macos", "on_linux"} {
 		if !strings.Contains(body, stanza) {
 			t.Errorf("Formula/jwtd.rb must keep the %q stanza so both platforms are covered", stanza)
+		}
+	}
+	// Completions are generated from the installed binary at brew-install time,
+	// which keeps them out of the binary-only release archive.
+	if !strings.Contains(body, `generate_completions_from_executable(bin/"jwtd", "completion")`) {
+		t.Error("Formula/jwtd.rb must generate shell completions from the installed binary")
+	}
+}
+
+// TestShellCompletionsPackaged checks that the deb/rpm packages ship shell
+// completions generated from the CLI, and that they are pinned to the epoch so
+// the packages stay byte-reproducible. The tar.gz archives deliberately do not
+// carry them (that contract is asserted in TestGoReleaserConfigurationInvariants).
+func TestShellCompletionsPackaged(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("reading .goreleaser.yaml: %v", err)
+	}
+	var cfg goReleaserConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parsing .goreleaser.yaml: %v", err)
+	}
+
+	// A before-hook must generate each completion script the packages install,
+	// so the src paths in nfpm contents actually exist at package time.
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		want := "go run . completion " + shell + " > completions/jwtd." + shell
+		found := false
+		for _, hook := range cfg.Before.Hooks {
+			if strings.Contains(hook, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("before.hooks must generate the %s completion (%q)", shell, want)
+		}
+	}
+
+	if len(cfg.Nfpms) != 1 {
+		t.Fatalf("expected exactly one nfpms entry, got %d", len(cfg.Nfpms))
+	}
+	// Each completion lands at its shell's conventional path, mode 0644, with
+	// mtime pinned to the epoch to preserve byte-for-byte reproducibility.
+	wantContents := map[string]string{
+		"./completions/jwtd.bash": "/usr/share/bash-completion/completions/jwtd",
+		"./completions/jwtd.zsh":  "/usr/share/zsh/site-functions/_jwtd",
+		"./completions/jwtd.fish": "/usr/share/fish/vendor_completions.d/jwtd.fish",
+	}
+	got := map[string]string{}
+	for _, c := range cfg.Nfpms[0].Contents {
+		got[c.Src] = c.Dst
+		if c.FileInfo.Mode != 0o644 {
+			t.Errorf("completion %q must be mode 0644, got %o", c.Src, c.FileInfo.Mode)
+		}
+		if want := "1970-01-01T00:00:00Z"; c.FileInfo.Mtime != want {
+			t.Errorf("completion %q mtime must be the epoch %q for reproducibility, got %q", c.Src, want, c.FileInfo.Mtime)
+		}
+	}
+	for src, dst := range wantContents {
+		if got[src] != dst {
+			t.Errorf("nfpm contents must install %q to %q, got %q", src, dst, got[src])
 		}
 	}
 }

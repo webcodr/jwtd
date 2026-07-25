@@ -18,6 +18,10 @@ import (
 
 var timestampKeyNames = []string{"iat", "exp", "nbf"}
 
+// timeNow returns the current time. It is a variable so tests can pin it and
+// make the expired / not-yet-valid annotations deterministic.
+var timeNow = time.Now
+
 // Color definitions used for labels and signature output.
 var (
 	labelColor = color.New(color.FgCyan, color.Bold)
@@ -190,8 +194,31 @@ func formatTimestamps(data map[string]any) {
 		if t.Year() < 0 || t.Year() > 9999 {
 			continue
 		}
-		data[key] = fmt.Sprintf("%s (%s)", t.Format(time.RFC3339Nano), text)
+		if status := timestampStatus(key, t); status != "" {
+			data[key] = fmt.Sprintf("%s (%s, %s)", t.Format(time.RFC3339Nano), text, status)
+		} else {
+			data[key] = fmt.Sprintf("%s (%s)", t.Format(time.RFC3339Nano), text)
+		}
 	}
+}
+
+// timestampStatus returns an informational note when a claim's time has a
+// meaning relative to now: "exp" in the past is expired, "nbf" in the future is
+// not yet valid. It is display-only and never affects signature verification or
+// the exit code, which stay purely cryptographic.
+func timestampStatus(key string, t time.Time) string {
+	now := timeNow()
+	switch key {
+	case "exp":
+		if t.Before(now) {
+			return "expired"
+		}
+	case "nbf":
+		if now.Before(t) {
+			return "not yet valid"
+		}
+	}
+	return ""
 }
 
 // printSection outputs a labeled, pretty-printed JSON section.

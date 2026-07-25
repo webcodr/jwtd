@@ -15,6 +15,20 @@
       content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal."
     />
     <meta property="og:url" content="https://jwtd.sh/" />
+    <meta property="og:image" content="https://jwtd.sh/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="jwtd terminal output: decode JWTs, verify JWS signatures, and decrypt JWEs"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="jwtd - JWT, JWS, and JWE inspection" />
+    <meta
+      name="twitter:description"
+      content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal."
+    />
+    <meta name="twitter:image" content="https://jwtd.sh/og.png" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests"
@@ -156,7 +170,10 @@
             <span>01</span>
             <div>
               <h3>Decode JWTs</h3>
-              <p>View headers, claims, signatures, and readable timestamps.</p>
+              <p>
+                View headers, claims, signatures, and readable timestamps
+                flagged when a token is expired or not yet valid.
+              </p>
             </div>
           </article>
           <article>
@@ -191,6 +208,16 @@
               <h3>Use established key formats</h3>
               <p>
                 Load PEM, DER, certificates, JWKs, encoded keys, or raw secrets.
+              </p>
+            </div>
+          </article>
+          <article>
+            <span>06</span>
+            <div>
+              <h3>Script with JSON</h3>
+              <p>
+                Emit one machine-readable object with <code>--json</code> for
+                piping into tools like <code>jq</code>.
               </p>
             </div>
           </article>
@@ -503,6 +530,10 @@ scoop install jwtd</code></pre>
           </div>
         </div>
 
+        <p class="install-note">
+          The Homebrew formula and the <code>.deb</code> / <code>.rpm</code>
+          packages install shell completions for bash, zsh, and fish.
+        </p>
       </section>
 
       <section class="section usage" id="usage" aria-labelledby="usage-title">
@@ -669,6 +700,52 @@ scoop install jwtd</code></pre>
               </div>
             </div>
           </article>
+          <article>
+            <div class="usage-number">08</div>
+            <div class="usage-copy">
+              <h3>Emit machine-readable JSON</h3>
+              <p>
+                Add <code>--json</code> for a single object per token, with exact
+                numbers and raw timestamps, ready to pipe into
+                <code>jq</code>. Invalid signatures still print and exit nonzero.
+              </p>
+            </div>
+            <div class="command-block">
+              <pre><code id="json-command">jwtd --json eyJhbGciOiJIUzI1NiIs... | jq .payload</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="json-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+          </article>
+          <article>
+            <div class="usage-number">09</div>
+            <div class="usage-copy">
+              <h3>Control color output</h3>
+              <p>
+                Color auto-disables off a terminal. Use
+                <code>--color</code> to force it, for example through a pager:
+                <code>auto</code>, <code>always</code>, or <code>never</code>.
+              </p>
+            </div>
+            <div class="command-block">
+              <pre><code id="color-command">jwtd --color=always eyJhbGciOiJIUzI1NiIs... | less -R</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="color-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -697,7 +774,7 @@ scoop install jwtd</code></pre>
             <li><strong>X.509</strong><span>Certificate public keys</span></li>
             <li>
               <strong>JWK / JWK Set</strong
-              ><span>Single keys or the first set entry</span>
+              ><span>Single keys, or the set entry matching the token's kid</span>
             </li>
             <li>
               <strong>Base64</strong
@@ -849,33 +926,35 @@ scoop install jwtd</code></pre>
           </p>
         </div>
         <div class="faq-list">
-          <article>
-            <h3>Does jwtd send my token anywhere?</h3>
+          <details>
+            <summary><h3>Does jwtd send my token anywhere?</h3></summary>
             <p>
               No. jwtd runs entirely on your machine and makes no network
               requests. Decoding, verification, and decryption all happen
               locally, so the secrets inside a token never leave your terminal.
             </p>
-          </article>
-          <article>
-            <h3>Does verifying a signature also check expiry?</h3>
+          </details>
+          <details>
+            <summary><h3>Does verifying a signature also check expiry?</h3></summary>
             <p>
               No. Signature verification reports only whether the cryptographic
               signature is valid. Claim checks such as expiry are kept separate,
               so an expired but authentic token still verifies. An invalid
               signature exits nonzero.
             </p>
-          </article>
-          <article>
-            <h3>Do I need a key to decode a token?</h3>
+          </details>
+          <details>
+            <summary><h3>Do I need a key to decode a token?</h3></summary>
             <p>
               No. Decoding a JWT and inspecting a JWE protected header need no
               key. A key is only required to verify a JWS signature or decrypt a
               JWE payload.
             </p>
-          </article>
-          <article>
-            <h3>How do I verify an HS256 token with a shared secret?</h3>
+          </details>
+          <details>
+            <summary>
+              <h3>How do I verify an HS256 token with a shared secret?</h3>
+            </summary>
             <p>
               Pass the secret explicitly: <code>hmac:&lt;file&gt;</code> for a
               file of secret bytes, or <code>raw:&lt;secret&gt;</code> for an
@@ -884,9 +963,9 @@ scoop install jwtd</code></pre>
               so guessing would let anyone who knows it forge a token that
               verified.
             </p>
-          </article>
-          <article>
-            <h3>Can I use an SSH public key?</h3>
+          </details>
+          <details>
+            <summary><h3>Can I use an SSH public key?</h3></summary>
             <p>
               Not directly. OpenSSH keys,
               <code>authorized_keys</code> entries, and RFC 4716 armor are
@@ -895,7 +974,18 @@ scoop install jwtd</code></pre>
               <code>ssh-keygen -e -m PKCS8 -f &lt;key&gt;</code>, then pass the
               result.
             </p>
-          </article>
+          </details>
+          <details>
+            <summary><h3>Can I get machine-readable output?</h3></summary>
+            <p>
+              Yes. <code>--json</code> prints one JSON object per token instead
+              of the colored sections: header, payload, and signature, plus
+              <code>signatureValid</code> when a key is given. Numbers are exact
+              and timestamps stay raw, so it pipes cleanly into
+              <code>jq</code>. An invalid signature still prints and exits
+              nonzero.
+            </p>
+          </details>
         </div>
       </section>
     </main>
