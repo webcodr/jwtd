@@ -170,7 +170,10 @@
             <span>01</span>
             <div>
               <h3>Decode JWTs</h3>
-              <p>View headers, claims, signatures, and readable timestamps.</p>
+              <p>
+                View headers, claims, signatures, and readable timestamps
+                flagged when a token is expired or not yet valid.
+              </p>
             </div>
           </article>
           <article>
@@ -205,6 +208,16 @@
               <h3>Use established key formats</h3>
               <p>
                 Load PEM, DER, certificates, JWKs, encoded keys, or raw secrets.
+              </p>
+            </div>
+          </article>
+          <article>
+            <span>06</span>
+            <div>
+              <h3>Script with JSON</h3>
+              <p>
+                Emit one machine-readable object with <code>--json</code> for
+                piping into tools like <code>jq</code>.
               </p>
             </div>
           </article>
@@ -517,6 +530,10 @@ scoop install jwtd</code></pre>
           </div>
         </div>
 
+        <p class="install-note">
+          The Homebrew formula and the <code>.deb</code> / <code>.rpm</code>
+          packages install shell completions for bash, zsh, and fish.
+        </p>
       </section>
 
       <section class="section usage" id="usage" aria-labelledby="usage-title">
@@ -683,6 +700,52 @@ scoop install jwtd</code></pre>
               </div>
             </div>
           </article>
+          <article>
+            <div class="usage-number">08</div>
+            <div class="usage-copy">
+              <h3>Emit machine-readable JSON</h3>
+              <p>
+                Add <code>--json</code> for a single object per token, with exact
+                numbers and raw timestamps, ready to pipe into
+                <code>jq</code>. Invalid signatures still print and exit nonzero.
+              </p>
+            </div>
+            <div class="command-block">
+              <pre><code id="json-command">jwtd --json eyJhbGciOiJIUzI1NiIs... | jq .payload</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="json-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+          </article>
+          <article>
+            <div class="usage-number">09</div>
+            <div class="usage-copy">
+              <h3>Control color output</h3>
+              <p>
+                Color auto-disables off a terminal. Use
+                <code>--color</code> to force it, for example through a pager:
+                <code>auto</code>, <code>always</code>, or <code>never</code>.
+              </p>
+            </div>
+            <div class="command-block">
+              <pre><code id="color-command">jwtd --color=always eyJhbGciOiJIUzI1NiIs... | less -R</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="color-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -711,7 +774,7 @@ scoop install jwtd</code></pre>
             <li><strong>X.509</strong><span>Certificate public keys</span></li>
             <li>
               <strong>JWK / JWK Set</strong
-              ><span>Single keys or the first set entry</span>
+              ><span>Single keys, or the set entry matching the token's kid</span>
             </li>
             <li>
               <strong>Base64</strong
@@ -910,6 +973,17 @@ scoop install jwtd</code></pre>
               ECDSA keys with
               <code>ssh-keygen -e -m PKCS8 -f &lt;key&gt;</code>, then pass the
               result.
+            </p>
+          </details>
+          <details>
+            <summary><h3>Can I get machine-readable output?</h3></summary>
+            <p>
+              Yes. <code>--json</code> prints one JSON object per token instead
+              of the colored sections: header, payload, and signature, plus
+              <code>signatureValid</code> when a key is given. Numbers are exact
+              and timestamps stay raw, so it pipes cleanly into
+              <code>jq</code>. An invalid signature still prints and exits
+              nonzero.
             </p>
           </details>
         </div>

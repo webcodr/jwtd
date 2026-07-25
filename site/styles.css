@@ -426,6 +426,12 @@ code {
   border-top: 1px solid var(--border);
 }
 
+.install-note {
+  margin-top: 1.5rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
 .js .install-panel + .install-panel {
   margin-top: 0;
   border-top: 0;
