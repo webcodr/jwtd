@@ -291,8 +291,9 @@ func TestDecodeAndPrint_TimestampsFormatted(t *testing.T) {
 		t.Error("output missing original iat/nbf epoch value")
 	}
 	// exp is in the past, so it carries the expired annotation alongside the
-	// original epoch value.
-	if !strings.Contains(plain, "(1716239022, expired)") {
+	// original epoch value. The elapsed duration depends on the wall clock
+	// (timeNow is not pinned here), so only the stable prefix is asserted.
+	if !strings.Contains(plain, "(1716239022, expired ") {
 		t.Error("output missing original exp epoch value with expired annotation")
 	}
 }
