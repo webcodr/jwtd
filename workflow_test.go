@@ -760,7 +760,8 @@ func TestAURInvariants(t *testing.T) {
 // release comes from mise, so a retagged or replaced upstream artifact would
 // otherwise be installed silently. The lockfile is only consulted when the
 // setting is on, and it is only meaningful while it matches the pinned
-// versions, so both are enforced here.
+// versions, so both are enforced here. Source-built (`go:`) tools carry no
+// checksum and are exempted; see the comment on that branch.
 func TestMiseLockInvariants(t *testing.T) {
 	config, err := os.ReadFile(".mise.toml")
 	if err != nil {
@@ -796,25 +797,70 @@ func TestMiseLockInvariants(t *testing.T) {
 	}
 
 	for tool, version := range tools {
-		if !strings.Contains(body, "[[tools."+tool+"]]") {
-			t.Errorf("mise.lock has no entry for %q; regenerate it after changing the tool set", tool)
+		// The map keys keep the TOML quoting from .mise.toml, which is how
+		// mise.lock spells them too; the bare name only reads better in messages.
+		name := strings.Trim(tool, `"`)
+		// Every check runs against this tool's own block, so a neighbouring
+		// entry can never satisfy one of them.
+		header, ok := tomlSection(body, "[[tools."+tool+"]]", "[[tools.")
+		if !ok {
+			t.Errorf("mise.lock has no entry for %q; regenerate it after changing the tool set", name)
 			continue
 		}
+		// The tool's own keys, before its per-platform subtables.
+		keys, _ := tomlSection(header, "[[tools."+tool+"]]", "[")
+
 		// A lockfile pinning a version other than the configured one is worse
 		// than none: it looks authoritative while the pins disagree.
-		versionRe := regexp.MustCompile(`(?s)\[\[tools\.` + regexp.QuoteMeta(tool) + `\]\].*?version = "([^"]+)"`)
-		if m := versionRe.FindStringSubmatch(body); m == nil {
-			t.Errorf("mise.lock records no version for %q", tool)
+		versionRe := regexp.MustCompile(`(?m)^version = "([^"]+)"`)
+		if m := versionRe.FindStringSubmatch(keys); m == nil {
+			t.Errorf("mise.lock records no version for %q", name)
 		} else if m[1] != version {
-			t.Errorf("mise.lock pins %s %s but .mise.toml pins %s; regenerate the lockfile", tool, m[1], version)
+			t.Errorf("mise.lock pins %s %s but .mise.toml pins %s; regenerate the lockfile", name, m[1], version)
 		}
+
+		// `go:` tools are not downloaded, they are built by `go install`, so
+		// there is no artifact for mise to checksum — their integrity comes from
+		// the Go module checksum database instead. They are development-only
+		// (gopls) and never touch the release path, which is what the checksum
+		// requirement below protects. Both files must agree that the tool is
+		// source-built before it is exempted: an edit to either one alone
+		// cannot drop a prebuilt download out of checksum coverage, and a
+		// disagreement falls through to the checksum check rather than
+		// skipping it.
+		declaredGo := strings.HasPrefix(name, "go:")
+		resolvedGo := regexp.MustCompile(`(?m)^backend = "go:`).MatchString(keys)
+		switch {
+		case declaredGo != resolvedGo:
+			t.Errorf("mise.lock and .mise.toml disagree on whether %q is a source-built go: tool; regenerate the lockfile", name)
+		case declaredGo:
+			continue
+		}
+
 		// linux-x64 is the platform every CI job runs on, so its checksum is
-		// the one that gates releases.
-		checksumRe := regexp.MustCompile(`(?s)\[tools\.` + regexp.QuoteMeta(tool) + `\."platforms\.linux-x64"\].*?checksum = "sha256:[0-9a-f]{64}"`)
-		if !checksumRe.MatchString(body) {
-			t.Errorf("mise.lock has no linux-x64 sha256 checksum for %q; CI would install it unverified", tool)
+		// the one that gates releases. The checksum has to sit in that
+		// platform's own subtable: matching one from a sibling platform would
+		// pass a lockfile that leaves the CI download unverified.
+		platform, ok := tomlSection(header, `[tools.`+tool+`."platforms.linux-x64"]`, "[")
+		if !ok || !regexp.MustCompile(`(?m)^checksum = "sha256:[0-9a-f]{64}"`).MatchString(platform) {
+			t.Errorf("mise.lock has no linux-x64 sha256 checksum for %q; CI would install it unverified", name)
 		}
 	}
+}
+
+// tomlSection returns the section of body that starts at header and ends
+// before the next line beginning with nextPrefix (or the end of body). It
+// exists so lockfile assertions cannot match a key belonging to another tool
+// or another platform.
+func tomlSection(body, header, nextPrefix string) (string, bool) {
+	_, section, ok := strings.Cut(body, header)
+	if !ok {
+		return "", false
+	}
+	if next := strings.Index(section, "\n"+nextPrefix); next >= 0 {
+		section = section[:next]
+	}
+	return header + section, true
 }
 
 // TestCOPRInvariants checks that jwtd ships a Fedora COPR RPM that repackages
