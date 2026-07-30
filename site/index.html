@@ -292,14 +292,31 @@
         >
           <div>
             <p class="panel-kicker">macOS</p>
-            <h3>Homebrew formula</h3>
+            <h3>Install script or Homebrew</h3>
             <p>
-              Install the current release from the webcodr tap. Apple silicon
-              and Intel are both covered.
+              Install the current release without a package manager, or from
+              the webcodr tap. Apple silicon and Intel are both covered.
             </p>
           </div>
           <div class="install-methods">
             <div class="command-block">
+              <p>
+                Install script &mdash; verified download into
+                <code>~/.local/bin</code>
+              </p>
+              <pre><code id="macos-script-command">curl -fsSL https://jwtd.sh/install.sh | sh</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="macos-script-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+            <div class="command-block">
+              <p>Homebrew</p>
               <pre><code id="brew-command">brew install webcodr/tap/jwtd</code></pre>
               <div class="command-actions">
                 <button type="button" data-copy-target="brew-command">
@@ -328,11 +345,27 @@
             <p class="panel-kicker">Linux</p>
             <h3>Packages for every distribution</h3>
             <p>
-              Homebrew, native packages, and per-distro repositories are all
-              available. Pick whichever fits your system.
+              An install script, Homebrew, native packages, and per-distro
+              repositories are all available. Pick whichever fits your system.
             </p>
           </div>
           <div class="install-methods">
+            <div class="command-block">
+              <p>
+                Install script &mdash; verified download into
+                <code>~/.local/bin</code>
+              </p>
+              <pre><code id="linux-script-command">curl -fsSL https://jwtd.sh/install.sh | sh</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="linux-script-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
             <div class="command-block">
               <p>Homebrew &mdash; also works on macOS</p>
               <pre><code id="linux-brew-command">brew install webcodr/tap/jwtd</code></pre>
@@ -942,7 +975,9 @@ scoop install jwtd</code></pre>
           <p>
             Release archives and Linux packages are listed in
             <code>checksums.txt</code>, which is signed with a keyless Cosign
-            bundle. Each archive also includes a Syft SPDX SBOM.
+            bundle. Each archive also includes a Syft SPDX SBOM. The install
+            script runs the same checksum check on every download, and the
+            Cosign check too when cosign is installed.
           </p>
           <a
             class="text-link"

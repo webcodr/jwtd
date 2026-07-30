@@ -87,6 +87,16 @@ Artifacts cross the build/release job boundary as two separate uploads: `jwtd-re
 
 Release notes are auto-generated (`--generate-notes`), which lists only merged PR titles. `RELEASE_NOTES.md` holds hand-written prose for the next release: when present and non-empty it is prepended to the generated notes at release creation. Clear it after a release so its contents do not repeat on the following one.
 
+### Install script
+
+`install.sh` is a package-manager-free installer for macOS and Linux, served at `https://jwtd.sh/install.sh` (`curl -fsSL https://jwtd.sh/install.sh | sh`). It maps `uname -s`/`uname -m` onto the GoReleaser archive names (`jwtd-<os>-<arch>.tar.gz`, the four darwin/linux × amd64/arm64 targets), downloads that archive plus `checksums.txt` from the latest release — or from `--version <tag>` — extracts the binary, and installs it into `~/.local/bin` (overridable with `--dir`/`JWTD_INSTALL_DIR`). Windows is deliberately unreachable: it is served by WinGet and Scoop.
+
+**Verification is not optional, and nothing is written before it passes.** The archive is always checked against its `checksums.txt` entry (`sha256sum`, falling back to `shasum -a 256`), and when `cosign` is on `PATH` the keyless bundle over `checksums.txt` is verified against the same certificate identity and issuer the README documents; a cosign failure aborts. cosign itself stays optional because most machines do not have it and the checksum already pins the bytes — but a present cosign is never advisory. The script runs under POSIX `sh` (it is piped into whatever `/bin/sh` the user has, not necessarily bash) and never calls `sudo`, so piping it into a shell is not a privilege decision.
+
+The binary is copied into the install directory under a temporary name and then `mv`'d into place, so the replacement is a same-filesystem `rename(2)`: an upgrade cannot leave a half-written binary behind, and it does not fail with `ETXTBSY` when the running shell's own `jwtd` is being replaced. A cross-device `mv` straight from the temp directory would do both.
+
+There is one copy of the script. `.github/workflows/pages.yml` copies the repository root file into the Pages artifact (`install -m 0755 install.sh site/install.sh`, which is git-ignored) so the hosted script is byte-identical to the reviewed one, and the workflow redeploys when `install.sh` changes. `install_test.go` holds down the contract: the archive naming against `.goreleaser.yaml`, verification ordering, the Cosign identity matching the README, `sh`/no-`sudo`, rejection of unsupported platforms (driven by a stubbed `uname`, so the test never touches the network), and the README/site one-liner.
+
 ## Dependencies
 
 | Package | Purpose |
@@ -141,7 +151,7 @@ JWTD_KEY=key.pem jwtd <token> # same, via environment variable
 ## Conventions
 
 - **Single package.** All code stays in package `main`, split across topical files (`main.go`, `jwe.go`, `keys.go`, `output.go`, `jsonout.go`, `claims.go`).
-- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, `jsonout_test.go`, `claims_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` and GoReleaser/release-workflow invariants in `workflow_test.go`. Use table-driven tests where multiple cases share the same structure.
+- **Tests mirror the source files:** `main_test.go`, `jwe_test.go`, `keys_test.go`, `output_test.go`, `jsonout_test.go`, `claims_test.go`, with shared fixtures (key generation, token signing/encryption helpers) in `helpers_test.go` GoReleaser/release-workflow invariants in `workflow_test.go`, website/Pages invariants in `site_test.go`, and installer invariants in `install_test.go`. Use table-driven tests where multiple cases share the same structure.
 - **Color scheme** is configured in `newFormatter()` via `go-prettyjson` and `fatih/color`. Colors auto-disable when stdout is not a TTY.
 - **Error handling:** Return errors up the call stack with `fmt.Errorf` wrapping (`%w`). The root command suppresses Cobra's automatic error and usage output; `main()` renders non-signature errors and exits nonzero, while invalid signatures print their own details and return `errInvalidSignature`.
 - **Formatting:** Use `gofmt`/`goimports` standard formatting. No special linter configuration.

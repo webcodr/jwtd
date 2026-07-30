@@ -2,6 +2,8 @@ jwtd
 .idea/
 dist/
 completions/
+# Copied from the repository root by the Pages workflow at build time.
+site/install.sh
 .worktrees/
 result
 result-*

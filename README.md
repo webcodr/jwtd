@@ -24,6 +24,25 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 
 ## Installation
 
+### Install script (macOS and Linux)
+
+```sh
+curl -fsSL https://jwtd.sh/install.sh | sh
+```
+
+Downloads the release archive for the detected OS and architecture, verifies it against the release's `checksums.txt`, and installs the binary into `~/.local/bin` — no root privileges and no package manager required. When [Cosign](https://docs.sigstore.dev/) is installed, the keyless signature over `checksums.txt` is verified as well; without it the checksum verification still runs and a mismatch aborts the installation.
+
+Pass options after `--`:
+
+```sh
+curl -fsSL https://jwtd.sh/install.sh | sh -s -- --version v5.3.0   # pin a release
+curl -fsSL https://jwtd.sh/install.sh | sh -s -- --dir /usr/local/bin
+```
+
+`JWTD_VERSION` and `JWTD_INSTALL_DIR` set the same two values. Run the script with `--help` for the full list. The script is [`install.sh`](install.sh) in this repository; review it before piping it into a shell.
+
+Windows is served by [WinGet](#winget-windows) and [Scoop](#scoop-windows) instead.
+
 ### Homebrew (macOS and Linux)
 
 ```sh

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "install.sh"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -28,6 +29,12 @@ jobs:
         run: |
           version="$(gh release view --json tagName --jq .tagName)"
           sed -i "s/VERSION/${version}/g" site/index.html
+      # The installer lives at the repository root as the single source of
+      # truth and is copied into the Pages artifact so that
+      # https://jwtd.sh/install.sh serves it. It is never edited here, so the
+      # hosted script is byte-identical to the reviewed one.
+      - name: Publish the install script at jwtd.sh/install.sh
+        run: install -m 0755 install.sh site/install.sh
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: site
