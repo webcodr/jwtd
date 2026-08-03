@@ -13,6 +13,11 @@ content contract in `site_test.go`. Suggestions below are ordered by impact.
 > `<details>`/`<summary>`. `sitemap.xml` also gained a `<lastmod>`.
 > Remaining: 11 (favicon.ico fallback), 12 (light theme), 13–14 (bigger swings),
 > and the clickjacking comment under the security note.
+>
+> The site has since been redesigned onto a neon synthwave palette (hot
+> magenta and cyan over deep violet), so `og.png` is still the old Tokyo Night
+> mockup and no longer matches the page it represents. Regenerating it is
+> outstanding.
 
 ### 1. Install tabs ignore the URL hash
 
@@ -121,7 +126,7 @@ Only an SVG favicon is provided; older browsers and some tools expect
 
 ### 12. Optional light theme
 
-`:root { color-scheme: dark }` is hardcoded. The Tokyo Night palette is
+`:root { color-scheme: dark }` is hardcoded. The synthwave palette is
 deliberate branding, so this may be intentional, but a
 `prefers-color-scheme: light` variant would help users with light-mode OS
 settings.

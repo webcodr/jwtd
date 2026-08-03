@@ -1,21 +1,51 @@
+/* ==========================================================================
+   jwtd.sh
+
+   Neon synthwave: hot magenta and iced cyan over deep violet ink.
+
+   Two families of color live here and must not be mixed up:
+
+   --blue/--cyan/--green/--yellow/--magenta/--red are the CLI's own syntax
+   colors, mapped onto .token-* further down. They exist so a code sample on
+   this page looks like real jwtd output, so changing one changes a claim the
+   page makes about the tool. site_test.go pins both the values and the
+   mapping.
+
+   --pink is site chrome only: wordmark, primary action, accent rules. It
+   never appears inside a code sample, which is what keeps the brand accent
+   from being mistaken for a syntax color.
+   ========================================================================== */
+
 :root {
   color-scheme: dark;
-  --background: #1a1b26;
-  --surface: #24283b;
-  --text: #c0caf5;
-  --muted: #a9b1d6;
-  --comment: #565f89;
-  --blue: #7aa2f7;
-  --cyan: #7dcfff;
-  --green: #9ece6a;
-  --yellow: #e0af68;
-  --magenta: #bb9af7;
-  --red: #f7768e;
-  --border: #3b4261;
-  --background-deep: #16161e;
+
+  /* ink */
+  --background-deep: #0b0518;
+  --background: #120826;
+  --surface: #1c0f36;
+  --border: #38205c;
+  --border-bright: #5a2e8f;
+
+  /* text */
+  --text: #f2e9ff;
+  --muted: #c3b0e0;
+  --comment: #7d6aa3;
+
+  /* chrome accent */
+  --pink: #ff45c8;
+
+  /* CLI syntax colors */
+  --blue: #6d8cff;
+  --cyan: #5fdcff;
+  --green: #7df58f;
+  --yellow: #ffc95c;
+  --magenta: #c98cff;
+  --red: #ff5f7d;
+
   --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --content: 1180px;
+  --header: 68px;
 }
 
 * {
@@ -27,15 +57,32 @@ html {
 }
 
 body {
+  position: relative;
   margin: 0;
-  background:
-    linear-gradient(rgba(122, 162, 247, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(122, 162, 247, 0.035) 1px, transparent 1px),
-    var(--background);
-  background-size: 40px 40px;
+  background: var(--background);
   color: var(--text);
   font-family: var(--sans);
-  line-height: 1.6;
+  font-size: 1rem;
+  line-height: 1.65;
+  scrollbar-color: var(--border-bright) transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Ambient bloom over the first screen only, so it scrolls away instead of
+   following the viewport. Replaces the blueprint grid the page used to wear. */
+body::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0 0 auto;
+  height: 1150px;
+  pointer-events: none;
+  /* Sized in px, like the height above: mixing vh gradients into a px-capped
+     box clips them into a visible horizontal edge on tall viewports. */
+  background:
+    radial-gradient(780px 600px at 4% -2%, rgba(255, 69, 200, 0.22), transparent 68%),
+    radial-gradient(620px 500px at 97% 8%, rgba(95, 220, 255, 0.13), transparent 62%),
+    radial-gradient(960px 400px at 55% 0%, rgba(201, 140, 255, 0.09), transparent 70%);
 }
 
 a {
@@ -51,8 +98,13 @@ button {
   font: inherit;
 }
 
+::selection {
+  background: var(--pink);
+  color: var(--background-deep);
+}
+
 :focus-visible {
-  outline: 3px solid var(--yellow);
+  outline: 2px solid var(--cyan);
   outline-offset: 3px;
 }
 
@@ -62,9 +114,9 @@ button {
   top: 0.75rem;
   left: 0.75rem;
   padding: 0.7rem 1rem;
-  background: var(--yellow);
+  background: var(--cyan);
   color: var(--background-deep);
-  font-weight: 800;
+  font-weight: 700;
   transform: translateY(-180%);
 }
 
@@ -72,13 +124,15 @@ button {
   transform: translateY(0);
 }
 
+/* ── header ───────────────────────────────────────────────────────────── */
+
 .site-header {
   position: sticky;
   z-index: 20;
   top: 0;
-  border-bottom: 1px solid rgba(59, 66, 97, 0.8);
-  background: rgba(26, 27, 38, 0.94);
-  backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(56, 32, 92, 0.7);
+  background: rgba(18, 8, 38, 0.82);
+  backdrop-filter: blur(12px) saturate(140%);
 }
 
 .header-inner,
@@ -90,7 +144,7 @@ button {
 }
 
 .header-inner {
-  min-height: 70px;
+  min-height: var(--header);
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
@@ -98,26 +152,28 @@ button {
 }
 
 .wordmark {
-  color: var(--cyan);
+  color: var(--text);
   font-family: var(--mono);
-  font-size: 1.25rem;
-  font-weight: 800;
-  letter-spacing: -0.04em;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   text-decoration: none;
 }
 
 .wordmark span {
-  color: var(--magenta);
+  color: var(--pink);
+  text-shadow: 0 0 12px rgba(255, 69, 200, 0.55);
 }
 
 .site-nav {
   display: flex;
   justify-content: center;
-  gap: 1.6rem;
+  gap: 1.5rem;
 }
 
 .site-nav a,
 .site-footer nav a {
+  position: relative;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.8rem;
@@ -134,69 +190,64 @@ button {
 .hero-actions {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 1.25rem;
 }
 
 .text-link {
-  color: var(--blue);
-  font-weight: 750;
-  text-underline-offset: 0.25em;
+  color: var(--cyan);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-underline-offset: 0.3em;
+  text-decoration-thickness: 1px;
+  text-decoration-color: rgba(95, 220, 255, 0.4);
 }
+
+/* ── actions ──────────────────────────────────────────────────────────── */
 
 .button {
   display: inline-flex;
-  min-height: 46px;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--blue);
-  background: var(--blue);
+  border: 1px solid var(--pink);
+  background: var(--pink);
   color: var(--background-deep);
   font-family: var(--mono);
-  font-weight: 800;
-  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  padding: 0.7rem 1.35rem;
   text-decoration: none;
-  box-shadow: 4px 4px 0 rgba(187, 154, 247, 0.35);
+  transition: background-color 0.15s ease, box-shadow 0.2s ease, color 0.15s ease;
 }
 
 .button:hover {
-  background: var(--cyan);
-  border-color: var(--cyan);
+  background: #ff6ad4;
+  border-color: #ff6ad4;
+  box-shadow: 0 10px 34px -12px rgba(255, 69, 200, 0.85);
 }
 
 .button-small {
-  min-height: 40px;
-  padding: 0.55rem 0.85rem;
+  min-height: 36px;
+  padding: 0.45rem 0.95rem;
   font-size: 0.8rem;
 }
 
 .nav-toggle {
   display: none;
-  min-height: 42px;
+  min-height: 38px;
   border: 1px solid var(--border);
   background: var(--surface);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
+.nav-toggle:hover {
+  border-color: var(--border-bright);
   color: var(--text);
-  font-family: var(--mono);
 }
 
-.hero {
-  min-height: calc(100vh - 70px);
-  display: grid;
-  grid-template-columns: minmax(0, 0.88fr) minmax(500px, 1.12fr);
-  align-items: center;
-  gap: clamp(2.5rem, 6vw, 6rem);
-  padding-block: 5rem;
-}
-
-.eyebrow,
-.panel-kicker {
-  margin: 0 0 1rem;
-  color: var(--cyan);
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
+/* ── type ─────────────────────────────────────────────────────────────── */
 
 h1,
 h2,
@@ -206,37 +257,111 @@ p {
 }
 
 h1 {
-  margin-bottom: 1.5rem;
-  font-size: clamp(3.4rem, 7vw, 6.7rem);
-  line-height: 0.92;
-  letter-spacing: -0.075em;
+  margin-bottom: 1.35rem;
+  font-size: clamp(2.75rem, 6.2vw, 5.25rem);
+  font-weight: 700;
+  line-height: 1.03;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
 }
 
 h1 span {
-  color: var(--blue);
+  color: var(--pink);
 }
 
 h2 {
   margin-bottom: 1rem;
-  font-size: clamp(2.1rem, 4vw, 4.2rem);
-  line-height: 1.02;
-  letter-spacing: -0.055em;
+  font-size: clamp(1.85rem, 3.2vw, 2.75rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
 }
 
 h3 {
-  margin-bottom: 0.35rem;
-  font-size: 1.05rem;
+  margin-bottom: 0.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+code {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+}
+
+/* Inline code inside prose. Code blocks reset this below. */
+p > code,
+span > code,
+li > code {
+  border-radius: 3px;
+  background: rgba(90, 46, 143, 0.28);
+  color: var(--cyan);
+  font-size: 0.88em;
+  padding: 0.08em 0.22em;
+}
+
+/* Sentence-case mono labels with a leading rule, in place of the
+   "01 / overview" uppercase eyebrow every other CLI site uses. */
+.eyebrow,
+.panel-kicker {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin: 0 0 1.1rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.eyebrow {
+  color: var(--cyan);
+}
+
+.eyebrow::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--pink));
+}
+
+.panel-kicker {
+  color: var(--comment);
+}
+
+.panel-kicker a {
+  color: var(--cyan);
+  text-underline-offset: 0.25em;
 }
 
 .hero-lede,
 .section-heading > p,
 .security-copy > p {
   color: var(--muted);
-  font-size: clamp(1rem, 1.5vw, 1.2rem);
+  font-size: clamp(1rem, 1.2vw, 1.125rem);
+}
+
+/* ── hero ─────────────────────────────────────────────────────────────── */
+
+/* minmax(0, 1fr) rather than an implicit auto track: an auto track is sized
+   by its items' max-content, so .compact-command's max-width pushed the whole
+   column past the container and scrolled the page sideways on narrow screens. */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(2.5rem, 5vw, 4rem);
+  padding-block: clamp(3.5rem, 8vw, 6.5rem) clamp(3rem, 6vw, 5rem);
+}
+
+.hero-copy {
+  min-width: 0;
+  max-width: 54rem;
 }
 
 .hero-lede {
-  max-width: 34rem;
+  max-width: 36rem;
   margin-bottom: 2rem;
 }
 
@@ -244,73 +369,77 @@ h3 {
   margin-bottom: 2rem;
 }
 
-.terminal {
+/* Copy flush left, specimen stepped in from the left and running to the
+   container edge. The diagonal is the layout's signature, and it also gives
+   the code sample far more width than a hero side column would. */
+@media (min-width: 900px) {
+  .specimen {
+    margin-left: clamp(2rem, 9vw, 8rem);
+  }
+}
+
+.specimen {
+  position: relative;
   min-width: 0;
-  overflow: hidden;
   border: 1px solid var(--border);
   background: var(--background-deep);
-  box-shadow: 18px 18px 0 rgba(122, 162, 247, 0.08), -8px -8px 0 rgba(187, 154, 247, 0.05);
 }
 
-.terminal-bar {
-  min-height: 45px;
+.specimen::before {
+  content: "";
+  position: absolute;
+  inset: -1px -1px auto;
+  height: 2px;
+  background: linear-gradient(90deg, var(--pink), var(--magenta) 42%, var(--cyan));
+}
+
+/* Caption row, not a fake window title bar. No traffic lights. */
+.specimen-caption {
   display: flex;
-  align-items: center;
-  gap: 0.45rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  padding: 0 1rem;
+  padding: 0.85rem clamp(1.15rem, 3vw, 1.75rem);
 }
 
-.terminal-bar span {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--red);
-}
-
-.terminal-bar span:nth-child(2) {
-  background: var(--yellow);
-}
-
-.terminal-bar span:nth-child(3) {
-  background: var(--green);
-}
-
-.terminal-bar p {
-  margin: 0 auto;
-  color: var(--muted);
+.specimen-caption p {
+  margin: 0;
+  color: var(--comment);
   font-family: var(--mono);
   font-size: 0.72rem;
 }
 
-.terminal pre,
+.specimen-caption p:first-child {
+  color: var(--muted);
+}
+
+.specimen pre,
 .command-block pre {
   margin: 0;
   overflow-x: auto;
 }
 
-.terminal pre {
+.specimen pre {
   padding: clamp(1.25rem, 3vw, 2rem);
 }
 
-code {
-  font-family: var(--mono);
+.specimen code {
+  color: var(--text);
+  font-size: clamp(0.76rem, 1.05vw, 0.88rem);
+  line-height: 1.8;
 }
 
-.terminal code {
-  color: var(--text);
-  font-size: clamp(0.76rem, 1.2vw, 0.92rem);
-  line-height: 1.75;
-}
+/* ── CLI syntax colors ────────────────────────────────────────────────── */
 
 .prompt {
-  color: var(--magenta);
+  color: var(--pink);
 }
 
 .token-key {
   color: var(--blue);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .token-string {
@@ -331,22 +460,24 @@ code {
 
 .token-label {
   color: var(--cyan);
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .signature {
-  color: var(--muted);
+  color: var(--comment);
 }
 
+/* ── sections ─────────────────────────────────────────────────────────── */
+
 .section {
-  padding-block: clamp(5rem, 10vw, 9rem);
+  padding-block: clamp(3.5rem, 6vw, 5.5rem);
   border-top: 1px solid var(--border);
-  scroll-margin-top: 70px;
+  scroll-margin-top: var(--header);
 }
 
 .section-heading {
-  max-width: 52rem;
-  margin-bottom: 3rem;
+  max-width: 50rem;
+  margin-bottom: clamp(2.25rem, 4vw, 3rem);
 }
 
 .narrow-heading {
@@ -355,16 +486,36 @@ code {
 
 .capabilities {
   display: grid;
-  grid-template-columns: minmax(280px, 0.8fr) minmax(420px, 1.2fr);
-  gap: clamp(3rem, 8vw, 8rem);
+  grid-template-columns: minmax(260px, 0.78fr) minmax(420px, 1.22fr);
+  gap: clamp(3rem, 7vw, 7rem);
+}
+
+/* The heading holds position while the list scrolls past it. */
+@media (min-width: 901px) {
+  .capabilities .section-heading,
+  .release-security .security-copy {
+    position: sticky;
+    top: calc(var(--header) + 3rem);
+    align-self: start;
+    margin-bottom: 0;
+  }
 }
 
 .capability-list article {
   display: grid;
-  grid-template-columns: 2.5rem 1fr;
-  gap: 1rem;
+  grid-template-columns: 2.25rem 1fr;
+  gap: 1.25rem;
   border-top: 1px solid var(--border);
-  padding: 1.25rem 0;
+  padding: 1.3rem 0;
+  transition: border-color 0.2s ease;
+}
+
+.capability-list article:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.capability-list article:hover {
+  border-top-color: var(--border-bright);
 }
 
 .capability-list article > span,
@@ -372,6 +523,7 @@ code {
   color: var(--magenta);
   font-family: var(--mono);
   font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .capability-list p,
@@ -383,53 +535,58 @@ code {
   color: var(--muted);
 }
 
+/* ── install ──────────────────────────────────────────────────────────── */
+
 .install-tabs {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.35rem;
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 0;
 }
 
 .install-tabs a {
   flex: 0 0 auto;
-  min-height: 46px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
-  border: 1px solid transparent;
-  border-bottom: 0;
+  border-bottom: 2px solid transparent;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.82rem;
   padding: 0.7rem 1rem;
   text-decoration: none;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.install-tabs a:hover {
+  color: var(--text);
 }
 
 .install-tabs a[aria-selected="true"] {
-  border-color: var(--border);
-  background: var(--surface);
-  color: var(--cyan);
+  border-bottom-color: var(--pink);
+  color: var(--text);
 }
 
 .install-panel {
   display: grid;
-  grid-template-columns: minmax(220px, 0.65fr) minmax(0, 1.35fr);
-  gap: 3rem;
-  border: 1px solid var(--border);
-  border-top: 0;
-  background: rgba(36, 40, 59, 0.72);
-  padding: clamp(1.5rem, 4vw, 3rem);
+  grid-template-columns: minmax(220px, 0.6fr) minmax(0, 1.4fr);
+  gap: clamp(2rem, 4vw, 3.5rem);
+  padding: clamp(1.75rem, 4vw, 3rem) 0 0;
 }
 
 .install-panel + .install-panel {
-  margin-top: 1.5rem;
   border-top: 1px solid var(--border);
+  margin-top: 2rem;
+}
+
+.install-panel h3 {
+  font-size: 1.15rem;
 }
 
 .install-note {
-  margin-top: 1.5rem;
-  color: var(--muted);
-  font-size: 0.95rem;
+  margin-top: 2.5rem;
+  color: var(--comment);
+  font-size: 0.9rem;
 }
 
 .js .install-panel + .install-panel {
@@ -447,19 +604,33 @@ code {
   align-content: start;
 }
 
+/* ── command blocks ───────────────────────────────────────────────────── */
+
 .command-block {
   min-width: 0;
   border: 1px solid var(--border);
   background: var(--background-deep);
+  transition: border-color 0.2s ease;
+}
+
+.command-block:hover {
+  border-color: var(--border-bright);
 }
 
 .command-block > p {
   margin: 0;
   border-bottom: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--comment);
   font-family: var(--mono);
   font-size: 0.72rem;
-  padding: 0.65rem 1rem;
+  padding: 0.6rem 1rem;
+}
+
+.command-block > p code {
+  background: none;
+  color: var(--muted);
+  font-size: 1em;
+  padding: 0;
 }
 
 .linux-commands .command-block > p {
@@ -472,8 +643,8 @@ code {
 .package-link {
   flex: 0 0 auto;
   float: none;
-  color: var(--blue);
-  font-weight: 700;
+  color: var(--cyan);
+  font-weight: 600;
   text-underline-offset: 0.2em;
   white-space: nowrap;
 }
@@ -485,11 +656,12 @@ code {
 .command-block code {
   color: var(--green);
   font-size: 0.82rem;
+  line-height: 1.7;
   white-space: pre;
 }
 
 .command-actions {
-  min-height: 40px;
+  min-height: 38px;
   display: none;
   align-items: center;
   gap: 0.75rem;
@@ -502,29 +674,31 @@ code {
 }
 
 .command-actions button {
-  min-width: 64px;
-  min-height: 32px;
-  border: 1px solid var(--blue);
+  min-width: 60px;
+  min-height: 30px;
+  border: 1px solid var(--border-bright);
   background: transparent;
-  color: var(--blue);
+  color: var(--muted);
   cursor: pointer;
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: 0.74rem;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .command-actions button:hover {
-  background: var(--blue);
-  color: var(--background-deep);
+  border-color: var(--cyan);
+  background: rgba(95, 220, 255, 0.12);
+  color: var(--cyan);
 }
 
 .copy-feedback {
-  color: var(--yellow);
+  color: var(--cyan);
   font-family: var(--mono);
   font-size: 0.72rem;
 }
 
 .compact-command {
-  max-width: 32rem;
+  max-width: min(100%, 38rem);
 }
 
 .linux-commands {
@@ -533,77 +707,96 @@ code {
   gap: 1rem;
 }
 
+/* ── usage ────────────────────────────────────────────────────────────── */
+
 .usage-list {
-  display: grid;
-  gap: 1px;
-  background: var(--border);
-  border: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .usage-list article {
   display: grid;
-  grid-template-columns: 2.5rem minmax(220px, 0.7fr) minmax(0, 1.3fr);
-  align-items: center;
+  grid-template-columns: 2.5rem minmax(220px, 0.72fr) minmax(0, 1.28fr);
+  align-items: start;
   gap: 2rem;
-  background: var(--background);
-  padding: 2rem;
+  border-bottom: 1px solid var(--border);
+  padding: clamp(1.5rem, 3vw, 2.25rem) 0;
 }
+
+.usage-copy h3 {
+  margin-bottom: 0.5rem;
+}
+
+/* ── key formats ──────────────────────────────────────────────────────── */
 
 .key-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: clamp(2rem, 7vw, 7rem);
+  gap: clamp(2rem, 6vw, 6rem);
   align-items: start;
 }
 
 .key-list {
   list-style: none;
   margin: 0;
+  border-top: 1px solid var(--border);
   padding: 0;
 }
 
 .key-list li {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 2rem;
   border-bottom: 1px solid var(--border);
-  padding: 1rem 0;
+  padding: 0.95rem 0;
 }
 
 .key-list strong {
   color: var(--blue);
   font-family: var(--mono);
   font-size: 0.85rem;
+  font-weight: 600;
 }
 
 .key-list span {
+  font-size: 0.95rem;
   text-align: right;
 }
 
 .key-command {
-  margin-top: 2rem;
+  margin-top: 0;
 }
+
+/* ── algorithms ───────────────────────────────────────────────────────── */
 
 .algorithm-groups {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: auto auto auto;
-  column-gap: 1.5rem;
+  column-gap: clamp(1.5rem, 3vw, 2.5rem);
   row-gap: 0;
 }
 
 .algorithm-group {
+  position: relative;
   display: grid;
   grid-row: span 3;
   grid-template-rows: subgrid;
-  border: 1px solid var(--border);
-  border-top: 2px solid var(--magenta);
-  background: rgba(36, 40, 59, 0.72);
-  padding: clamp(1.25rem, 3vw, 1.75rem);
+  border-top: 1px solid var(--border);
+  padding: 1.75rem 0 0;
+}
+
+.algorithm-group::before {
+  content: "";
+  position: absolute;
+  inset: -1px auto auto 0;
+  width: 2.5rem;
+  height: 2px;
+  background: var(--pink);
 }
 
 .algorithm-group > p {
-  margin-bottom: 1.25rem;
+  margin-bottom: 1.5rem;
   color: var(--muted);
   font-size: 0.9rem;
 }
@@ -613,7 +806,7 @@ code {
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
-  gap: 0.45rem;
+  gap: 0.4rem;
   margin: 0;
   padding: 0;
   align-self: start;
@@ -621,22 +814,22 @@ code {
 
 .algorithm-tags li {
   border: 1px solid var(--border);
-  background: var(--background-deep);
+  background: var(--surface);
   color: var(--cyan);
   font-family: var(--mono);
-  font-size: 0.75rem;
-  padding: 0.3rem 0.55rem;
+  font-size: 0.74rem;
+  padding: 0.28rem 0.5rem;
 }
 
+/* ── faq ──────────────────────────────────────────────────────────────── */
+
 .faq-list {
-  display: grid;
-  gap: 1px;
-  background: var(--border);
-  border: 1px solid var(--border);
+  max-width: 54rem;
+  border-top: 1px solid var(--border);
 }
 
 .faq-list details {
-  background: var(--background);
+  border-bottom: 1px solid var(--border);
 }
 
 .faq-list summary {
@@ -644,7 +837,7 @@ code {
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
-  padding: clamp(1.5rem, 4vw, 2rem);
+  padding: clamp(1.25rem, 3vw, 1.75rem) 0;
   cursor: pointer;
   list-style: none;
 }
@@ -653,13 +846,17 @@ code {
   display: none;
 }
 
+.faq-list summary:hover h3 {
+  color: var(--cyan);
+}
+
 .faq-list summary::after {
   content: "+";
   flex: 0 0 auto;
-  color: var(--comment);
-  font-size: 1.25rem;
+  color: var(--pink);
+  font-family: var(--mono);
+  font-size: 1.15rem;
   line-height: 1;
-  transition: transform 0.15s ease;
 }
 
 .faq-list details[open] summary::after {
@@ -669,39 +866,44 @@ code {
 .faq-list h3 {
   display: inline;
   margin: 0;
-  color: var(--cyan);
-  font-size: 1.1rem;
+  color: var(--text);
+  font-size: 1.05rem;
+  transition: color 0.15s ease;
 }
 
 .faq-list p {
+  max-width: 62ch;
   margin: 0;
-  padding: 0 clamp(1.5rem, 4vw, 2rem) clamp(1.5rem, 4vw, 2rem);
+  padding: 0 0 clamp(1.25rem, 3vw, 1.75rem);
   color: var(--muted);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .faq-list summary::after {
-    transition: none;
-  }
-}
+/* ── release security ─────────────────────────────────────────────────── */
 
 .release-security {
   display: grid;
-  grid-template-columns: 0.8fr 1.2fr;
-  gap: clamp(3rem, 8vw, 8rem);
-  align-items: center;
+  grid-template-columns: 0.85fr 1.15fr;
+  gap: clamp(2.5rem, 6vw, 6rem);
+  align-items: start;
 }
 
 .security-command code {
   color: var(--text);
 }
 
+/* ── footer ───────────────────────────────────────────────────────────── */
+
 .site-footer {
   display: flex;
   justify-content: space-between;
   gap: 2rem;
   border-top: 1px solid var(--border);
-  padding-block: 3rem;
+  padding-block: 3rem 3.5rem;
+}
+
+.site-footer p {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
 }
 
 .site-footer nav {
@@ -710,13 +912,9 @@ code {
   gap: 1.5rem;
 }
 
-@media (max-width: 900px) {
-  .hero {
-    min-height: auto;
-    grid-template-columns: 1fr;
-    padding-block: 4rem;
-  }
+/* ── responsive ───────────────────────────────────────────────────────── */
 
+@media (max-width: 900px) {
   .capabilities,
   .release-security {
     grid-template-columns: 1fr;
@@ -729,6 +927,7 @@ code {
 
   .usage-list article {
     grid-template-columns: 2rem 1fr;
+    gap: 1rem 1.5rem;
   }
 
   .usage-list .command-block {
@@ -737,6 +936,12 @@ code {
 
   .algorithm-groups {
     grid-template-columns: 1fr;
+  }
+
+  .algorithm-group {
+    grid-row: auto;
+    grid-template-rows: none;
+    padding-bottom: 2rem;
   }
 }
 
@@ -758,7 +963,7 @@ code {
     grid-column: 3;
     grid-row: 1;
     justify-self: end;
-    padding: 0.45rem 0.65rem;
+    padding: 0.4rem 0.6rem;
   }
 
   .site-nav {
@@ -782,35 +987,28 @@ code {
     justify-self: end;
   }
 
-  .header-actions .text-link {
-    font-size: 0.78rem;
-  }
-
   .js .header-actions {
     justify-self: start;
   }
 
   h1 {
-    font-size: clamp(3rem, 16vw, 5rem);
+    font-size: clamp(2.4rem, 11vw, 3.4rem);
   }
 
   .hero-actions {
     align-items: flex-start;
     flex-direction: column;
+    gap: 1rem;
   }
 
-  .terminal {
-    box-shadow: 8px 8px 0 rgba(122, 162, 247, 0.08);
-  }
-
-  .terminal pre {
+  .specimen pre {
     overflow-x: auto;
   }
 
   .install-panel,
   .key-layout {
     grid-template-columns: 1fr;
-    gap: 1.5rem;
+    gap: 1.75rem;
   }
 
   .linux-commands {
@@ -819,8 +1017,8 @@ code {
 
   .usage-list article {
     grid-template-columns: 1fr;
-    gap: 0.75rem;
-    padding: 1.25rem;
+    gap: 0.85rem;
+    padding: 1.5rem 0;
   }
 
   .usage-list .command-block {
@@ -830,7 +1028,7 @@ code {
   .key-list li {
     align-items: flex-start;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 0.25rem;
   }
 
   .key-list span {
@@ -844,7 +1042,7 @@ code {
 
 @media (max-width: 430px) {
   .install-tabs a {
-    padding-inline: 0.8rem;
+    padding-inline: 0.75rem;
   }
 }
 

@@ -54,6 +54,7 @@ func TestWebsiteContentContract(t *testing.T) {
 		"skip link":        `href="#main-content"`,
 		"header landmark":  `<header class="site-header">`,
 		"main landmark":    `<main id="main-content">`,
+		"output specimen":  `<div class="specimen" aria-label="Example jwtd terminal output">`,
 		"capabilities":     `id="capabilities"`,
 		"installation":     `id="install"`,
 		"usage":            `id="usage"`,
@@ -83,22 +84,33 @@ func TestWebsiteContentContract(t *testing.T) {
 	}
 
 	styles := readWebsiteFile(t, "site", "styles.css")
+	// The synthwave palette: neon over deep violet ink. --pink is site chrome
+	// only; the six syntax colors below it are the CLI's own and are mapped
+	// onto .token-* by the next block.
+	background := "#120826"
 	for name, color := range map[string]string{
-		"background": "#1a1b26",
-		"surface":    "#24283b",
-		"text":       "#c0caf5",
-		"muted text": "#a9b1d6",
-		"comment":    "#565f89",
-		"blue":       "#7aa2f7",
-		"cyan":       "#7dcfff",
-		"green":      "#9ece6a",
-		"yellow":     "#e0af68",
-		"magenta":    "#bb9af7",
-		"red":        "#f7768e",
+		"background":      background,
+		"deep background": "#0b0518",
+		"surface":         "#1c0f36",
+		"text":            "#f2e9ff",
+		"muted text":      "#c3b0e0",
+		"comment":         "#7d6aa3",
+		"pink":            "#ff45c8",
+		"blue":            "#6d8cff",
+		"cyan":            "#5fdcff",
+		"green":           "#7df58f",
+		"yellow":          "#ffc95c",
+		"magenta":         "#c98cff",
+		"red":             "#ff5f7d",
 	} {
 		if !strings.Contains(styles, color) {
-			t.Errorf("site/styles.css is missing Tokyo Night %s token %s", name, color)
+			t.Errorf("site/styles.css is missing synthwave %s token %s", name, color)
 		}
+	}
+	// A theme-color that drifts from the page background shows as a seam
+	// between browser chrome and the page on mobile.
+	if themeColor := fmt.Sprintf(`<meta name="theme-color" content=%q>`, background); !strings.Contains(normalizedIndex, normalizeMarkup(themeColor)) {
+		t.Errorf("site/index.html theme-color must match the page background %s", background)
 	}
 	for class, token := range map[string]string{
 		".token-key":     "var(--blue)",
