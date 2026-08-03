@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,29 @@ func readInstallScript(t *testing.T) string {
 		t.Fatalf("reading install.sh: %v", err)
 	}
 	return string(data)
+}
+
+func readPowerShellInstallScript(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("install.ps1")
+	if err != nil {
+		t.Fatalf("reading install.ps1: %v", err)
+	}
+	return string(data)
+}
+
+// powerShellCodeLines drops comment lines so that assertions about what the
+// installer must not call are not satisfied by a comment explaining why it does
+// not call it.
+func powerShellCodeLines(script string) []string {
+	var code []string
+	for line := range strings.SplitSeq(script, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		code = append(code, line)
+	}
+	return code
 }
 
 // runInstallScript executes install.sh with the given arguments and an
@@ -232,5 +256,222 @@ func TestInstallScriptPublication(t *testing.T) {
 		if !strings.Contains(string(index), block) {
 			t.Errorf("site/index.html must offer the install script in the %s block: %q", id, block)
 		}
+	}
+}
+
+func TestPowerShellInstallScriptContract(t *testing.T) {
+	script := readPowerShellInstallScript(t)
+
+	for label, required := range map[string]string{
+		"parameter block":           "param(",
+		"repository":                `$Repo = 'webcodr/jwtd'`,
+		"default install directory": `Join-Path $env:LOCALAPPDATA 'Programs\jwtd'`,
+		"latest release URL":        "releases/latest/download",
+		"pinned release URL":        "releases/download/$releaseVersion",
+		"checksum file":             "checksums.txt",
+		"cosign bundle":             "checksums.txt.sigstore.json",
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("install.ps1 is missing %s marker %q", label, required)
+		}
+	}
+
+	// The script is piped into Invoke-Expression in an interactive session,
+	// where `exit` terminates the user's shell rather than the installation.
+	// Errors are raised with `throw` instead.
+	if regexp.MustCompile(`(?m)^\s*exit\b`).MatchString(script) {
+		t.Error("install.ps1 must not call exit: under `irm | iex` that closes the user's PowerShell session")
+	}
+	if !strings.Contains(script, "throw $Message") {
+		t.Error("install.ps1 must abort by throwing so the failure does not close the caller's session")
+	}
+
+	// Preference variables are dynamically scoped. Setting them at the top
+	// level of a script that is invoked through Invoke-Expression would leave
+	// the user's own session with them applied afterwards.
+	body := script[strings.Index(script, "function Install-Jwtd"):]
+	if !strings.Contains(body, "$ErrorActionPreference = 'Stop'") {
+		t.Error("install.ps1 must set $ErrorActionPreference = 'Stop' inside Install-Jwtd, not at script scope")
+	}
+
+	// The installer writes into a user-scoped directory and HKCU only. Any
+	// elevation would make piping it into a shell a privilege decision, and a
+	// machine-wide registry write would need that elevation.
+	for _, line := range powerShellCodeLines(script) {
+		for _, forbidden := range []string{"RunAs", "runas"} {
+			if strings.Contains(line, forbidden) {
+				t.Errorf("install.ps1 must never elevate, found %q in %q", forbidden, strings.TrimSpace(line))
+			}
+		}
+		if strings.Contains(line, "Set-ItemProperty") && !strings.Contains(line, "$UserEnvironmentKey") {
+			t.Errorf("install.ps1 may only write to the user environment key, found %q", strings.TrimSpace(line))
+		}
+	}
+}
+
+// TestPowerShellInstallScriptTargetsReleaseArchives pins the asset naming to
+// .goreleaser.yaml. The windows zips exist for WinGet; the installer consumes
+// them because Expand-Archive is built in while tar.gz is not.
+func TestPowerShellInstallScriptTargetsReleaseArchives(t *testing.T) {
+	config, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("reading .goreleaser.yaml: %v", err)
+	}
+	if !strings.Contains(string(config), "id: jwtd-zip") {
+		t.Fatal(".goreleaser.yaml must publish the windows zip archives install.ps1 downloads")
+	}
+	if !strings.Contains(string(config), `name_template: "jwtd-{{ .Os }}-{{ .Arch }}"`) {
+		t.Fatal(".goreleaser.yaml archive name template changed; install.ps1 builds asset names from it")
+	}
+
+	script := readPowerShellInstallScript(t)
+	if !strings.Contains(script, `$archive = "jwtd-windows-$architecture.zip"`) {
+		t.Error("install.ps1 must request jwtd-windows-<arch>.zip, matching the GoReleaser archive names")
+	}
+	for _, mapping := range []string{"'X64' { return 'amd64' }", "'Arm64' { return 'arm64' }"} {
+		if !strings.Contains(script, mapping) {
+			t.Errorf("install.ps1 is missing the architecture mapping %q", mapping)
+		}
+	}
+	if !strings.Contains(script, "unsupported architecture:") {
+		t.Error("install.ps1 must reject architectures with no release binary")
+	}
+	// PowerShell 7 also runs on macOS and Linux, which install.sh serves.
+	if !strings.Contains(script, "unsupported operating system:") {
+		t.Error("install.ps1 must reject non-Windows hosts and point at install.sh")
+	}
+}
+
+// TestPowerShellInstallScriptVerifiesBeforeInstalling is the Windows half of
+// TestInstallScriptVerifiesBeforeInstalling: nothing reaches the installation
+// directory before the archive matches checksums.txt, and both installers trust
+// exactly the same signing identity.
+func TestPowerShellInstallScriptVerifiesBeforeInstalling(t *testing.T) {
+	script := readPowerShellInstallScript(t)
+
+	verify := strings.Index(script, "Test-Checksum -Archive $archive")
+	if verify < 0 {
+		t.Fatal("install.ps1 must verify the downloaded archive against checksums.txt")
+	}
+	extract := strings.Index(script, "Expand-Archive -Path $archive")
+	if extract < 0 {
+		t.Fatal("install.ps1 must extract the binary from the release archive")
+	}
+	stage := strings.Index(script, "Copy-Item -Path $binary -Destination $staged")
+	if stage < 0 {
+		t.Fatal("install.ps1 must stage the binary inside the install directory before renaming it into place")
+	}
+	if verify > extract || verify > stage {
+		t.Error("install.ps1 must verify the checksum before extracting or installing the binary")
+	}
+
+	shell := readInstallScript(t)
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("reading README.md: %v", err)
+	}
+	for label, identity := range map[string]string{
+		"certificate identity": `^https://github.com/webcodr/jwtd/\.github/workflows/release\.yml@`,
+		"OIDC issuer":          "https://token.actions.githubusercontent.com",
+	} {
+		if !strings.Contains(script, identity) {
+			t.Errorf("install.ps1 Cosign %s must be %q", label, identity)
+		}
+		if !strings.Contains(shell, identity) || !strings.Contains(string(readme), identity) {
+			t.Errorf("install.sh and README.md Cosign %s must stay %q so every installer documents one trust root", label, identity)
+		}
+	}
+
+	if !strings.Contains(script, "Write-Die 'cosign could not verify checksums.txt") {
+		t.Error("install.ps1 must abort when cosign is installed and verification fails")
+	}
+}
+
+// TestPowerShellInstallScriptUpgradesRunningBinary covers the one thing the
+// Unix installer does not have to handle: Windows refuses to overwrite a
+// running .exe, so an upgrade renames the old binary aside first.
+func TestPowerShellInstallScriptUpgradesRunningBinary(t *testing.T) {
+	script := readPowerShellInstallScript(t)
+
+	retire := strings.Index(script, "Move-Item -Path $installed -Destination $retired")
+	if retire < 0 {
+		t.Fatal("install.ps1 must move an existing jwtd.exe aside; Windows cannot overwrite a running binary")
+	}
+	install := strings.Index(script, "Move-Item -Path $staged -Destination $installed")
+	if install < 0 {
+		t.Fatal("install.ps1 must move the staged binary into place")
+	}
+	if retire > install {
+		t.Error("install.ps1 must retire the old binary before moving the new one into place")
+	}
+	if !strings.Contains(script, "Remove-Item -Path $retired -Force -ErrorAction SilentlyContinue") {
+		t.Error("deleting the retired binary must be best-effort: it fails while an older jwtd is still running")
+	}
+}
+
+// TestPowerShellInstallScriptEditsUserPathSafely holds down the registry
+// handling. [Environment]::SetEnvironmentVariable expands %USERPROFILE%-style
+// entries and writes the expanded text back as a plain string, corrupting parts
+// of the PATH the installer never touched.
+func TestPowerShellInstallScriptEditsUserPathSafely(t *testing.T) {
+	script := readPowerShellInstallScript(t)
+
+	for _, line := range powerShellCodeLines(script) {
+		if strings.Contains(line, "SetEnvironmentVariable") {
+			t.Errorf("install.ps1 must not use [Environment]::SetEnvironmentVariable for PATH - it expands and rewrites unrelated entries - found %q", strings.TrimSpace(line))
+		}
+	}
+	for label, required := range map[string]string{
+		"user environment key": `$UserEnvironmentKey = 'HKCU:\Environment'`,
+		"unexpanded read":      "[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames",
+		"expandable write":     "-Type ExpandString",
+		"opt-out":              "$skipPath",
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("install.ps1 PATH handling is missing the %s marker %q", label, required)
+		}
+	}
+}
+
+// TestPowerShellInstallScriptPublication covers the delivery path, mirroring
+// TestInstallScriptPublication.
+func TestPowerShellInstallScriptPublication(t *testing.T) {
+	pages, err := os.ReadFile(filepath.Join(".github", "workflows", "pages.yml"))
+	if err != nil {
+		t.Fatalf("reading Pages workflow: %v", err)
+	}
+	if !strings.Contains(string(pages), "install -m 0644 install.ps1 site/install.ps1") {
+		t.Error("Pages workflow must copy install.ps1 into the site artifact so jwtd.sh/install.ps1 serves it")
+	}
+	if !strings.Contains(string(pages), `- "install.ps1"`) {
+		t.Error("Pages workflow must redeploy when install.ps1 changes")
+	}
+
+	const oneLiner = "irm https://jwtd.sh/install.ps1 | iex"
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("reading README.md: %v", err)
+	}
+	if !strings.Contains(string(readme), oneLiner) {
+		t.Errorf("README.md must document %q", oneLiner)
+	}
+
+	index, err := os.ReadFile(filepath.Join("site", "index.html"))
+	if err != nil {
+		t.Fatalf("reading site/index.html: %v", err)
+	}
+	block := `<code id="windows-script-command">` + oneLiner + `</code>`
+	if !strings.Contains(string(index), block) {
+		t.Errorf("site/index.html must offer the install script in the Windows panel: %q", block)
+	}
+
+	// The copy lives in the Pages artifact only; a committed one would be a
+	// second source of truth that could drift from the reviewed script.
+	ignore, err := os.ReadFile(".gitignore")
+	if err != nil {
+		t.Fatalf("reading .gitignore: %v", err)
+	}
+	if !strings.Contains(string(ignore), "site/install.ps1") {
+		t.Error(".gitignore must exclude site/install.ps1; it is generated by the Pages workflow")
 	}
 }

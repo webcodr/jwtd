@@ -44,7 +44,10 @@ test("installMethodForOperatingSystem selects the approved default", () => {
 });
 
 test("heroCommandForOperatingSystem selects a working command per platform", () => {
-  assert.equal(heroCommandForOperatingSystem("windows"), "winget install WebCodr.jwtd");
+  assert.equal(
+    heroCommandForOperatingSystem("windows"),
+    "irm https://jwtd.sh/install.ps1 | iex",
+  );
   assert.equal(
     heroCommandForOperatingSystem("linux"),
     "curl -fsSL https://jwtd.sh/install.sh | sh",
@@ -83,7 +86,7 @@ test("hero commands never hardcode a CPU architecture", () => {
 test("heroMethodForOperatingSystem labels the command it accompanies", () => {
   assert.equal(heroMethodForOperatingSystem("macos"), "macOS · Homebrew");
   assert.equal(heroMethodForOperatingSystem("linux"), "Linux · install script");
-  assert.equal(heroMethodForOperatingSystem("windows"), "Windows · WinGet");
+  assert.equal(heroMethodForOperatingSystem("windows"), "Windows · install script");
   assert.equal(heroMethodForOperatingSystem("unknown"), "macOS · Homebrew");
 });
 

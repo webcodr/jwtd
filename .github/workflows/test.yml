@@ -150,6 +150,95 @@ jobs:
 
           (cd dist && sha256sum --check checksums.txt)
 
+  # install_test.go can only assert the shape of install.ps1; the behaviour it
+  # guards - archive naming, checksum verification, replacing a running binary,
+  # and the user PATH edit - needs a real Windows host. This job installs the
+  # latest published release the way a user would.
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check install.ps1 syntax
+        shell: pwsh
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path ./install.ps1), [ref]$null, [ref]$errors)
+          if ($errors) {
+            $errors | ForEach-Object { $_.ToString() }
+            exit 1
+          }
+
+      - name: Install the latest release
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'jwtd-install'
+          ./install.ps1 -Dir $dir -NoModifyPath
+          & (Join-Path $dir 'jwtd.exe') --version
+
+      # The second run exercises the upgrade path: Windows cannot overwrite an
+      # existing .exe in place, so the installer renames it aside first and must
+      # clean up after itself.
+      - name: Reinstall over the existing binary
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'jwtd-install'
+          ./install.ps1 -Dir $dir -NoModifyPath
+          $token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6Imp3dGQifQ.JbLj7QQhCqlNvT-EOwJSeB4ArXQPoXlhBGhWSGD7-V4'
+          & (Join-Path $dir 'jwtd.exe') --json $token
+          $leftovers = @(Get-ChildItem -Path $dir -Force | Where-Object { $_.Name -ne 'jwtd.exe' })
+          if ($leftovers.Count -ne 0) {
+            "the installer left files behind: $($leftovers.Name -join ', ')"
+            exit 1
+          }
+
+      - name: Write nothing when the release cannot be fetched
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'jwtd-unavailable'
+          $failed = $false
+          try { ./install.ps1 -Dir $dir -NoModifyPath -Version v0.0.0-does-not-exist }
+          catch { $failed = $true }
+          if (-not $failed) { 'the installer must fail on an unavailable release'; exit 1 }
+          if (Test-Path (Join-Path $dir 'jwtd.exe')) {
+            'the installer must not write a binary when verification cannot pass'
+            exit 1
+          }
+
+      - name: Add to the user PATH without rewriting existing entries
+        shell: pwsh
+        run: |
+          $key = 'HKCU:\Environment'
+          $original = (Get-Item $key).GetValue(
+            'Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          try {
+            Set-ItemProperty -Path $key -Name 'Path' `
+              -Value '%USERPROFILE%\seeded;C:\already\there' -Type ExpandString
+            $dir = Join-Path $env:RUNNER_TEMP 'jwtd-path'
+            ./install.ps1 -Dir $dir
+
+            $raw = (Get-Item $key).GetValue(
+              'Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $entries = @($raw -split ';' | Where-Object { $_ -ne '' })
+            # The seeded entry must survive verbatim: an installer that expands
+            # it would bake this runner's profile path into the user's PATH.
+            if ($entries[0] -ne '%USERPROFILE%\seeded') {
+              "unexpanded PATH entry was rewritten: $raw"
+              exit 1
+            }
+            if ($entries -notcontains $dir) {
+              "install directory missing from PATH: $raw"
+              exit 1
+            }
+            if ((Get-Item $key).GetValueKind('Path') -ne 'ExpandString') {
+              'PATH must stay a REG_EXPAND_SZ value'
+              exit 1
+            }
+          } finally {
+            Set-ItemProperty -Path $key -Name 'Path' -Value $original -Type ExpandString
+          }
+
   nix:
     runs-on: ubuntu-latest
     steps:
