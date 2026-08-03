@@ -400,41 +400,37 @@ li > code {
   margin-bottom: 0;
 }
 
-/* The install command is a bare prompt line rather than a bordered block: as a
-   box it read as an unlabelled fragment, competing with the button above it and
-   matching neither the copy measure nor the full-width specimen below. Tight
-   spacing above groups it with the actions; the hero gap separates it from the
-   specimen. The "$" lives outside #hero-install-command so the copy button,
-   which reads that element's textContent, never puts a prompt on the clipboard.
-   Every hero command is single-line by contract, so this never wraps. */
-.hero-install-line {
-  display: flex;
-  align-items: center;
-  gap: 0.85rem;
+/* The hero command uses the same slot order as .command-block below — label,
+   command, then the copy row under a rule — so both read as one component. It
+   drops only the border, which keeps the hero light and stopped the old boxed
+   version from looking like an unlabelled fragment. The "$" prompt is the one
+   addition, and it lives outside #hero-install-command because the copy button
+   reads that element's textContent and must never put a prompt on the
+   clipboard. Every hero command is single-line by contract, so it never wraps. */
+.hero-install {
   max-width: min(100%, 40rem);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.7rem;
 }
 
-/* 0 1 auto, not 1 1 auto: the copy button must sit right after the command it
-   copies. Letting the pre grow pins the button to the measure's right edge,
-   which strands it hundreds of pixels away for a short command like
-   "winget install WebCodr.jwtd". The rule below still spans the full measure,
-   so the left edge stays aligned even though the button's x-position varies. */
-.hero-install-line pre {
-  flex: 0 1 auto;
+.hero-install-method {
+  margin: 0 0 0.5rem;
+  color: var(--comment);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.hero-install pre {
   min-width: 0;
   margin: 0;
   overflow-x: auto;
 }
 
-.hero-install-line code,
+.hero-install code,
 .hero-prompt {
   font-family: var(--mono);
   font-size: 0.9rem;
 }
 
-.hero-install-line code {
+.hero-install code {
   color: var(--green);
   white-space: pre;
 }
@@ -443,18 +439,12 @@ li > code {
   color: var(--pink);
 }
 
+/* Inherits the top rule from .command-actions, matching the boxed blocks. The
+   inline padding is dropped so the button's left edge lines up with the command
+   above it, since there is no border to inset from. */
 .hero-install .command-actions {
-  flex: 0 0 auto;
-  min-height: 0;
-  border-top: 0;
-  padding: 0;
-}
-
-.hero-install-method {
-  margin: 0.6rem 0 0;
-  color: var(--comment);
-  font-family: var(--mono);
-  font-size: 0.72rem;
+  margin-top: 0.7rem;
+  padding-inline: 0;
 }
 
 /* The specimen spans the full container, aligned to the same left and right

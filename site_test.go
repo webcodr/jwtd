@@ -184,11 +184,39 @@ func TestWebsiteCopyContract(t *testing.T) {
 	}
 }
 
-// TestHeroInstallPrompt keeps the hero's shell prompt out of the element the
-// copy button reads. script.js copies the textContent of #hero-install-command,
-// so a "$" inside it would land on the clipboard and fail when pasted.
-func TestHeroInstallPrompt(t *testing.T) {
+// TestHeroInstallCommandAnatomy keeps the hero command presenting itself the
+// same way as the ~20 .command-block instances below it: a label, then the
+// command, then the copy row. The hero once put its copy button beside the
+// command and its label underneath, which made it read as a different component
+// than every other command on the page.
+//
+// It also keeps the hero's shell prompt out of the element the copy button
+// reads: script.js copies the textContent of #hero-install-command, so a "$"
+// inside it would land on the clipboard and fail when pasted.
+func TestHeroInstallCommandAnatomy(t *testing.T) {
 	index := readWebsiteFile(t, "site", "index.html")
+
+	// Ordered by their unique identifiers rather than by parsing the subtree,
+	// which is enough to catch the slots being rearranged.
+	slots := []struct {
+		name   string
+		marker string
+	}{
+		{"method label", `id="hero-install-method"`},
+		{"command", `id="hero-install-command"`},
+		{"copy row", `data-copy-target="hero-install-command"`},
+	}
+	previous := -1
+	for _, slot := range slots {
+		at := strings.Index(index, slot.marker)
+		if at < 0 {
+			t.Fatalf("site/index.html is missing the hero %s (%s)", slot.name, slot.marker)
+		}
+		if at < previous {
+			t.Errorf("hero %s is out of order: expected label, then command, then copy row, matching .command-block", slot.name)
+		}
+		previous = at
+	}
 
 	command := regexp.MustCompile(`(?s)<code id="hero-install-command">(.*?)</code>`).FindStringSubmatch(index)
 	if command == nil {
