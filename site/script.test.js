@@ -7,6 +7,7 @@ const {
   detectOperatingSystem,
   installMethodForOperatingSystem,
   heroCommandForOperatingSystem,
+  heroMethodForOperatingSystem,
 } = require("./script.js");
 
 test("detectOperatingSystem classifies supported operating systems", () => {
@@ -43,16 +44,47 @@ test("installMethodForOperatingSystem selects the approved default", () => {
 });
 
 test("heroCommandForOperatingSystem selects a working command per platform", () => {
-  assert.equal(
-    heroCommandForOperatingSystem("windows"),
-    "scoop bucket add webcodr https://github.com/webcodr/scoop-bucket\nscoop install jwtd",
-  );
+  assert.equal(heroCommandForOperatingSystem("windows"), "winget install WebCodr.jwtd");
   assert.equal(
     heroCommandForOperatingSystem("linux"),
-    "curl -fLO https://github.com/webcodr/jwtd/releases/latest/download/jwtd-linux-amd64.deb\nsudo dpkg -i jwtd-linux-amd64.deb",
+    "curl -fsSL https://jwtd.sh/install.sh | sh",
   );
   assert.equal(heroCommandForOperatingSystem("macos"), "brew install webcodr/tap/jwtd");
   assert.equal(heroCommandForOperatingSystem("unknown"), "brew install webcodr/tap/jwtd");
+});
+
+// The hero renders the command as one inline prompt line. A two-line command
+// would overflow that line, which is what made the old boxed version look
+// broken on Linux and Windows.
+test("hero commands stay on a single line", () => {
+  for (const operatingSystem of ["macos", "linux", "windows", "unknown"]) {
+    assert.ok(
+      !heroCommandForOperatingSystem(operatingSystem).includes("\n"),
+      `${operatingSystem} hero command must be a single line`,
+    );
+  }
+});
+
+// Nothing in the browser reports the CPU architecture, so a hero command that
+// names one hands arm64 visitors a package that cannot run. The install script
+// resolves the architecture itself.
+test("hero commands never hardcode a CPU architecture", () => {
+  for (const operatingSystem of ["macos", "linux", "windows", "unknown"]) {
+    const command = heroCommandForOperatingSystem(operatingSystem);
+    for (const architecture of ["amd64", "arm64", "x86_64", "aarch64"]) {
+      assert.ok(
+        !command.includes(architecture),
+        `${operatingSystem} hero command must not name ${architecture}: ${command}`,
+      );
+    }
+  }
+});
+
+test("heroMethodForOperatingSystem labels the command it accompanies", () => {
+  assert.equal(heroMethodForOperatingSystem("macos"), "macOS · Homebrew");
+  assert.equal(heroMethodForOperatingSystem("linux"), "Linux · install script");
+  assert.equal(heroMethodForOperatingSystem("windows"), "Windows · WinGet");
+  assert.equal(heroMethodForOperatingSystem("unknown"), "macOS · Homebrew");
 });
 
 test("detectOperatingSystem honors platform source priority", () => {

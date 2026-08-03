@@ -35,18 +35,39 @@ function installMethodForOperatingSystem(operatingSystem) {
   return "macos";
 }
 
+// The hero renders these as a single inline prompt line, so every one of them
+// must stay on one line. They must also not name a CPU architecture: nothing in
+// the browser reports it, so the Linux entry deliberately uses the install
+// script, which detects the architecture itself.
 function heroCommandForOperatingSystem(operatingSystem) {
   if (operatingSystem === "windows") {
-    return "scoop bucket add webcodr https://github.com/webcodr/scoop-bucket\nscoop install jwtd";
+    return "winget install WebCodr.jwtd";
   }
   if (operatingSystem === "linux") {
-    return "curl -fLO https://github.com/webcodr/jwtd/releases/latest/download/jwtd-linux-amd64.deb\nsudo dpkg -i jwtd-linux-amd64.deb";
+    return "curl -fsSL https://jwtd.sh/install.sh | sh";
   }
   return "brew install webcodr/tap/jwtd";
 }
 
+// Names the method the command above uses, so the hero line is not an
+// unlabelled command the way the boxed version was.
+function heroMethodForOperatingSystem(operatingSystem) {
+  if (operatingSystem === "windows") {
+    return "Windows · WinGet";
+  }
+  if (operatingSystem === "linux") {
+    return "Linux · install script";
+  }
+  return "macOS · Homebrew";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { detectOperatingSystem, installMethodForOperatingSystem, heroCommandForOperatingSystem };
+  module.exports = {
+    detectOperatingSystem,
+    installMethodForOperatingSystem,
+    heroCommandForOperatingSystem,
+    heroMethodForOperatingSystem,
+  };
 }
 
 if (typeof document !== "undefined") {
@@ -67,6 +88,11 @@ if (typeof document !== "undefined") {
     const heroCommand = document.getElementById("hero-install-command");
     if (heroCommand) {
       heroCommand.textContent = heroCommandForOperatingSystem(operatingSystem);
+    }
+
+    const heroMethod = document.getElementById("hero-install-method");
+    if (heroMethod) {
+      heroMethod.textContent = heroMethodForOperatingSystem(operatingSystem);
     }
 
     const tabList = document.querySelector("[data-install-tabs]");

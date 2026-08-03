@@ -57,6 +57,7 @@ func TestWebsiteContentContract(t *testing.T) {
 		"header landmark":  `<header class="site-header">`,
 		"main landmark":    `<main id="main-content">`,
 		"output specimen":  `<div class="specimen" aria-label="Example jwtd terminal output">`,
+		"hero install":     `<p class="hero-install-method" id="hero-install-method">`,
 		"capabilities":     `id="capabilities"`,
 		"installation":     `id="install"`,
 		"usage":            `id="usage"`,
@@ -180,6 +181,30 @@ func TestWebsiteCopyContract(t *testing.T) {
 		if strings.Contains(index, retired) {
 			t.Errorf("site/index.html must not retain dramatic phrase %q", retired)
 		}
+	}
+}
+
+// TestHeroInstallPrompt keeps the hero's shell prompt out of the element the
+// copy button reads. script.js copies the textContent of #hero-install-command,
+// so a "$" inside it would land on the clipboard and fail when pasted.
+func TestHeroInstallPrompt(t *testing.T) {
+	index := readWebsiteFile(t, "site", "index.html")
+
+	command := regexp.MustCompile(`(?s)<code id="hero-install-command">(.*?)</code>`).FindStringSubmatch(index)
+	if command == nil {
+		t.Fatal("site/index.html must define the hero install command as #hero-install-command")
+	}
+	if strings.ContainsAny(command[1], "$>") {
+		t.Errorf("hero install command must not contain a shell prompt, got %q", command[1])
+	}
+	if strings.Contains(command[1], "\n") {
+		t.Errorf("hero install command must stay on one line, got %q", command[1])
+	}
+
+	// The prompt is decorative, so it is hidden from assistive technology and
+	// sits outside the copied element.
+	if !strings.Contains(normalizeMarkup(index), normalizeMarkup(`<span class="hero-prompt" aria-hidden="true">$ </span><code id="hero-install-command">`)) {
+		t.Error("the hero prompt must precede #hero-install-command as an aria-hidden span outside it")
 	}
 }
 
