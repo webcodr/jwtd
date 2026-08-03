@@ -15,9 +15,9 @@ content contract in `site_test.go`. Suggestions below are ordered by impact.
 > and the clickjacking comment under the security note.
 >
 > The site has since been redesigned onto a neon synthwave palette (hot
-> magenta and cyan over deep violet), so `og.png` is still the old Tokyo Night
-> mockup and no longer matches the page it represents. Regenerating it is
-> outstanding.
+> magenta and cyan over deep violet). `og.png` was regenerated to match; its
+> source is `og/og.html`, kept outside the deployed `site/` directory, and
+> `TestOpenGraphCard` pins the 1200×630 size the markup advertises.
 
 ### 1. Install tabs ignore the URL hash
 

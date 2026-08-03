@@ -1,0 +1,255 @@
+<!doctype html>
+<!--
+  Source for site/og.png, the 1200x630 Open Graph card.
+
+  This file is not deployed: the Pages artifact is the site/ directory, so a
+  page in there would be published. Only the rendered PNG ships.
+
+  Regenerate after any change to the site palette or this file:
+
+    chromium --headless --disable-gpu --hide-scrollbars \
+      --window-size=1200,630 --force-device-scale-factor=2 \
+      --screenshot=/tmp/og@2x.png og/og.html
+    magick /tmp/og@2x.png -resize 1200x630 -strip \
+      -define png:compression-level=9 -define png:compression-filter=1 site/og.png
+
+  Rendering at 2x and downsampling is what keeps the small mono text crisp.
+  Keep the output truecolor: quantizing to a palette halves the file but
+  dithers the bloom into visible mottling, and 170 KB is well inside every
+  platform's limit.
+  The output must stay exactly 1200x630: index.html hard-codes those numbers in
+  og:image:width / og:image:height, and TestOpenGraphCard enforces it.
+
+  The colors below are copied from site/styles.css and must stay in step with
+  it. The code sample is a line-for-line subset of the hero specimen in
+  site/index.html, so the card cannot claim output the site does not.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>jwtd Open Graph card</title>
+    <style>
+      :root {
+        --background: #120826;
+        --background-deep: #0b0518;
+        --border: #38205c;
+        --text: #f2e9ff;
+        --muted: #c3b0e0;
+        --comment: #7d6aa3;
+        --pink: #ff45c8;
+        --blue: #6d8cff;
+        --cyan: #5fdcff;
+        --green: #7df58f;
+        --magenta: #c98cff;
+        --red: #ff5f7d;
+        --sans: "Adwaita Sans", system-ui, sans-serif;
+        --mono: "JetBrains Mono", "JetBrainsMono Nerd Font", ui-monospace, monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 1200px;
+        height: 630px;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      body {
+        position: relative;
+        display: grid;
+        grid-template-columns: 452px 1fr;
+        align-items: center;
+        gap: 56px;
+        background: var(--background);
+        color: var(--text);
+        font-family: var(--sans);
+        padding: 56px 60px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* The site's ambient bloom, recomposed for a 1.9:1 card. */
+      body::before {
+        content: "";
+        position: absolute;
+        z-index: 0;
+        inset: 0;
+        background:
+          radial-gradient(680px 520px at -4% -12%, rgba(255, 69, 200, 0.3), transparent 68%),
+          radial-gradient(560px 460px at 104% 8%, rgba(95, 220, 255, 0.16), transparent 64%),
+          radial-gradient(820px 360px at 46% -18%, rgba(201, 140, 255, 0.12), transparent 70%);
+      }
+
+      .copy,
+      .specimen {
+        position: relative;
+        z-index: 1;
+        min-width: 0;
+      }
+
+      .wordmark {
+        margin: 0 0 30px;
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1;
+      }
+
+      .wordmark span {
+        color: var(--pink);
+        text-shadow: 0 0 16px rgba(255, 69, 200, 0.6);
+      }
+
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        margin: 0 0 18px;
+        color: var(--cyan);
+        font-family: var(--mono);
+        font-size: 15px;
+        line-height: 1.3;
+      }
+
+      .eyebrow::before {
+        content: "";
+        flex: 0 0 auto;
+        width: 28px;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--pink));
+      }
+
+      h1 {
+        margin: 0 0 20px;
+        font-size: 54px;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+        line-height: 1.04;
+      }
+
+      h1 span {
+        color: var(--pink);
+      }
+
+      .lede {
+        max-width: 24em;
+        margin: 0;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.5;
+      }
+
+      .specimen {
+        border: 1px solid var(--border);
+        background: var(--background-deep);
+      }
+
+      .specimen-head {
+        position: relative;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid var(--border);
+        padding: 13px 20px;
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .specimen-head::before {
+        content: "";
+        position: absolute;
+        inset: -1px -1px auto;
+        height: 2px;
+        background: linear-gradient(90deg, var(--pink), var(--magenta) 42%, var(--cyan));
+      }
+
+      .specimen-head b {
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      .specimen-head i {
+        color: var(--comment);
+        font-style: normal;
+      }
+
+      pre {
+        margin: 0;
+        padding: 20px;
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 13.5px;
+        line-height: 1.62;
+      }
+
+      .prompt {
+        color: var(--pink);
+      }
+
+      .k {
+        color: var(--blue);
+        font-weight: 600;
+      }
+
+      .s {
+        color: var(--green);
+      }
+
+      .b {
+        color: var(--magenta);
+      }
+
+      .n {
+        color: var(--red);
+      }
+
+      .l {
+        color: var(--cyan);
+        font-weight: 700;
+      }
+
+      .sig {
+        color: var(--comment);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="copy">
+      <p class="wordmark">jwtd<span>_</span></p>
+      <p class="eyebrow">A command-line tool for JWT, JWS, and JWE</p>
+      <h1>Inspect tokens<br /><span>from the terminal.</span></h1>
+      <p class="lede">
+        Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.
+      </p>
+    </div>
+
+    <div class="specimen">
+      <div class="specimen-head">
+        <b>jwtd - token inspection</b><i>example output</i>
+      </div>
+      <pre><span class="prompt">$</span> jwtd eyJhbGciOiJSUzI1NiIs...
+
+<span class="l">Header:</span>
+{
+  <span class="k">"alg"</span>: <span class="s">"RS256"</span>,
+  <span class="k">"typ"</span>: <span class="s">"JWT"</span>
+}
+
+<span class="l">Payload:</span>
+{
+  <span class="k">"sub"</span>: <span class="s">"user_2048"</span>,
+  <span class="k">"admin"</span>: <span class="b">true</span>,
+  <span class="k">"exp"</span>: <span class="s">"2026-07-25T10:00:00Z (1784973600, expires in 15m)"</span>,
+  <span class="k">"note"</span>: <span class="n">null</span>
+}
+
+<span class="sig">Signature: eyJfX2p3dGRfXyI...</span></pre>
+    </div>
+  </body>
+</html>

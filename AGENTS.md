@@ -97,6 +97,12 @@ The binary is copied into the install directory under a temporary name and then 
 
 There is one copy of the script. `.github/workflows/pages.yml` copies the repository root file into the Pages artifact (`install -m 0755 install.sh site/install.sh`, which is git-ignored) so the hosted script is byte-identical to the reviewed one, and the workflow redeploys when `install.sh` changes. `install_test.go` holds down the contract: the archive naming against `.goreleaser.yaml`, verification ordering, the Cosign identity matching the README, `sh`/no-`sudo`, rejection of unsupported platforms (driven by a stubbed `uname`, so the test never touches the network), and the README/site one-liner.
 
+### Open Graph card
+
+`site/og.png` is the 1200×630 social card, rendered from `og/og.html` with headless Chromium at 2x and downsampled (the 2x pass is what keeps the small monospace text crisp). The source deliberately lives **outside** `site/`: the Pages artifact is that directory verbatim, so a generator kept there would be published as a page of its own. `og/og.html` carries the exact regeneration commands in a comment, and its palette is copied from `site/styles.css` — the two must be updated together, since nothing detects a card whose colors have drifted from the site.
+
+The rendered PNG stays truecolor. Palette-quantizing it is less than half the bytes but dithers the ambient bloom into visible mottling, and 170 KB is far inside every platform's limit. The code sample on the card is a line-for-line subset of the hero specimen in `site/index.html`, so the card cannot advertise output the tool does not produce. `TestOpenGraphCard` pins the size against the `og:image:width`/`og:image:height` meta tags that hard-code it, and fails if the source reappears under `site/`.
+
 ## Dependencies
 
 | Package | Purpose |

@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"image"
+	_ "image/png"
 	"maps"
 	"os"
 	"path/filepath"
@@ -178,6 +180,51 @@ func TestWebsiteCopyContract(t *testing.T) {
 		if strings.Contains(index, retired) {
 			t.Errorf("site/index.html must not retain dramatic phrase %q", retired)
 		}
+	}
+}
+
+// TestOpenGraphCard holds the Open Graph card to the size index.html advertises
+// and keeps its source out of the deployed directory. index.html hard-codes
+// og:image:width/height, so a replacement image of a different size would make
+// every social embed crop or letterbox the card while the markup still claimed
+// the old dimensions.
+func TestOpenGraphCard(t *testing.T) {
+	const wantWidth, wantHeight = 1200, 630
+
+	file, err := os.Open(filepath.Join("site", "og.png"))
+	if err != nil {
+		t.Fatalf("opening site/og.png: %v", err)
+	}
+	defer file.Close()
+
+	config, format, err := image.DecodeConfig(file)
+	if err != nil {
+		t.Fatalf("decoding site/og.png: %v", err)
+	}
+	if format != "png" {
+		t.Errorf("site/og.png must be a PNG, got %s", format)
+	}
+	if config.Width != wantWidth || config.Height != wantHeight {
+		t.Errorf("site/og.png must be %dx%d, got %dx%d", wantWidth, wantHeight, config.Width, config.Height)
+	}
+
+	index := readWebsiteFile(t, "site", "index.html")
+	normalizedIndex := normalizeMarkup(index)
+	for property, value := range map[string]int{"og:image:width": wantWidth, "og:image:height": wantHeight} {
+		meta := fmt.Sprintf(`<meta property=%q content="%d">`, property, value)
+		if !strings.Contains(normalizedIndex, normalizeMarkup(meta)) {
+			t.Errorf("site/index.html must declare %s as %d to match site/og.png", property, value)
+		}
+	}
+
+	// The Pages artifact is the site/ directory, so the generator living there
+	// would publish it as a page of its own.
+	source := readWebsiteFile(t, "og", "og.html")
+	if !strings.Contains(source, "site/og.png") {
+		t.Error("og/og.html must document that it renders to site/og.png")
+	}
+	if _, err := os.Stat(filepath.Join("site", "og.html")); err == nil {
+		t.Error("the Open Graph card source must stay outside site/, which is deployed verbatim")
 	}
 }
 
