@@ -41,7 +41,7 @@ function installMethodForOperatingSystem(operatingSystem) {
 // script, which detects the architecture itself.
 function heroCommandForOperatingSystem(operatingSystem) {
   if (operatingSystem === "windows") {
-    return "winget install WebCodr.jwtd";
+    return "irm https://jwtd.sh/install.ps1 | iex";
   }
   if (operatingSystem === "linux") {
     return "curl -fsSL https://jwtd.sh/install.sh | sh";
@@ -53,7 +53,7 @@ function heroCommandForOperatingSystem(operatingSystem) {
 // unlabelled command the way the boxed version was.
 function heroMethodForOperatingSystem(operatingSystem) {
   if (operatingSystem === "windows") {
-    return "Windows · WinGet";
+    return "Windows · install script";
   }
   if (operatingSystem === "linux") {
     return "Linux · install script";

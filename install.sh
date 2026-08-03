@@ -11,7 +11,7 @@
 #   curl -fsSL https://jwtd.sh/install.sh | sh -s -- --version v5.3.0
 #   curl -fsSL https://jwtd.sh/install.sh | sh -s -- --dir /usr/local/bin
 #
-# Windows is served by Scoop and WinGet instead; see the README.
+# Windows is served by install.ps1 instead; see the README.
 
 set -eu
 
@@ -66,7 +66,7 @@ detect_os() {
 	case "$kernel" in
 	Linux) printf 'linux\n' ;;
 	Darwin) printf 'darwin\n' ;;
-	*) die "unsupported operating system: $kernel (this script installs on Linux and macOS; on Windows use 'winget install WebCodr.jwtd' or Scoop)" ;;
+	*) die "unsupported operating system: $kernel (this script installs on Linux and macOS; on Windows run 'irm https://jwtd.sh/install.ps1 | iex' in PowerShell)" ;;
 	esac
 }
 

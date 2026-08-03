@@ -514,18 +514,21 @@ sudo rpm -i jwtd-linux-arm64.rpm</code></pre>
         >
           <div>
             <p class="panel-kicker">Windows</p>
-            <h3>WinGet or Scoop</h3>
+            <h3>Install script, Scoop, or WinGet</h3>
             <p>
-              Install with the built-in Windows Package Manager, or add the
-              webcodr Scoop bucket.
+              Install the current release without a package manager, or add the
+              webcodr Scoop bucket. x64 and ARM64 are both covered.
             </p>
           </div>
           <div class="install-methods">
             <div class="command-block">
-              <p>WinGet &mdash; built-in package manager</p>
-              <pre><code id="winget-command">winget install WebCodr.jwtd</code></pre>
+              <p>
+                Install script &mdash; verified download into
+                <code>%LOCALAPPDATA%\Programs\jwtd</code>
+              </p>
+              <pre><code id="windows-script-command">irm https://jwtd.sh/install.ps1 | iex</code></pre>
               <div class="command-actions">
-                <button type="button" data-copy-target="winget-command">
+                <button type="button" data-copy-target="windows-script-command">
                   Copy</button
                 ><span
                   class="copy-feedback"
@@ -540,6 +543,19 @@ sudo rpm -i jwtd-linux-arm64.rpm</code></pre>
 scoop install jwtd</code></pre>
               <div class="command-actions">
                 <button type="button" data-copy-target="scoop-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+            <div class="command-block">
+              <p>WinGet &mdash; built-in package manager</p>
+              <pre><code id="winget-command">winget install WebCodr.jwtd</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="winget-command">
                   Copy</button
                 ><span
                   class="copy-feedback"

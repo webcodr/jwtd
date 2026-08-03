@@ -41,7 +41,30 @@ curl -fsSL https://jwtd.sh/install.sh | sh -s -- --dir /usr/local/bin
 
 `JWTD_VERSION` and `JWTD_INSTALL_DIR` set the same two values. Run the script with `--help` for the full list. The script is [`install.sh`](install.sh) in this repository; review it before piping it into a shell.
 
-Windows is served by [WinGet](#winget-windows) and [Scoop](#scoop-windows) instead.
+### Install script (Windows)
+
+```powershell
+irm https://jwtd.sh/install.ps1 | iex
+```
+
+The same contract as the Unix installer: the release zip for the detected architecture is verified against the release's `checksums.txt` — and against the keyless Cosign signature when `cosign` is on `PATH` — before anything is written. The binary is installed into `%LOCALAPPDATA%\Programs\jwtd`, which is added to your user `PATH`; no administrator privileges are required.
+
+`Invoke-Expression` cannot forward arguments, so the options are environment variables:
+
+```powershell
+$env:JWTD_VERSION = 'v5.3.0'        # pin a release
+$env:JWTD_INSTALL_DIR = 'C:\tools'  # install somewhere else
+$env:JWTD_NO_MODIFY_PATH = '1'      # leave PATH alone
+irm https://jwtd.sh/install.ps1 | iex
+```
+
+To pass parameters directly instead, create the script block explicitly:
+
+```powershell
+& ([scriptblock]::Create((irm https://jwtd.sh/install.ps1))) -Version v5.3.0 -NoModifyPath
+```
+
+The script is [`install.ps1`](install.ps1) in this repository; review it before piping it into a shell.
 
 ### Homebrew (macOS and Linux)
 
