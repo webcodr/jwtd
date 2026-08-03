@@ -258,7 +258,7 @@ p {
 
 h1 {
   margin-bottom: 1.35rem;
-  font-size: clamp(2.75rem, 6.2vw, 5.25rem);
+  font-size: clamp(2.75rem, 6.5vw, 5.75rem);
   font-weight: 700;
   line-height: 1.03;
   letter-spacing: -0.03em;
@@ -358,16 +358,46 @@ li > code {
 
 .hero-copy {
   min-width: 0;
-  max-width: 54rem;
 }
 
+/* The eyebrow and headline stack full width, then the supporting copy splits
+   into two columns so the hero uses the whole container instead of trailing off
+   into empty space on the right. The two install routes end up side by side:
+   the button on the left, the copy-and-paste command on the right. Below the
+   breakpoint this collapses back to one column in reading order. */
+.hero-detail {
+  display: grid;
+  gap: clamp(1.75rem, 3.5vw, 3.25rem);
+  align-items: start;
+}
+
+/* 1040px, not a smaller breakpoint: below this the right column is narrower
+   than the longest hero command ("curl -fsSL https://jwtd.sh/install.sh | sh"
+   plus its prompt and copy button), so splitting earlier truncates the command
+   into a scroller on perfectly wide screens. Stacked, it always has room. */
+@media (min-width: 1040px) {
+  .hero-detail {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  /* Bottom-aligned so the command's block ends level with the button, putting
+     content across the full width at the base of the hero. Top-aligning it
+     instead leaves a gap directly above the specimen, which reads as a hole
+     because the specimen's bright top rule bounds it. */
+  .hero-install {
+    align-self: end;
+  }
+}
+
+/* A guard for very wide viewports rather than an active constraint: the column
+   is narrower than this at the container maximum. */
 .hero-lede {
-  max-width: 36rem;
+  max-width: 38rem;
   margin-bottom: 2rem;
 }
 
 .hero-actions {
-  margin-bottom: 1.35rem;
+  margin-bottom: 0;
 }
 
 /* The install command is a bare prompt line rather than a bordered block: as a
