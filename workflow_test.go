@@ -120,9 +120,10 @@ var releaseArchiveNames = []string{
 	"jwtd-windows-arm64.tar.gz",
 }
 
-// windowsZipNames are the additional zip archives shipped for WinGet, whose
-// portable installer cannot consume tar.gz. They are byte-reproducible and so
-// stay in the strict comparison tier alongside the tar.gz archives.
+// windowsZipNames are the additional zip archives install.ps1 downloads, since
+// Windows PowerShell can expand a zip but has no tar. They are
+// byte-reproducible and so stay in the strict comparison tier alongside the
+// tar.gz archives.
 var windowsZipNames = []string{
 	"jwtd-windows-amd64.zip",
 	"jwtd-windows-arm64.zip",
@@ -197,7 +198,7 @@ func TestGoReleaserConfigurationInvariants(t *testing.T) {
 	}
 
 	// Two builds: the original jwtd build (all six targets) and a windows-only
-	// build feeding the WinGet zip. Both must carry identical, deterministic
+	// build feeding the windows zip. Both must carry identical, deterministic
 	// settings so the windows binary is byte-for-byte the same in the tar.gz and
 	// the zip.
 	if len(cfg.Builds) != 2 {
@@ -265,7 +266,7 @@ func TestGoReleaserConfigurationInvariants(t *testing.T) {
 	}
 	zipIdx, ok := archivesByID["jwtd-zip"]
 	if !ok {
-		t.Fatalf("expected a zip archive with id %q for WinGet", "jwtd-zip")
+		t.Fatalf("expected a zip archive with id %q for install.ps1", "jwtd-zip")
 	}
 	archive := cfg.Archives[tarIdx]
 	zipArchive := cfg.Archives[zipIdx]
@@ -616,10 +617,10 @@ func TestScoopInvariants(t *testing.T) {
 	if scoop.SkipUpload != "true" {
 		t.Errorf("scoops skip_upload must be %q so GoReleaser never pushes to the bucket, got %q", "true", scoop.SkipUpload)
 	}
-	// Windows now produces two archives (tar.gz and the WinGet zip); Scoop must
+	// Windows produces two archives (tar.gz and the install.ps1 zip); Scoop must
 	// be pinned to the tar.gz id or GoReleaser cannot pick a single archive.
 	if want := []string{"jwtd"}; !slices.Equal(scoop.IDs, want) {
-		t.Errorf("scoops ids must be exactly %v so Scoop uses the tar.gz archive, not the WinGet zip, got %v", want, scoop.IDs)
+		t.Errorf("scoops ids must be exactly %v so Scoop uses the tar.gz archive, not the zip, got %v", want, scoop.IDs)
 	}
 	if scoop.Repository.Owner != "webcodr" || scoop.Repository.Name != "scoop-bucket" {
 		t.Errorf("scoops repository must be webcodr/scoop-bucket, got %s/%s", scoop.Repository.Owner, scoop.Repository.Name)
@@ -941,123 +942,6 @@ func TestCOPRInvariants(t *testing.T) {
 	// version-pinned rather than resolved at release time.
 	if !regexp.MustCompile(`pip['"]? install[^\n]*copr-cli==\d`).MatchString(submitStep.Run) {
 		t.Error("update-copr must install a pinned copr-cli version, not whatever pip resolves at release time")
-	}
-}
-
-// TestWinGetInvariants checks that jwtd ships a WinGet manifest set that
-// installs the release zip as a portable package, and that the update-winget
-// job submits it to the moderated microsoft/winget-pkgs repository on the same
-// terms as the other channels: installers verified against the signed
-// checksums.txt, a pinned+checksummed submission tool, and publication gated to
-// stable releases.
-func TestWinGetInvariants(t *testing.T) {
-	manifests := map[string]string{}
-	for _, name := range []string{
-		"WebCodr.jwtd.yaml",
-		"WebCodr.jwtd.installer.yaml",
-		"WebCodr.jwtd.locale.en-US.yaml",
-	} {
-		data, err := os.ReadFile(filepath.Join("winget", name))
-		if err != nil {
-			t.Fatalf("winget/%s template must exist: %v", name, err)
-		}
-		manifests[name] = string(data)
-	}
-
-	// Every manifest must agree on the package identity and carry the version
-	// placeholder the workflow fills.
-	for name, body := range manifests {
-		if !strings.Contains(body, "PackageIdentifier: WebCodr.jwtd") {
-			t.Errorf("winget/%s must declare PackageIdentifier WebCodr.jwtd", name)
-		}
-		if !strings.Contains(body, "PackageVersion: VERSION") {
-			t.Errorf("winget/%s must carry the VERSION placeholder", name)
-		}
-	}
-
-	installer := manifests["WebCodr.jwtd.installer.yaml"]
-	// jwtd ships as a zip consumed as a portable nested installer (WinGet cannot
-	// consume the tar.gz archives), pointing at the exact release zips with
-	// per-arch hash placeholders the workflow fills from checksums.txt.
-	if !strings.Contains(installer, "InstallerType: zip") {
-		t.Error("winget installer manifest must use InstallerType: zip")
-	}
-	if !strings.Contains(installer, "NestedInstallerType: portable") {
-		t.Error("winget installer manifest must install jwtd.exe as a portable nested installer")
-	}
-	for _, want := range []string{
-		"SHA256_WINDOWS_AMD64", "SHA256_WINDOWS_ARM64",
-		"jwtd-windows-amd64.zip", "jwtd-windows-arm64.zip",
-	} {
-		if !strings.Contains(installer, want) {
-			t.Errorf("winget installer manifest must contain %q", want)
-		}
-	}
-
-	data, err := os.ReadFile(filepath.Join(".github", "workflows", "release.yml"))
-	if err != nil {
-		t.Fatalf("reading release workflow: %v", err)
-	}
-	var wf releaseWorkflow
-	if err := yaml.Unmarshal(data, &wf); err != nil {
-		t.Fatalf("parsing release workflow: %v", err)
-	}
-
-	wingetJob, ok := wf.Jobs["update-winget"]
-	if !ok {
-		t.Fatal("release workflow must define an update-winget job")
-	}
-	if !slices.Contains(workflowNeeds(t, wingetJob.Needs), "release") {
-		t.Error("update-winget must run only after a successfully published release")
-	}
-	if want := "needs.validate.outputs.prerelease == 'false'"; !strings.Contains(wingetJob.If, want) {
-		t.Errorf("update-winget must be gated on %q so prereleases never update WinGet, got %q", want, wingetJob.If)
-	}
-	// The installers are verified against the signed checksums.txt before the
-	// manifest is built from the same release URLs.
-	if findStepContainingRun(wingetJob.Steps, "checksums.txt") == nil {
-		t.Error("update-winget must verify the installers against checksums.txt")
-	}
-	// The submission tool is pinned and checksum-verified so the release-publish
-	// path pulls in no unpinned third party.
-	installStep := findStepContainingRun(wingetJob.Steps, "komac")
-	if installStep == nil {
-		t.Fatal("update-winget must install komac")
-	}
-	if findStepContainingRun(wingetJob.Steps, "sha256sum -c") == nil {
-		t.Error("update-winget must verify the komac binary against a pinned sha256")
-	}
-	submitStep := findStepContainingRun(wingetJob.Steps, "update WebCodr.jwtd")
-	if submitStep == nil {
-		t.Fatal("update-winget must submit the manifest via komac update")
-	}
-	if !strings.Contains(submitStep.Run, "--submit") {
-		t.Error("update-winget must open the winget-pkgs PR via komac --submit")
-	}
-	if got := submitStep.Env["KOMAC_FORK_OWNER"]; got != "webcodr" {
-		t.Errorf("update-winget must submit from the webcodr fork, got KOMAC_FORK_OWNER=%q", got)
-	}
-	if got := submitStep.Env["GITHUB_TOKEN"]; !strings.Contains(got, "WINGET_TOKEN") {
-		t.Errorf("update-winget must authenticate with the WINGET_TOKEN secret, got %q", got)
-	}
-
-	// The first WebCodr.jwtd submission is moderated out of band, and komac
-	// update has no base manifest until it merges. A guard step checks whether
-	// the package is already in winget-pkgs and gates the submission on it, so a
-	// release cut during the first-submission window neither fails the job nor
-	// opens a duplicate "New package" PR.
-	guardStep := findStepContainingRun(wingetJob.Steps, "manifests/w/WebCodr/jwtd")
-	if guardStep == nil {
-		t.Fatal("update-winget must check whether WebCodr.jwtd exists in winget-pkgs before submitting")
-	}
-	if guardStep.ID == "" {
-		t.Fatal("the winget-pkgs existence check must have an id so later steps can gate on its output")
-	}
-	gate := "steps." + guardStep.ID + ".outputs.exists == 'true'"
-	for _, step := range []*releaseWorkflowStep{installStep, submitStep} {
-		if !strings.Contains(step.If, gate) {
-			t.Errorf("update-winget step %q must be gated on %q so it is skipped until the first submission merges, got if=%q", step.Name, gate, step.If)
-		}
 	}
 }
 

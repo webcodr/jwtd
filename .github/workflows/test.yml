@@ -54,9 +54,9 @@ jobs:
 
       - name: Verify GoReleaser artifact contract
         run: |
-          # tar.gz archives carry a Syft SBOM each; the windows zips (for WinGet)
-          # wrap the same binary as the windows tar.gz, so they are deliberately
-          # not SBOM'd separately.
+          # tar.gz archives carry a Syft SBOM each; the windows zips (which
+          # install.ps1 downloads) wrap the same binary as the windows tar.gz,
+          # so they are deliberately not SBOM'd separately.
           expected_tarballs=(
             "jwtd-linux-amd64.tar.gz"
             "jwtd-linux-arm64.tar.gz"

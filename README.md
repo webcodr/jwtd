@@ -79,16 +79,6 @@ scoop bucket add webcodr https://github.com/webcodr/scoop-bucket
 scoop install jwtd
 ```
 
-### WinGet (Windows)
-
-Install with the built-in Windows Package Manager:
-
-```sh
-winget install WebCodr.jwtd
-```
-
-The manifest installs the same signed release binary as the other channels, packaged as a portable zip whose hashes are taken from the release's signed `checksums.txt`.
-
 ### AUR (Arch Linux)
 
 Install the prebuilt-binary package from the [AUR](https://aur.archlinux.org/packages/jwtd-bin) with any AUR helper:
@@ -163,7 +153,7 @@ cosign verify-blob \
   checksums.txt
 ```
 
-Every `.tar.gz` archive also ships a [Syft](https://github.com/anchore/syft) SPDX SBOM named `<archive>.sbom.json`. Windows additionally ships a `.zip` archive (for WinGet) that wraps the same binary as the Windows `.tar.gz`.
+Every `.tar.gz` archive also ships a [Syft](https://github.com/anchore/syft) SPDX SBOM named `<archive>.sbom.json`. Windows additionally ships a `.zip` archive (used by `install.ps1`) that wraps the same binary as the Windows `.tar.gz`.
 
 ## Usage
 

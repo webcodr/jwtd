@@ -30,10 +30,11 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
-  # Windows-only build feeding the WinGet zip archive. Its settings are
-  # identical to the jwtd build, so the jwtd.exe inside the zip is byte-for-byte
-  # the same binary shipped in the windows tar.gz. Kept separate so the zip has
-  # its own archive id and Scoop can stay pinned to the tar.gz archive.
+  # Windows-only build feeding the zip archive install.ps1 downloads. Its
+  # settings are identical to the jwtd build, so the jwtd.exe inside the zip is
+  # byte-for-byte the same binary shipped in the windows tar.gz. Kept separate
+  # so the zip has its own archive id and Scoop can stay pinned to the tar.gz
+  # archive.
   - id: jwtd-windows
     main: .
     binary: jwtd
@@ -63,10 +64,11 @@ archives:
       owner: root
       group: root
       mtime: "1970-01-01T00:00:00Z"
-  # WinGet cannot consume tar.gz, so the windows targets ship an additional zip
-  # archive. It has its own id (jwtd-windows build) so Scoop can stay pinned to
-  # the tar.gz archive above; its hash is taken from the signed checksums.txt
-  # like every other channel. Deterministic, binary-only, epoch mtime.
+  # PowerShell 5.1 ships Expand-Archive but no tar, so the windows targets ship
+  # an additional zip archive for install.ps1. It has its own id (jwtd-windows
+  # build) so Scoop can stay pinned to the tar.gz archive above; its hash is
+  # taken from the signed checksums.txt like every other channel.
+  # Deterministic, binary-only, epoch mtime.
   - id: jwtd-zip
     ids:
       - jwtd-windows
@@ -167,8 +169,8 @@ signs:
 
 scoops:
   - name: jwtd
-    # Pin to the tar.gz archive id. Windows now also produces a zip (jwtd-zip)
-    # for WinGet; without this, Scoop sees two windows archives and fails.
+    # Pin to the tar.gz archive id. Windows also produces a zip (jwtd-zip) for
+    # install.ps1; without this, Scoop sees two windows archives and fails.
     ids:
       - jwtd
     repository:

@@ -81,9 +81,9 @@ jobs:
         run: goreleaser release --clean --skip=publish
       - name: Verify and stage GoReleaser artifacts
         run: |
-          # tar.gz archives carry a Syft SBOM each; the windows zips (for
-          # WinGet) wrap the same binary as the windows tar.gz, so they are
-          # deliberately not SBOM'd separately.
+          # tar.gz archives carry a Syft SBOM each; the windows zips (which
+          # install.ps1 downloads) wrap the same binary as the windows tar.gz,
+          # so they are deliberately not SBOM'd separately.
           expected_tarballs=(
             "jwtd-linux-amd64.tar.gz"
             "jwtd-linux-arm64.tar.gz"
@@ -769,73 +769,3 @@ jobs:
           chmod 600 ~/.config/copr
           srpm=$(ls rpmbuild/SRPMS/*.src.rpm)
           "$RUNNER_TEMP/copr-venv/bin/copr-cli" build webcodr/jwtd "$srpm" --nowait
-  update-winget:
-    needs: [validate, release]
-    if: needs.validate.outputs.prerelease == 'false'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check whether WebCodr.jwtd is already in winget-pkgs
-        id: pkg
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # The WinGet update needs a merged base manifest as its template and
-          # must not open a second "New package" PR while the first submission
-          # is still under moderation. If WebCodr.jwtd is not yet in winget-pkgs
-          # main, skip the WinGet update: the first submission is reviewed out
-          # of band, and normal automation resumes on its own once it merges.
-          # Every other release channel is an independent job and is unaffected.
-          if gh api repos/microsoft/winget-pkgs/contents/manifests/w/WebCodr/jwtd >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "WebCodr.jwtd found in winget-pkgs; proceeding with the WinGet update."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::WebCodr.jwtd is not yet in winget-pkgs main; skipping the WinGet submission until the first-submission PR merges."
-          fi
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: steps.pkg.outputs.exists == 'true'
-        with:
-          name: jwtd-release-assets
-          path: artifacts
-      - name: Verify installers against checksums
-        if: steps.pkg.outputs.exists == 'true'
-        run: |
-          # Confirm the published windows zips (and every other asset) match the
-          # signed checksums.txt before komac builds the manifest from the same
-          # release URLs, so WinGet can only point at the exact binaries this
-          # release verified. Release assets are immutable once published.
-          (cd artifacts && sha256sum -c checksums.txt)
-      - name: Install komac
-        if: steps.pkg.outputs.exists == 'true'
-        env:
-          KOMAC_VERSION: 2.16.0
-          KOMAC_SHA256: 7d2707fa6210f2789a3702de49fbd150b736dbf426ee0b9bc8e098736f9fd82d
-        run: |
-          # Pin komac by version and verify the downloaded binary against a known
-          # sha256 so the release-publish path pulls in no unpinned third party.
-          asset="komac-${KOMAC_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          url="https://github.com/russellbanks/Komac/releases/download/v${KOMAC_VERSION}/${asset}"
-          curl --fail --location --silent --show-error "$url" -o "$asset"
-          echo "${KOMAC_SHA256}  ${asset}" | sha256sum -c -
-          tar -xzf "$asset" komac
-          install -Dm755 komac "$RUNNER_TEMP/bin/komac"
-      - name: Submit to winget-pkgs
-        if: steps.pkg.outputs.exists == 'true'
-        env:
-          # A fine-grained/classic PAT that can push to the webcodr/winget-pkgs
-          # fork and open a PR against microsoft/winget-pkgs. winget-pkgs PRs are
-          # moderated, so this can never reach users without review.
-          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
-          KOMAC_FORK_OWNER: webcodr
-        run: |
-          # komac reuses the previously submitted WebCodr.jwtd manifest as its
-          # base (seeded manually for the first release), fetches the release
-          # zips to compute their hashes, and opens the winget-pkgs PR via the
-          # GitHub API. It never clones the (very large) winget-pkgs repository.
-          base="https://github.com/webcodr/jwtd/releases/download/v${VERSION}"
-          "$RUNNER_TEMP/bin/komac" update WebCodr.jwtd \
-            --version "$VERSION" \
-            --urls \
-              "${base}/jwtd-windows-amd64.zip" \
-              "${base}/jwtd-windows-arm64.zip" \
-            --submit

@@ -121,7 +121,7 @@ func TestInstallScriptTargetsReleaseArchives(t *testing.T) {
 		t.Error("install.sh must request jwtd-<os>-<arch>.tar.gz, matching the GoReleaser archive names")
 	}
 	// Only the four macOS/Linux targets are reachable; windows archives exist
-	// but are served by Scoop and WinGet.
+	// but are served by install.ps1 and Scoop.
 	for _, mapping := range []string{"Linux) printf 'linux\\n'", "Darwin) printf 'darwin\\n'"} {
 		if !strings.Contains(script, mapping) {
 			t.Errorf("install.sh is missing the OS mapping %q", mapping)
@@ -310,8 +310,8 @@ func TestPowerShellInstallScriptContract(t *testing.T) {
 }
 
 // TestPowerShellInstallScriptTargetsReleaseArchives pins the asset naming to
-// .goreleaser.yaml. The windows zips exist for WinGet; the installer consumes
-// them because Expand-Archive is built in while tar.gz is not.
+// .goreleaser.yaml. The installer consumes the windows zips because
+// Expand-Archive is built in while tar.gz is not.
 func TestPowerShellInstallScriptTargetsReleaseArchives(t *testing.T) {
 	config, err := os.ReadFile(".goreleaser.yaml")
 	if err != nil {
