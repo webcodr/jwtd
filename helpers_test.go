@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -301,7 +302,10 @@ func signJWT(t *testing.T, key *rsa.PrivateKey, claims jwt.MapClaims) string {
 	return signed
 }
 
-// signJWTWithHMAC creates a signed JWT using HMAC-SHA256 with the given symmetric key.
+// signJWTWithHMAC creates a signed JWT using HMAC-SHA256 with the given
+// symmetric key. It also stands in for an attacker who knows the bytes of a
+// published key file, in the tests that assert such material is never accepted
+// as an HMAC secret.
 func signJWTWithHMAC(t *testing.T, key []byte, claims jwt.MapClaims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -388,17 +392,6 @@ func writeTextKeyFile(t *testing.T, name, contents string) string {
 	return path
 }
 
-// signHS256 signs a token with an HMAC secret, standing in for an attacker who
-// knows the bytes of a published key file.
-func signHS256(t *testing.T, secret []byte, claims jwt.MapClaims) string {
-	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)
-	if err != nil {
-		t.Fatalf("signing HS256 token: %v", err)
-	}
-	return token
-}
-
 func signJWTWithEd25519(t *testing.T, key ed25519.PrivateKey, claims jwt.MapClaims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
@@ -407,4 +400,29 @@ func signJWTWithEd25519(t *testing.T, key ed25519.PrivateKey, claims jwt.MapClai
 		t.Fatalf("signing JWT: %v", err)
 	}
 	return signed
+}
+
+// pinTime fixes timeNow for the duration of a test so the expired /
+// not-yet-valid annotations are deterministic regardless of the wall clock.
+func pinTime(t *testing.T, unix int64) {
+	t.Helper()
+	prev := timeNow
+	timeNow = func() time.Time { return time.Unix(unix, 0) }
+	t.Cleanup(func() { timeNow = prev })
+}
+
+// decodeJWTJSONMap runs decodeJWTJSON and returns the parsed object plus the
+// error, so tests can assert on both the shape and the exit-driving error.
+func decodeJWTJSONMap(t *testing.T, token, key string) (map[string]any, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	err := decodeJWTJSON(&buf, token, key, claimChecks{})
+
+	var out map[string]any
+	dec := json.NewDecoder(bytes.NewReader(buf.Bytes()))
+	dec.UseNumber()
+	if derr := dec.Decode(&out); derr != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", derr, buf.String())
+	}
+	return out, err
 }

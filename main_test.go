@@ -574,7 +574,7 @@ func TestVerifySignature_RejectsForgedHMACFromPublishedKeyFile(t *testing.T) {
 			// The attacker signs with exactly what the victim's key file
 			// holds, trailing newline trimmed as jwtd trims it.
 			secret := []byte(strings.TrimRight(tt.contents, "\n"))
-			forged := signHS256(t, secret, jwt.MapClaims{"sub": "attacker", "role": "admin"})
+			forged := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "attacker", "role": "admin"})
 
 			var buf bytes.Buffer
 			err := verifySignature(&buf, forged, keyPath)
@@ -711,152 +711,45 @@ func TestDecodeAndPrint_CertificateCannotBecomeHMACSecret(t *testing.T) {
 	}
 }
 
-func TestDecodeAndPrint_RejectsBOMPrefixedPublicJWKAsHMACSecret(t *testing.T) {
+// TestDecodeAndPrint_UnparseableKeyNeverBecomesHMACSecret pins the post-5.0.0
+// property that key material jwtd cannot parse is rejected outright rather than
+// falling back to an HMAC secret. Each row signs a token with the key bytes
+// themselves, which is exactly what an attacker who knows a published key can
+// do, and asserts the signature is never reported valid. The rows are the
+// inputs that reached the old fallback through its various heuristics; the
+// heuristics are gone, so they share one body.
+func TestDecodeAndPrint_UnparseableKeyNeverBecomesHMACSecret(t *testing.T) {
 	rsaKey := generateRSAKey(t)
-	jwkData, err := json.Marshal(jose.JSONWebKey{Key: &rsaKey.PublicKey})
+	publicJWK, err := json.Marshal(jose.JSONWebKey{Key: &rsaKey.PublicKey})
 	if err != nil {
 		t.Fatalf("marshaling public JWK: %v", err)
 	}
-	jwkData = append([]byte{0xef, 0xbb, 0xbf}, jwkData...)
-	keyPath := filepath.Join(t.TempDir(), "public.jwk")
-	if err := os.WriteFile(keyPath, jwkData, 0600); err != nil {
-		t.Fatalf("writing public JWK: %v", err)
-	}
-	token := signJWTWithHMAC(t, jwkData, jwt.MapClaims{"sub": "test"})
+	bomPublicJWK := append([]byte{0xef, 0xbb, 0xbf}, publicJWK...)
 
-	var buf bytes.Buffer
-	if err := decodeAndPrint(&buf, token, keyPath); err == nil {
-		t.Fatalf("expected BOM-prefixed public JWK to be rejected, got output:\n%s", stripANSI(buf.String()))
-	}
-	if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
-		t.Fatalf("public JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
-	}
-}
-
-func TestDecodeAndPrint_RejectsEscapedJWKMemberAsHMACSecret(t *testing.T) {
-	jwkData := []byte(`{"\u006bty":"oct","k":`)
-	keyPath := filepath.Join(t.TempDir(), "malformed.jwk")
-	if err := os.WriteFile(keyPath, jwkData, 0600); err != nil {
-		t.Fatalf("writing malformed JWK: %v", err)
-	}
-	token := signJWTWithHMAC(t, jwkData, jwt.MapClaims{"sub": "test"})
-
-	var buf bytes.Buffer
-	if err := decodeAndPrint(&buf, token, keyPath); err == nil {
-		t.Fatalf("expected escaped JWK member to be rejected, got output:\n%s", stripANSI(buf.String()))
-	}
-	if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
-		t.Fatalf("malformed JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
-	}
-}
-
-func TestDecodeAndPrint_RejectsLaterMalformedJWKMembersAsHMACSecrets(t *testing.T) {
 	tests := []struct {
 		name string
 		data []byte
 	}{
+		{name: "BOM-prefixed public JWK", data: bomPublicJWK},
+		{name: "escaped JWK member", data: []byte(`{"\u006bty":"oct","k":`)},
 		{name: "literal kty after malformed value", data: []byte(`{"bad":truX,"kty":"RSA","n":"public"}`)},
 		{name: "escaped kty after malformed value", data: []byte(`{"bad":truX,"\u006bty":"RSA","n":"public"}`)},
 		{name: "later keys", data: []byte(`{"bad":truX,"keys":[`)},
 		{name: "kty truncated before colon", data: []byte(`{"bad":truX,"kty"`)},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			keyPath := filepath.Join(t.TempDir(), "malformed.jwk")
-			if err := os.WriteFile(keyPath, tt.data, 0600); err != nil {
-				t.Fatalf("writing malformed JWK: %v", err)
-			}
-			token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
-
-			var buf bytes.Buffer
-			if err := decodeAndPrint(&buf, token, keyPath); err == nil {
-				t.Fatalf("expected malformed JWK to be rejected, got output:\n%s", stripANSI(buf.String()))
-			}
-			if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
-				t.Fatalf("malformed JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
-			}
-		})
-	}
-}
-
-func TestDecodeAndPrint_RejectsMissingCommaJWKMembersAsHMACSecrets(t *testing.T) {
-	tests := []struct {
-		name      string
-		data      []byte
-		useBase64 bool
-	}{
-		{name: "literal kty", data: []byte(`{"note":"x" "kty":"RSA","n":"public"}`)},
-		{name: "escaped kty", data: []byte(`{"note":"x" "\u006bty":"RSA","n":"public"}`)},
-		{name: "literal kty at EOF", data: []byte(`{"note":"x" "kty"`)},
-		{name: "escaped keys at EOF after malformed value via base64", data: []byte(`{"bad":truX "\u006b\u0065\u0079\u0073"`), useBase64: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			keyInput := base64.StdEncoding.EncodeToString(tt.data)
-			if !tt.useBase64 {
-				keyInput = filepath.Join(t.TempDir(), "malformed.jwk")
-				if err := os.WriteFile(keyInput, tt.data, 0600); err != nil {
-					t.Fatalf("writing malformed JWK: %v", err)
-				}
-			}
-			token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
-
-			var buf bytes.Buffer
-			if err := decodeAndPrint(&buf, token, keyInput); err == nil {
-				t.Fatalf("expected malformed JWK to be rejected, got output:\n%s", stripANSI(buf.String()))
-			}
-			if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
-				t.Fatalf("malformed JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
-			}
-		})
-	}
-}
-
-func TestDecodeAndPrint_RejectsMalformedJWKMemberSeparatorsAsHMACSecrets(t *testing.T) {
-	tests := []struct {
-		name      string
-		data      []byte
-		useBase64 bool
-	}{
+		{name: "missing comma before literal kty", data: []byte(`{"note":"x" "kty":"RSA","n":"public"}`)},
+		{name: "missing comma before escaped kty", data: []byte(`{"note":"x" "\u006bty":"RSA","n":"public"}`)},
+		{name: "missing comma before literal kty at EOF", data: []byte(`{"note":"x" "kty"`)},
+		{name: "escaped keys at EOF after malformed value", data: []byte(`{"bad":truX "\u006b\u0065\u0079\u0073"`)},
 		{name: "literal kty with missing colon", data: []byte(`{"kty" "RSA","n":"public"}`)},
-		{name: "escaped kty with replaced colon via base64", data: []byte(`{"\u006bty";"RSA","n":"public"}`), useBase64: true},
+		{name: "escaped kty with replaced colon", data: []byte(`{"\u006bty";"RSA","n":"public"}`)},
 		{name: "literal keys with replaced colon", data: []byte(`{"keys"=[{"kty":"RSA"}]}`)},
-		{name: "escaped keys with missing colon via base64", data: []byte(`{"\u006b\u0065\u0079\u0073" [{"kty":"RSA"}]}`), useBase64: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			keyInput := base64.StdEncoding.EncodeToString(tt.data)
-			if !tt.useBase64 {
-				keyInput = filepath.Join(t.TempDir(), "malformed.jwk")
-				if err := os.WriteFile(keyInput, tt.data, 0600); err != nil {
-					t.Fatalf("writing malformed JWK: %v", err)
-				}
-			}
-			token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
-
-			var buf bytes.Buffer
-			if err := decodeAndPrint(&buf, token, keyInput); err == nil {
-				t.Fatalf("expected malformed JWK to be rejected, got output:\n%s", stripANSI(buf.String()))
-			}
-			if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
-				t.Fatalf("malformed JWK was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
-			}
-		})
-	}
-}
-
-func TestDecodeAndPrint_RejectsIncompleteJSONObjectKeysAsHMACSecrets(t *testing.T) {
-	tests := []struct {
-		name string
-		data []byte
-	}{
+		{name: "escaped keys with missing colon", data: []byte(`{"\u006b\u0065\u0079\u0073" [{"kty":"RSA"}]}`)},
 		{name: "truncated kty member", data: []byte(`{"kty`)},
 		{name: "malformed JWK fields without kty", data: []byte(`{"n":"public","e":"AQAB",`)},
 	}
 
+	// Both readings of a key argument reach the same rejection, so every row
+	// runs as a file and as inline base64.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, mode := range []string{"file", "base64"} {
@@ -865,17 +758,17 @@ func TestDecodeAndPrint_RejectsIncompleteJSONObjectKeysAsHMACSecrets(t *testing.
 					if mode == "file" {
 						keyInput = filepath.Join(t.TempDir(), "malformed.jwk")
 						if err := os.WriteFile(keyInput, tt.data, 0600); err != nil {
-							t.Fatalf("writing malformed JWK: %v", err)
+							t.Fatalf("writing key material: %v", err)
 						}
 					}
 					token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
 
 					var buf bytes.Buffer
 					if err := decodeAndPrint(&buf, token, keyInput); err == nil {
-						t.Fatalf("expected malformed JSON object key to be rejected, got output:\n%s", stripANSI(buf.String()))
+						t.Fatalf("expected unparseable key material to be rejected, got output:\n%s", stripANSI(buf.String()))
 					}
 					if strings.Contains(stripANSI(buf.String()), "Signature: VALID") {
-						t.Fatalf("malformed JSON object key was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
+						t.Fatalf("unparseable key material was accepted as an HMAC secret:\n%s", stripANSI(buf.String()))
 					}
 				})
 			}
@@ -1107,7 +1000,7 @@ func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 // flags the process-list exposure that inline key material carries.
 func TestRun_KeyInterpretationHint(t *testing.T) {
 	secret := []byte("a-32-byte-symmetric-test-secret!")
-	token := signHS256(t, secret, jwt.MapClaims{"sub": "hint"})
+	token := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "hint"})
 
 	tests := []struct {
 		name       string

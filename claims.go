@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/fatih/color"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -66,16 +65,13 @@ func verifyClaims(w io.Writer, tokenStr string, c claimChecks) error {
 
 	valid, reason := validateClaimsSet(claims, c)
 	if !valid {
-		if _, werr := color.New(color.FgRed, color.Bold).Fprintln(w, "Claims: INVALID"); werr != nil {
+		text := claimReason(reason)
+		if werr := printVerdict(w, "Claims", false, text); werr != nil {
 			return werr
 		}
-		if _, werr := dimColor.Fprintf(w, "  %s\n", claimReason(reason)); werr != nil {
-			return werr
-		}
-		return fmt.Errorf("%w: %s", errInvalidClaims, claimReason(reason))
+		return fmt.Errorf("%w: %s", errInvalidClaims, text)
 	}
-	_, werr := color.New(color.FgGreen, color.Bold).Fprintln(w, "Claims: VALID")
-	return werr
+	return printVerdict(w, "Claims", true, "")
 }
 
 // claimReason flattens a validation error onto a single line. The jwt validator

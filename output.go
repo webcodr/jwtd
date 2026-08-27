@@ -57,32 +57,24 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 	}
 
 	// Check if the decrypted payload is a nested JWT.
-	if strings.Count(text, ".") == 2 {
+	if isJWT(text) {
 		var nested bytes.Buffer
 		if err := decodeAndPrint(&nested, text, ""); err == nil {
 			return printNestedPayload(w, "Decrypted Payload (nested JWT)", nested.Bytes())
 		}
 	}
 
-	// Try to parse as JSON object and pretty-print.
-	var data map[string]any
-	if err := decodeJSON(plaintext, &data); err == nil {
-		formatTimestamps(data)
-		return printSection(w, f, "Decrypted Payload", data)
-	}
-
-	// Try to parse as JSON array and pretty-print.
-	var arr []any
-	if err := decodeJSON(plaintext, &arr); err == nil {
-		if _, err := labelColor.Fprintln(w, "Decrypted Payload"); err != nil {
-			return err
+	// Pretty-print JSON objects and arrays. The payload is decoded once and
+	// dispatched on the decoded value, rather than re-parsing per shape.
+	var value any
+	if err := decodeJSON(plaintext, &value); err == nil {
+		switch v := value.(type) {
+		case map[string]any:
+			formatTimestamps(v)
+			return printSection(w, f, "Decrypted Payload", v)
+		case []any:
+			return printSection(w, f, "Decrypted Payload", v)
 		}
-		pretty, err := f.Marshal(arr)
-		if err != nil {
-			return fmt.Errorf("formatting Decrypted Payload: %w", err)
-		}
-		_, err = fmt.Fprintln(w, escapeFormattedJSONControls(pretty))
-		return err
 	}
 
 	// Fall back to raw text output.
@@ -95,6 +87,7 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 
 func escapeTerminalText(text []byte) string {
 	var escaped strings.Builder
+	escaped.Grow(len(text))
 	for len(text) > 0 {
 		r, size := utf8.DecodeRune(text)
 		if r == utf8.RuneError && size == 1 {
@@ -121,10 +114,15 @@ func escapeTerminalText(text []byte) string {
 }
 
 func escapeFormattedJSONControls(text []byte) string {
+	if !bytes.ContainsFunc(text, needsJSONEscape) {
+		return string(text)
+	}
+
 	var escaped strings.Builder
+	escaped.Grow(len(text))
 	for len(text) > 0 {
 		r, size := utf8.DecodeRune(text)
-		if r == 0x7f || (r >= 0x80 && r <= 0x9f) || isBidiControl(r) {
+		if needsJSONEscape(r) {
 			fmt.Fprintf(&escaped, `\u%04x`, r)
 		} else {
 			escaped.Write(text[:size])
@@ -132,6 +130,12 @@ func escapeFormattedJSONControls(text []byte) string {
 		text = text[size:]
 	}
 	return escaped.String()
+}
+
+// needsJSONEscape reports whether a rune must be escaped in already-formatted
+// JSON: DEL, the C1 controls, and the targeted bidi controls.
+func needsJSONEscape(r rune) bool {
+	return r == 0x7f || (r >= 0x80 && r <= 0x9f) || isBidiControl(r)
 }
 
 func isBidiControl(r rune) bool {
@@ -170,6 +174,9 @@ func formatTimestamps(data map[string]any) {
 			continue
 		}
 
+		// A json.Number can be constructed with arbitrary text, so the value
+		// is re-validated as a JSON number literal here: big.Rat.SetString
+		// also accepts forms JSON does not (ratios, hex, binary exponents).
 		if len(text) == 0 || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) || !json.Valid([]byte(text)) {
 			continue
 		}
@@ -245,7 +252,7 @@ func humanizeDuration(d time.Duration) string {
 }
 
 // printSection outputs a labeled, pretty-printed JSON section.
-func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[string]any) error {
+func printSection(w io.Writer, f *prettyjson.Formatter, label string, data any) error {
 	if _, err := labelColor.Fprintln(w, label); err != nil {
 		return err
 	}
@@ -255,6 +262,22 @@ func printSection(w io.Writer, f *prettyjson.Formatter, label string, data map[s
 		return fmt.Errorf("formatting %s: %w", label, err)
 	}
 	_, err = fmt.Fprintln(w, escapeFormattedJSONControls(pretty))
+	return err
+}
+
+// printVerdict renders a "<label>: VALID" / "<label>: INVALID" line, with the
+// reason dimmed beneath a failure. The signature and claim checks are
+// independent verdicts (see AGENTS.md) but share this rendering, so they cannot
+// drift apart visually.
+func printVerdict(w io.Writer, label string, valid bool, reason string) error {
+	if valid {
+		_, err := color.New(color.FgGreen, color.Bold).Fprintf(w, "%s: VALID\n", label)
+		return err
+	}
+	if _, err := color.New(color.FgRed, color.Bold).Fprintf(w, "%s: INVALID\n", label); err != nil {
+		return err
+	}
+	_, err := dimColor.Fprintf(w, "  %s\n", reason)
 	return err
 }
 

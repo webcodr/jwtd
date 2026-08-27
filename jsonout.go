@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/go-jose/go-jose/v4"
 )
@@ -97,8 +96,7 @@ func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
 	out := jweJSON{ProtectedHeader: header}
 
 	if keyStr == "" {
-		parts := strings.SplitN(tokenStr, ".", 5)
-		if len(parts) == 5 {
+		if parts, ok := jweEncryptedParts(tokenStr); ok {
 			out.Encrypted = &jweEncrypted{
 				EncryptedKeyBytes: base64URLLen(parts[1]),
 				IVBytes:           base64URLLen(parts[2]),

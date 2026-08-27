@@ -317,16 +317,12 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	}
 
 	if !valid {
-		if _, werr := color.New(color.FgRed, color.Bold).Fprintln(w, "Signature: INVALID"); werr != nil {
-			return werr
-		}
-		if _, werr := dimColor.Fprintf(w, "  %v\n", reason); werr != nil {
+		if werr := printVerdict(w, "Signature", false, reason.Error()); werr != nil {
 			return werr
 		}
 		return fmt.Errorf("%w: %v", errInvalidSignature, reason)
 	}
-	_, werr := color.New(color.FgGreen, color.Bold).Fprintln(w, "Signature: VALID")
-	return werr
+	return printVerdict(w, "Signature", true, "")
 }
 
 // verifyJWTSignature performs the cryptographic signature check and reports the

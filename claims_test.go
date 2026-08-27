@@ -130,7 +130,7 @@ func TestValidateClaimsSet(t *testing.T) {
 
 func TestVerifyClaims_ValidPrintsAndReturnsNil(t *testing.T) {
 	pinTime(t, 1000)
-	token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
+	token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
 
 	var buf bytes.Buffer
 	if err := verifyClaims(&buf, token, claimChecks{verify: true}); err != nil {
@@ -143,7 +143,7 @@ func TestVerifyClaims_ValidPrintsAndReturnsNil(t *testing.T) {
 
 func TestVerifyClaims_InvalidReturnsSentinelAndReason(t *testing.T) {
 	pinTime(t, 1000)
-	token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
+	token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
 
 	var buf bytes.Buffer
 	err := verifyClaims(&buf, token, claimChecks{verify: true})
@@ -185,7 +185,7 @@ func TestClaimReason_FlattensJoinedErrors(t *testing.T) {
 
 func TestDecodeJWTHuman_NoClaimSectionWhenNotRequested(t *testing.T) {
 	pinTime(t, 1000)
-	token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
+	token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
 
 	var buf bytes.Buffer
 	if err := decodeJWTHuman(&buf, token, "", claimChecks{}); err != nil {
@@ -198,7 +198,7 @@ func TestDecodeJWTHuman_NoClaimSectionWhenNotRequested(t *testing.T) {
 
 func TestDecodeJWTHuman_ClaimsSectionAfterSignature(t *testing.T) {
 	pinTime(t, 1000)
-	token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
+	token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
 
 	var buf bytes.Buffer
 	if err := decodeJWTHuman(&buf, token, "raw:secret", claimChecks{verify: true}); err != nil {
@@ -217,7 +217,7 @@ func TestDecodeJWTHuman_ClaimsSectionAfterSignature(t *testing.T) {
 
 func TestDecodeJWTHuman_ValidSignatureInvalidClaims(t *testing.T) {
 	pinTime(t, 1000)
-	token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
+	token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
 
 	var buf bytes.Buffer
 	err := decodeJWTHuman(&buf, token, "raw:secret", claimChecks{verify: true})
@@ -232,7 +232,7 @@ func TestDecodeJWTHuman_ValidSignatureInvalidClaims(t *testing.T) {
 
 func TestDecodeJWTHuman_InvalidSignatureStillShowsClaims(t *testing.T) {
 	pinTime(t, 1000)
-	token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
+	token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
 
 	var buf bytes.Buffer
 	// Wrong key: the signature is invalid, but the claims are still live.
@@ -252,7 +252,7 @@ func TestDecodeJWTJSON_ClaimsValidField(t *testing.T) {
 	pinTime(t, 1000)
 
 	t.Run("valid", func(t *testing.T) {
-		token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
+		token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
 		var buf bytes.Buffer
 		if err := decodeJWTJSON(&buf, token, "", claimChecks{verify: true}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -263,7 +263,7 @@ func TestDecodeJWTJSON_ClaimsValidField(t *testing.T) {
 	})
 
 	t.Run("expired emits json then sentinel", func(t *testing.T) {
-		token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
+		token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
 		var buf bytes.Buffer
 		err := decodeJWTJSON(&buf, token, "", claimChecks{verify: true})
 		if !errors.Is(err, errInvalidClaims) {
@@ -275,7 +275,7 @@ func TestDecodeJWTJSON_ClaimsValidField(t *testing.T) {
 	})
 
 	t.Run("not requested omits field", func(t *testing.T) {
-		token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
+		token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(2000)})
 		var buf bytes.Buffer
 		if err := decodeJWTJSON(&buf, token, "", claimChecks{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -289,7 +289,7 @@ func TestDecodeJWTJSON_ClaimsValidField(t *testing.T) {
 func TestDecodeJWTJSON_SignatureTakesPrecedenceOverClaims(t *testing.T) {
 	pinTime(t, 1000)
 	// Expired claims and a wrong key: both checks fail.
-	token := signHS256(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
+	token := signJWTWithHMAC(t, []byte("secret"), jwt.MapClaims{"exp": float64(500)})
 
 	var buf bytes.Buffer
 	err := decodeJWTJSON(&buf, token, "raw:wrong-secret", claimChecks{verify: true})

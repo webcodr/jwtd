@@ -263,35 +263,40 @@ func parseKeyData(data []byte, kid string) (any, error) {
 		return parseDERKey(block.Bytes, block.Type)
 	}
 
-	// Try raw DER parsing (private keys).
-	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParsePKCS1PrivateKey(data); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParseECPrivateKey(data); err == nil {
+	// Try raw DER parsing.
+	if key, ok := parseAnyDER(data); ok {
 		return key, nil
 	}
 
-	// Try raw DER parsing (public keys).
-	if key, err := x509.ParsePKIXPublicKey(data); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParsePKCS1PublicKey(data); err == nil {
-		return key, nil
-	}
-	if cert, err := x509.ParseCertificate(data); err == nil {
-		return cert.PublicKey, nil
-	}
-
-	if isSSHPublicKey(data) {
-		// ssh-keygen's PKCS8 export covers RSA and ECDSA keys only, so the
-		// hint does not promise it for Ed25519.
-		return nil, fmt.Errorf("SSH public key format is not supported; supply the key as PEM, DER, or JWK (for RSA and ECDSA keys: ssh-keygen -e -m PKCS8 -f <key>)")
-	}
-
+	// The rejection is phrased by unsupportedKeyError, which is the single
+	// place that knows the user-facing subject and the symmetric-form hint.
 	return nil, fmt.Errorf("unrecognized key format")
+}
+
+// parseAnyDER tries every supported DER encoding, private keys first and then
+// public ones, reporting whether any of them accepted the bytes. It backs both
+// the raw-DER path and the fallback for an unrecognized PEM block type, so the
+// set of understood encodings is defined once.
+func parseAnyDER(der []byte) (any, bool) {
+	if key, err := x509.ParsePKCS8PrivateKey(der); err == nil {
+		return key, true
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
+		return key, true
+	}
+	if key, err := x509.ParseECPrivateKey(der); err == nil {
+		return key, true
+	}
+	if key, err := x509.ParsePKIXPublicKey(der); err == nil {
+		return key, true
+	}
+	if key, err := x509.ParsePKCS1PublicKey(der); err == nil {
+		return key, true
+	}
+	if cert, err := x509.ParseCertificate(der); err == nil {
+		return cert.PublicKey, true
+	}
+	return nil, false
 }
 
 // parseDERKey parses DER-encoded key bytes based on the PEM block type.
@@ -315,24 +320,8 @@ func parseDERKey(der []byte, blockType string) (any, error) {
 		}
 		return cert.PublicKey, nil
 	default:
-		// Try all parsers (private keys first, then public).
-		if key, err := x509.ParsePKCS8PrivateKey(der); err == nil {
+		if key, ok := parseAnyDER(der); ok {
 			return key, nil
-		}
-		if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
-			return key, nil
-		}
-		if key, err := x509.ParseECPrivateKey(der); err == nil {
-			return key, nil
-		}
-		if key, err := x509.ParsePKIXPublicKey(der); err == nil {
-			return key, nil
-		}
-		if key, err := x509.ParsePKCS1PublicKey(der); err == nil {
-			return key, nil
-		}
-		if cert, err := x509.ParseCertificate(der); err == nil {
-			return cert.PublicKey, nil
 		}
 		return nil, fmt.Errorf("unable to parse key from PEM block type %q", blockType)
 	}
