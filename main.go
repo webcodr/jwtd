@@ -5,12 +5,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/chzyer/readline"
@@ -259,7 +261,7 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
 	f := newFormatter()
 
-	if err := printSection(w, f, "Header", p.token.Header); err != nil {
+	if err := printSection(w, f, "Header", p.header); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
@@ -291,39 +293,47 @@ func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
 	return nil
 }
 
-// parsedJWT is one strict decode of a compact JWT: the token with its
-// display-decoded header, its three segments, and its claims. It is threaded
-// through the decode, signature, and claim steps so a single run parses the
-// token once rather than once per step.
+// parsedJWT is one strict decode of a compact JWT: its three segments, the
+// display-decoded header and claims, and the signing method and decoded
+// signature bytes the verification step needs. It is threaded through the
+// decode, signature, and claim steps so a single run parses the token once
+// rather than once per step.
 type parsedJWT struct {
-	raw    string
-	token  *jwt.Token
-	parts  []string
-	claims jwt.MapClaims
+	raw       string
+	header    map[string]any
+	parts     []string
+	claims    jwt.MapClaims
+	method    jwt.SigningMethod
+	signature []byte
 }
 
+// parseUnverifiedJWT decodes a compact JWT without checking its signature.
+//
+// It does the segment work itself rather than calling jwt.ParseUnverified,
+// which JSON-decodes the header and claims with plain json.Unmarshal — losing
+// number precision and accepting trailing data — so every one of its decodes
+// would be thrown away and redone strictly here. The remaining steps mirror
+// ParseUnverified exactly, including its rejection of a token whose "alg" is
+// missing or unknown, so the set of tokens jwtd decodes is unchanged.
 func parseUnverifiedJWT(tokenStr string) (*parsedJWT, error) {
-	parser := jwt.NewParser(jwt.WithJSONNumber())
-	token, parts, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
-	if err != nil {
-		return nil, fmt.Errorf("parsing JWT: %w", err)
+	parts, ok := splitCompactJWT(tokenStr)
+	if !ok {
+		return nil, fmt.Errorf("parsing JWT: %w: token contains an invalid number of segments", jwt.ErrTokenMalformed)
 	}
 
-	headerData, err := parser.DecodeSegment(parts[0])
+	headerData, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		return nil, fmt.Errorf("parsing JWT header: decoding header: %w", err)
 	}
 
-	// Re-decode the header for display with the same strictness as the
-	// claims: exact json.Number values and no trailing data. ParseUnverified
-	// decodes it with plain json.Unmarshal, which loses number precision.
+	// The header is decoded with the same strictness as the claims: exact
+	// json.Number values and no trailing data.
 	header := map[string]any{}
 	if err := decodeJSON(headerData, &header); err != nil {
 		return nil, fmt.Errorf("parsing JWT header: %w", err)
 	}
-	token.Header = header
 
-	payload, err := parser.DecodeSegment(parts[1])
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return nil, fmt.Errorf("parsing JWT claims: decoding payload: %w", err)
 	}
@@ -332,7 +342,45 @@ func parseUnverifiedJWT(tokenStr string) (*parsedJWT, error) {
 	if err := decodeJSON(payload, &claims); err != nil {
 		return nil, fmt.Errorf("parsing JWT claims: %w", err)
 	}
-	return &parsedJWT{raw: tokenStr, token: token, parts: parts, claims: claims}, nil
+
+	alg, ok := header["alg"].(string)
+	if !ok {
+		return nil, fmt.Errorf("parsing JWT: %w: signing method (alg) is unspecified", jwt.ErrTokenUnverifiable)
+	}
+	method := jwt.GetSigningMethod(alg)
+	if method == nil {
+		return nil, fmt.Errorf("parsing JWT: %w: signing method (alg) is unavailable", jwt.ErrTokenUnverifiable)
+	}
+
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("parsing JWT: %w: could not base64 decode signature: %w", jwt.ErrTokenMalformed, err)
+	}
+
+	return &parsedJWT{
+		raw:       tokenStr,
+		header:    header,
+		parts:     parts,
+		claims:    claims,
+		method:    method,
+		signature: signature,
+	}, nil
+}
+
+// splitCompactJWT splits a compact serialization into its three segments,
+// reporting false unless there are exactly two delimiters. A token carrying
+// extra delimiters is rejected rather than truncated, matching
+// jwt.ParseUnverified.
+func splitCompactJWT(tokenStr string) ([]string, bool) {
+	header, remain, ok := strings.Cut(tokenStr, ".")
+	if !ok {
+		return nil, false
+	}
+	claims, signature, ok := strings.Cut(remain, ".")
+	if !ok || strings.Contains(signature, ".") {
+		return nil, false
+	}
+	return []string{header, claims, signature}, true
 }
 
 // printSignatureVerdict renders the signature verdict for an already-parsed
@@ -360,7 +408,7 @@ func printSignatureVerdict(w io.Writer, p *parsedJWT, keyStr string) error {
 // hard failures (unparseable token, unusable key) that are not a verdict on the
 // signature itself.
 func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, err error) {
-	key, err := loadKeyForKID(keyStr, headerKID(p.token.Header))
+	key, err := loadKeyForKID(keyStr, headerKID(p.header))
 	if err != nil {
 		return false, nil, fmt.Errorf("error loading key: %w", err)
 	}
@@ -368,19 +416,22 @@ func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, 
 	// Extract the public key from private keys for verification.
 	key = publicKeyForVerification(key)
 
-	// Claims validation is disabled so the result reflects only the
-	// cryptographic signature, not token expiry. Accepted algorithms are
-	// restricted to those compatible with the key type to rule out
-	// algorithm confusion.
-	opts := []jwt.ParserOption{jwt.WithoutClaimsValidation(), jwt.WithJSONNumber()}
-	if methods := validMethodsForKey(key); methods != nil {
-		opts = append(opts, jwt.WithValidMethods(methods))
+	// Accepted algorithms are restricted to those compatible with the key type
+	// to rule out algorithm confusion. This check is what jwt.WithValidMethods
+	// would do inside jwt.Parse; verifying from the already-parsed token means
+	// it has to be spelled out here, and it must stay ahead of the Verify call
+	// below — without it an HS256 token signed with a published public key
+	// verifies against that key.
+	alg := p.method.Alg()
+	if methods := validMethodsForKey(key); methods != nil && !slices.Contains(methods, alg) {
+		return false, fmt.Errorf("%w: signing method %v is invalid", jwt.ErrTokenSignatureInvalid, alg), nil
 	}
-	parser := jwt.NewParser(opts...)
-	if _, perr := parser.Parse(p.raw, func(*jwt.Token) (any, error) {
-		return key, nil
-	}); perr != nil {
-		return false, perr, nil
+
+	// Only the signature is checked here: the claims are never consulted, so
+	// the verdict reflects the cryptography alone and not token expiry.
+	signingInput := p.parts[0] + "." + p.parts[1]
+	if verr := p.method.Verify(signingInput, p.signature, key); verr != nil {
+		return false, fmt.Errorf("%w: %w", jwt.ErrTokenSignatureInvalid, verr), nil
 	}
 	return true, nil, nil
 }

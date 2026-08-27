@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -41,17 +42,36 @@ var allContentEncryptions = []jose.ContentEncryption{
 	jose.A256GCM,
 }
 
+// Compact serializations are told apart by their delimiter count: a JWE has
+// five parts, a JWS/JWT three. The counts live here so the string and byte
+// forms of the predicates below cannot disagree about the shape rule.
+const (
+	jweDelimiters = 4
+	jwtDelimiters = 2
+)
+
 // isJWE returns true if the token string looks like a JWE compact serialization
 // (5 dot-separated parts) rather than a JWT (3 parts).
 func isJWE(token string) bool {
-	return strings.Count(token, ".") == 4
+	return strings.Count(token, ".") == jweDelimiters
 }
 
 // isJWT returns true if the token string looks like a JWS/JWT compact
 // serialization (3 dot-separated parts). It is the counterpart of isJWE, so
 // token-shape dispatch has one definition per form.
 func isJWT(token string) bool {
-	return strings.Count(token, ".") == 2
+	return strings.Count(token, ".") == jwtDelimiters
+}
+
+// isJWEBytes and isJWTBytes are the byte forms, used where the candidate is a
+// decrypted payload that may be large: testing its shape must not cost a full
+// copy of it just to reach the string predicates.
+func isJWEBytes(token []byte) bool {
+	return bytes.Count(token, []byte(".")) == jweDelimiters
+}
+
+func isJWTBytes(token []byte) bool {
+	return bytes.Count(token, []byte(".")) == jwtDelimiters
 }
 
 // decodeAndPrintJWE parses a JWE token and prints its contents.

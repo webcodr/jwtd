@@ -44,22 +44,24 @@ func newFormatter() *prettyjson.Formatter {
 // If the plaintext is valid JSON, it is pretty-printed. If the plaintext
 // is itself a JWT or JWE, it is decoded and printed recursively.
 func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byte) error {
-	text := string(plaintext)
+	// The shape checks run on the bytes, so a payload that is not a nested
+	// token — the common case, and the one that can be large — is never copied
+	// into a string just to be measured.
 
 	// Check if the decrypted payload is a nested JWE. The nested output is
 	// buffered so nothing is printed if decoding fails and the payload falls
 	// through to the JSON/raw handling below.
-	if isJWE(text) {
+	if isJWEBytes(plaintext) {
 		var nested bytes.Buffer
-		if err := decodeAndPrintJWE(&nested, text, ""); err == nil {
+		if err := decodeAndPrintJWE(&nested, string(plaintext), ""); err == nil {
 			return printNestedPayload(w, "Decrypted Payload (nested JWE)", nested.Bytes())
 		}
 	}
 
 	// Check if the decrypted payload is a nested JWT.
-	if isJWT(text) {
+	if isJWTBytes(plaintext) {
 		var nested bytes.Buffer
-		if err := decodeAndPrint(&nested, text, ""); err == nil {
+		if err := decodeAndPrint(&nested, string(plaintext), ""); err == nil {
 			return printNestedPayload(w, "Decrypted Payload (nested JWT)", nested.Bytes())
 		}
 	}
@@ -86,6 +88,14 @@ func printDecryptedPayload(w io.Writer, f *prettyjson.Formatter, plaintext []byt
 }
 
 func escapeTerminalText(text []byte) string {
+	// Fast path: text that is entirely printable ASCII (plus the newline and
+	// tab that pass through anyway) is returned as one copy instead of being
+	// rebuilt rune by rune. A decrypted JWE payload can be arbitrarily large,
+	// and this is the only path that prints one verbatim.
+	if isPlainASCIIText(text) {
+		return string(text)
+	}
+
 	var escaped strings.Builder
 	escaped.Grow(len(text))
 	for len(text) > 0 {
@@ -114,6 +124,12 @@ func escapeTerminalText(text []byte) string {
 }
 
 func escapeFormattedJSONControls(text []byte) string {
+	// Every rune needsJSONEscape rewrites is DEL or above, so pure ASCII text
+	// is settled by a byte scan without decoding a single rune; anything else
+	// falls through to the rune-level check.
+	if isPlainASCIIText(text) {
+		return string(text)
+	}
 	if !bytes.ContainsFunc(text, needsJSONEscape) {
 		return string(text)
 	}
@@ -130,6 +146,21 @@ func escapeFormattedJSONControls(text []byte) string {
 		text = text[size:]
 	}
 	return escaped.String()
+}
+
+// isPlainASCIIText reports whether text is entirely printable ASCII, plus the
+// newline and tab that both escapers pass through untouched. Such text needs no
+// escaping in either form, and deciding it byte by byte avoids decoding runes.
+// Every case the escapers do rewrite — the other C0 controls, DEL, the C1
+// controls, the bidi controls, and invalid UTF-8 — has at least one byte
+// outside that range, so a false result only ever costs a slow-path pass.
+func isPlainASCIIText(text []byte) bool {
+	for _, b := range text {
+		if b >= 0x7f || (b < 0x20 && b != '\n' && b != '\t') {
+			return false
+		}
+	}
+	return true
 }
 
 // needsJSONEscape reports whether a rune must be escaped in already-formatted
@@ -174,31 +205,8 @@ func formatTimestamps(data map[string]any) {
 			continue
 		}
 
-		// A json.Number can be constructed with arbitrary text, so the value
-		// is re-validated as a JSON number literal here: big.Rat.SetString
-		// also accepts forms JSON does not (ratios, hex, binary exponents).
-		if len(text) == 0 || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) || !json.Valid([]byte(text)) {
-			continue
-		}
-		epoch, ok := new(big.Rat).SetString(text)
+		t, ok := claimTime(text)
 		if !ok {
-			continue
-		}
-
-		seconds := new(big.Int).Quo(epoch.Num(), epoch.Denom())
-		if !seconds.IsInt64() {
-			continue
-		}
-
-		remainder := new(big.Rat).Sub(epoch, new(big.Rat).SetInt(seconds))
-		nanoseconds := new(big.Rat).Mul(remainder, big.NewRat(int64(time.Second), 1))
-		nanos := new(big.Int).Quo(nanoseconds.Num(), nanoseconds.Denom())
-		if !nanos.IsInt64() {
-			continue
-		}
-
-		t := time.Unix(seconds.Int64(), nanos.Int64()).UTC()
-		if t.Year() < 0 || t.Year() > 9999 {
 			continue
 		}
 		if status := timestampStatus(key, t); status != "" {
@@ -207,6 +215,55 @@ func formatTimestamps(data map[string]any) {
 			data[key] = fmt.Sprintf("%s (%s)", t.Format(time.RFC3339Nano), text)
 		}
 	}
+}
+
+// claimTime converts a numeric claim literal to the instant it denotes,
+// reporting false for anything that is not a JSON number naming a
+// representable time.
+//
+// A json.Number can be constructed with arbitrary text, so the value is
+// re-validated as a JSON number literal first: big.Rat.SetString also accepts
+// forms JSON does not (ratios, hex, binary exponents).
+func claimTime(text string) (time.Time, bool) {
+	if len(text) == 0 || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) || !json.Valid([]byte(text)) {
+		return time.Time{}, false
+	}
+
+	// Whole seconds, which every ordinary token uses, are converted directly.
+	// The big.Rat path below exists for the fractional and exponent forms JSON
+	// also permits, and costs roughly thirty allocations per claim.
+	if seconds, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return representableTime(time.Unix(seconds, 0))
+	}
+
+	epoch, ok := new(big.Rat).SetString(text)
+	if !ok {
+		return time.Time{}, false
+	}
+
+	seconds := new(big.Int).Quo(epoch.Num(), epoch.Denom())
+	if !seconds.IsInt64() {
+		return time.Time{}, false
+	}
+
+	remainder := new(big.Rat).Sub(epoch, new(big.Rat).SetInt(seconds))
+	nanoseconds := new(big.Rat).Mul(remainder, big.NewRat(int64(time.Second), 1))
+	nanos := new(big.Int).Quo(nanoseconds.Num(), nanoseconds.Denom())
+	if !nanos.IsInt64() {
+		return time.Time{}, false
+	}
+
+	return representableTime(time.Unix(seconds.Int64(), nanos.Int64()))
+}
+
+// representableTime rejects instants outside the four-digit year range
+// RFC3339 can render.
+func representableTime(t time.Time) (time.Time, bool) {
+	t = t.UTC()
+	if t.Year() < 0 || t.Year() > 9999 {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // timestampStatus returns an informational note describing a claim's time
