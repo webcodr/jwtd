@@ -58,11 +58,18 @@ func validateClaimsSet(claims jwt.MapClaims, c claimChecks) (bool, error) {
 // a hard error instead. Claim validation is independent of the signature: it
 // runs with or without a key.
 func verifyClaims(w io.Writer, tokenStr string, c claimChecks) error {
-	_, _, claims, err := parseUnverifiedJWT(tokenStr)
+	p, err := parseUnverifiedJWT(tokenStr)
 	if err != nil {
 		return err
 	}
+	return printClaimsVerdict(w, p.claims, c)
+}
 
+// printClaimsVerdict runs the requested checks against already-parsed claims
+// and renders the verdict, so a caller that has parsed the token (the human
+// decode path) does not parse it again just to validate it. The claims must be
+// the raw parse, not the display copy formatTimestamps rewrites.
+func printClaimsVerdict(w io.Writer, claims jwt.MapClaims, c claimChecks) error {
 	valid, reason := validateClaimsSet(claims, c)
 	if !valid {
 		text := claimReason(reason)

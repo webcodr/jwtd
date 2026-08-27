@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strings"
 
@@ -110,7 +111,12 @@ func run(cmd *cobra.Command, args []string) error {
 // either fails, with the signature verdict taking precedence for the returned
 // sentinel (both are suppressed by the top-level error printer).
 func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
-	derr := decodeAndPrint(w, tokenStr, keyStr)
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return err
+	}
+
+	derr := printParsedJWT(w, p, keyStr)
 	if derr != nil && !errors.Is(derr, errInvalidSignature) {
 		return derr
 	}
@@ -120,7 +126,7 @@ func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) er
 		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
-		cerr = verifyClaims(w, tokenStr, checks)
+		cerr = printClaimsVerdict(w, p.claims, checks)
 		if cerr != nil && !errors.Is(cerr, errInvalidClaims) {
 			return cerr
 		}
@@ -240,27 +246,36 @@ func readInteractive() (token string, err error) {
 // decodeAndPrint parses the JWT and prints header, payload, and signature.
 // If keyStr is provided, the signature is verified against the given key.
 func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
-	token, parts, claims, err := parseUnverifiedJWT(tokenStr)
+	p, err := parseUnverifiedJWT(tokenStr)
 	if err != nil {
 		return err
 	}
+	return printParsedJWT(w, p, keyStr)
+}
 
+// printParsedJWT renders an already-parsed token, so callers that also need the
+// claims (claim validation) or the header (signature verification) parse once
+// and share the result instead of decoding the same segments again.
+func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
 	f := newFormatter()
 
-	if err := printSection(w, f, "Header", token.Header); err != nil {
+	if err := printSection(w, f, "Header", p.token.Header); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
-	formatTimestamps(claims)
-	if err := printSection(w, f, "Payload", claims); err != nil {
+	// formatTimestamps rewrites claim values into display strings, so it runs
+	// on a copy: p.claims stays the authoritative parse for validation.
+	display := maps.Clone(p.claims)
+	formatTimestamps(display)
+	if err := printSection(w, f, "Payload", display); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
-	if err := printSignature(w, parts[2]); err != nil {
+	if err := printSignature(w, p.parts[2]); err != nil {
 		return err
 	}
 
@@ -268,7 +283,7 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
-		if err := verifySignature(w, tokenStr, keyStr); err != nil {
+		if err := printSignatureVerdict(w, p, keyStr); err != nil {
 			return err
 		}
 	}
@@ -276,16 +291,27 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 	return nil
 }
 
-func parseUnverifiedJWT(tokenStr string) (*jwt.Token, []string, jwt.MapClaims, error) {
+// parsedJWT is one strict decode of a compact JWT: the token with its
+// display-decoded header, its three segments, and its claims. It is threaded
+// through the decode, signature, and claim steps so a single run parses the
+// token once rather than once per step.
+type parsedJWT struct {
+	raw    string
+	token  *jwt.Token
+	parts  []string
+	claims jwt.MapClaims
+}
+
+func parseUnverifiedJWT(tokenStr string) (*parsedJWT, error) {
 	parser := jwt.NewParser(jwt.WithJSONNumber())
 	token, parts, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("parsing JWT: %w", err)
+		return nil, fmt.Errorf("parsing JWT: %w", err)
 	}
 
 	headerData, err := parser.DecodeSegment(parts[0])
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("parsing JWT header: decoding header: %w", err)
+		return nil, fmt.Errorf("parsing JWT header: decoding header: %w", err)
 	}
 
 	// Re-decode the header for display with the same strictness as the
@@ -293,25 +319,39 @@ func parseUnverifiedJWT(tokenStr string) (*jwt.Token, []string, jwt.MapClaims, e
 	// decodes it with plain json.Unmarshal, which loses number precision.
 	header := map[string]any{}
 	if err := decodeJSON(headerData, &header); err != nil {
-		return nil, nil, nil, fmt.Errorf("parsing JWT header: %w", err)
+		return nil, fmt.Errorf("parsing JWT header: %w", err)
 	}
 	token.Header = header
 
 	payload, err := parser.DecodeSegment(parts[1])
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("parsing JWT claims: decoding payload: %w", err)
+		return nil, fmt.Errorf("parsing JWT claims: decoding payload: %w", err)
 	}
 
 	claims := jwt.MapClaims{}
 	if err := decodeJSON(payload, &claims); err != nil {
-		return nil, nil, nil, fmt.Errorf("parsing JWT claims: %w", err)
+		return nil, fmt.Errorf("parsing JWT claims: %w", err)
 	}
-	return token, parts, claims, nil
+	return &parsedJWT{raw: tokenStr, token: token, parts: parts, claims: claims}, nil
 }
 
-// verifySignature verifies a JWT signature using the provided key and prints the result.
+// verifySignature verifies a JWT signature using the provided key and prints
+// the result. It parses the token itself, for callers that hold only the
+// compact string; printSignatureVerdict is the variant for a token already
+// parsed.
 func verifySignature(w io.Writer, tokenStr, keyStr string) error {
-	valid, reason, err := verifyJWTSignature(tokenStr, keyStr)
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return fmt.Errorf("signature verification: %w", err)
+	}
+	return printSignatureVerdict(w, p, keyStr)
+}
+
+// printSignatureVerdict renders the signature verdict for an already-parsed
+// token and returns the errInvalidSignature sentinel on failure so the CLI
+// exits nonzero.
+func printSignatureVerdict(w io.Writer, p *parsedJWT, keyStr string) error {
+	valid, reason, err := verifyJWTSignature(p, keyStr)
 	if err != nil {
 		return fmt.Errorf("signature verification: %w", err)
 	}
@@ -331,13 +371,8 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 // non-nil reason for a genuinely invalid signature; and a non-nil err only for
 // hard failures (unparseable token, unusable key) that are not a verdict on the
 // signature itself.
-func verifyJWTSignature(tokenStr, keyStr string) (valid bool, reason error, err error) {
-	token, _, _, err := parseUnverifiedJWT(tokenStr)
-	if err != nil {
-		return false, nil, err
-	}
-
-	key, err := loadKeyForKID(keyStr, headerKID(token.Header))
+func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, err error) {
+	key, err := loadKeyForKID(keyStr, headerKID(p.token.Header))
 	if err != nil {
 		return false, nil, fmt.Errorf("error loading key: %w", err)
 	}
@@ -354,7 +389,7 @@ func verifyJWTSignature(tokenStr, keyStr string) (valid bool, reason error, err 
 		opts = append(opts, jwt.WithValidMethods(methods))
 	}
 	parser := jwt.NewParser(opts...)
-	if _, perr := parser.Parse(tokenStr, func(*jwt.Token) (any, error) {
+	if _, perr := parser.Parse(p.raw, func(*jwt.Token) (any, error) {
 		return key, nil
 	}); perr != nil {
 		return false, perr, nil

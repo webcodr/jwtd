@@ -41,54 +41,77 @@ func loadKey(keyStr string) (any, error) {
 // token carries none); it only affects JWK Set selection and is ignored for
 // every other key form.
 func loadKeyForKID(keyStr, kid string) (any, error) {
-	// Explicit literal secret; no file or base64 detection.
-	if secret, ok := strings.CutPrefix(keyStr, "raw:"); ok {
-		return symmetricKey([]byte(secret))
+	// The precedence lives in classifyKeyArg and is applied here, so the
+	// reading the CLI reports is by construction the reading that happens.
+	switch classifyKeyArg(keyStr) {
+	case keySourceLiteral:
+		return symmetricKey([]byte(strings.TrimPrefix(keyStr, "raw:")))
+	case keySourceSecretFile:
+		return loadSymmetricKeyFile(strings.TrimPrefix(keyStr, "hmac:"))
+	case keySourceFile:
+		return loadKeyFile(keyStr, kid)
+	case keySourceBase64:
+		return loadInlineKey(keyStr, kid)
+	default:
+		return nil, fmt.Errorf("key is neither a valid file path nor base64-encoded data")
+	}
+}
+
+// loadSymmetricKeyFile reads an explicit hmac: secret file. Keeping the secret
+// bytes in a file rather than argv keeps them out of the process list, and
+// covers binary secrets that cannot be passed as text.
+func loadSymmetricKeyFile(path string) (any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading symmetric key file %q: %w", path, err)
+	}
+	// Text secrets get the trailing newline editors typically add trimmed;
+	// binary key material is used byte-exact.
+	if isTextKey(data) {
+		data = bytes.TrimRight(data, "\r\n")
+	}
+	return symmetricKey(data)
+}
+
+// loadKeyFile parses structured key material from a file, falling back to
+// base64-decoding its contents so a text file holding encoded key material
+// means the same key as that material passed inline.
+func loadKeyFile(path, kid string) (any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading key file %q: %w", path, err)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("key file %q is empty", path)
 	}
 
-	// Explicit symmetric key file. Keeps secret bytes out of argv, where
-	// other local users can read them, and covers binary secrets that cannot
-	// be passed as text.
-	if path, ok := strings.CutPrefix(keyStr, "hmac:"); ok {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("reading symmetric key file %q: %w", path, err)
-		}
-		// Text secrets get the trailing newline editors typically add
-		// trimmed; binary key material is used byte-exact.
-		if isTextKey(data) {
-			data = bytes.TrimRight(data, "\r\n")
-		}
-		return symmetricKey(data)
+	key, err := parseKeyData(data, kid)
+	if err == nil {
+		return key, nil
+	}
+	// The file is a valid JWK Set; a kid miss is final, not a reason to try
+	// base64 or fall through to the unsupported-format error.
+	if errors.Is(err, errKIDNotFound) {
+		return nil, err
 	}
 
-	// Try as file path first.
-	if data, err := os.ReadFile(keyStr); err == nil {
-		if len(data) == 0 {
-			return nil, fmt.Errorf("key file %q is empty", keyStr)
-		}
-		if key, err := parseKeyData(data, kid); err == nil {
-			return key, nil
-		} else if errors.Is(err, errKIDNotFound) {
-			// The file is a valid JWK Set; a kid miss is final, not a reason
-			// to try base64 or fall through to the unsupported-format error.
-			return nil, err
-		}
-		// A text file may hold base64-encoded key material just as an inline
-		// key argument can, so the same bytes mean the same key either way.
-		if isTextKey(data) {
-			if decoded, ok := decodeBase64Key(bytes.TrimRight(data, "\r\n")); ok {
-				if key, err := parseKeyData(decoded, kid); err == nil {
-					return key, nil
-				} else if errors.Is(err, errKIDNotFound) {
-					return nil, err
-				}
+	if isTextKey(data) {
+		if decoded, ok := decodeBase64Key(bytes.TrimRight(data, "\r\n")); ok {
+			key, err := parseKeyData(decoded, kid)
+			if err == nil {
+				return key, nil
+			}
+			if errors.Is(err, errKIDNotFound) {
+				return nil, err
 			}
 		}
-		return nil, unsupportedKeyError(data, fmt.Sprintf("key file %q", keyStr), "hmac:"+keyStr)
 	}
+	return nil, unsupportedKeyError(data, fmt.Sprintf("key file %q", path), "hmac:"+path)
+}
 
-	// Try as base64-encoded key.
+// loadInlineKey parses base64/base64url key material given directly on the
+// command line or in JWTD_KEY.
+func loadInlineKey(keyStr, kid string) (any, error) {
 	decoded, ok := decodeBase64Key([]byte(keyStr))
 	if !ok {
 		return nil, fmt.Errorf("key is neither a valid file path nor base64-encoded data")
@@ -125,9 +148,10 @@ func symmetricKey(data []byte) (any, error) {
 	return data, nil
 }
 
-// keySource describes how loadKey will read a key argument. The CLI reports
-// it when the reading is not the obvious one, so a key that is silently taken
-// as something other than what the user meant becomes visible.
+// keySource describes how a key argument is read. It drives loadKeyForKID's
+// dispatch, and the CLI reports it when the reading is not the obvious one, so
+// a key silently taken as something other than what the user meant becomes
+// visible.
 type keySource int
 
 const (
@@ -143,10 +167,12 @@ const (
 	keySourceUnusable
 )
 
-// classifyKeyArg reports how loadKey will interpret keyStr, mirroring its
-// precedence: the explicit prefixes, then an existing file, then base64.
-// Existence is checked with Stat rather than a read, so classifying never
-// consumes the key source.
+// classifyKeyArg decides how a key argument is read: the explicit prefixes
+// first, then an existing file, then base64. loadKeyForKID dispatches on this
+// and the CLI narrates it, so the reported reading is the reading that happens
+// rather than a second copy of the ladder that could drift from it. Existence
+// is checked with Stat rather than a read, so classifying never consumes the
+// key source.
 func classifyKeyArg(keyStr string) keySource {
 	if strings.HasPrefix(keyStr, "raw:") {
 		return keySourceLiteral

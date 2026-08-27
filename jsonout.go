@@ -44,20 +44,20 @@ type jweEncrypted struct {
 // so the exit code matches the human path; the signature verdict takes
 // precedence when both fail, though either way the exit is nonzero.
 func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
-	token, parts, claims, err := parseUnverifiedJWT(tokenStr)
+	p, err := parseUnverifiedJWT(tokenStr)
 	if err != nil {
 		return err
 	}
 
 	out := jwtJSON{
-		Header:    token.Header,
-		Payload:   map[string]any(claims),
-		Signature: parts[2],
+		Header:    p.token.Header,
+		Payload:   map[string]any(p.claims),
+		Signature: p.parts[2],
 	}
 
 	var invalid error
 	if keyStr != "" {
-		valid, reason, verr := verifyJWTSignature(tokenStr, keyStr)
+		valid, reason, verr := verifyJWTSignature(p, keyStr)
 		if verr != nil {
 			return fmt.Errorf("signature verification: %w", verr)
 		}
@@ -68,7 +68,7 @@ func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) err
 	}
 
 	if checks.requested() {
-		valid, reason := validateClaimsSet(claims, checks)
+		valid, reason := validateClaimsSet(p.claims, checks)
 		out.ClaimsValid = &valid
 		if !valid && invalid == nil {
 			invalid = fmt.Errorf("%w: %s", errInvalidClaims, claimReason(reason))
