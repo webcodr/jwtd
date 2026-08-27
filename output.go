@@ -124,10 +124,10 @@ func escapeTerminalText(text []byte) string {
 }
 
 func escapeFormattedJSONControls(text []byte) string {
-	// Every rune needsJSONEscape rewrites is DEL or above, so pure ASCII text
-	// is settled by a byte scan without decoding a single rune; anything else
-	// falls through to the rune-level check.
-	if isPlainASCIIText(text) {
+	// Every rune needsJSONEscape rewrites is DEL or above, so text whose bytes
+	// are all below DEL is settled by a byte scan without decoding a single
+	// rune; anything else falls through to the rune-level check.
+	if isBelowDEL(text) {
 		return string(text)
 	}
 	if !bytes.ContainsFunc(text, needsJSONEscape) {
@@ -149,14 +149,32 @@ func escapeFormattedJSONControls(text []byte) string {
 }
 
 // isPlainASCIIText reports whether text is entirely printable ASCII, plus the
-// newline and tab that both escapers pass through untouched. Such text needs no
-// escaping in either form, and deciding it byte by byte avoids decoding runes.
-// Every case the escapers do rewrite — the other C0 controls, DEL, the C1
-// controls, the bidi controls, and invalid UTF-8 — has at least one byte
-// outside that range, so a false result only ever costs a slow-path pass.
+// newline and tab escapeTerminalText passes through untouched. Such text needs
+// no escaping, and deciding it byte by byte avoids decoding runes. Every case
+// that escaper does rewrite — the other C0 controls, DEL, the C1 controls, the
+// bidi controls, and invalid UTF-8 — has at least one byte outside that range,
+// so a false result only ever costs a slow-path pass.
 func isPlainASCIIText(text []byte) bool {
 	for _, b := range text {
 		if b >= 0x7f || (b < 0x20 && b != '\n' && b != '\t') {
+			return false
+		}
+	}
+	return true
+}
+
+// isBelowDEL reports whether every byte of text is below DEL, which is
+// escapeFormattedJSONControls' fast path: everything it rewrites is DEL, a C1
+// control, or a bidi control, and each of those has a byte at 0x7f or above.
+//
+// It deliberately admits the C0 controls that isPlainASCIIText rejects. The
+// input here is JSON the formatter has already rendered, so when color is on it
+// carries the ESC bytes of the formatter's own ANSI sequences — and reusing the
+// stricter predicate would push every colored render, the interactive default,
+// onto the rune-decoding pass over text that cannot contain anything to escape.
+func isBelowDEL(text []byte) bool {
+	for _, b := range text {
+		if b >= 0x7f {
 			return false
 		}
 	}

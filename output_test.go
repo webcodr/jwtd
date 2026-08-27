@@ -85,6 +85,11 @@ func TestEscapeFormattedJSONControls(t *testing.T) {
 			input: "\x1b[32mkey: value\u009b\u009d\u009c\x1b[0m",
 			want:  "\x1b[32mkey: value\\u009b\\u009d\\u009c\x1b[0m",
 		},
+		{
+			name:  "colored output with nothing to escape",
+			input: "\x1b[34mkey\x1b[0m: \x1b[32m\"value\"\x1b[0m",
+			want:  "\x1b[34mkey\x1b[0m: \x1b[32m\"value\"\x1b[0m",
+		},
 		{name: "DEL", input: "a\x7fb", want: `a\u007fb`},
 		{name: "safe Unicode and zero width joiner", input: "cafe\u0301 \u200d 世界", want: "cafe\u0301 \u200d 世界"},
 		{name: "already escaped controls", input: `\u007f \u009b \u061c \u202e \u2066`, want: `\u007f \u009b \u061c \u202e \u2066`},
@@ -561,6 +566,45 @@ func TestEscapeTerminalText_FastPathMatchesSlowPath(t *testing.T) {
 			}
 			if tt.wantFast {
 				if got := escapeTerminalText(tt.input); got != string(tt.input) {
+					t.Errorf("fast path altered text: got %q, want %q", got, tt.input)
+				}
+			}
+		})
+	}
+}
+
+// TestEscapeFormattedJSONControls_FastPathMatchesSlowPath pins that the
+// below-DEL shortcut is a pure optimization: text it accepts must come back
+// unchanged, and text carrying anything escapable must not reach it.
+//
+// The ANSI cases are the point of the separate predicate. Formatted JSON
+// carries the ESC bytes of the formatter's own color codes, so requiring
+// printable ASCII (as escapeTerminalText does) would leave the fast path unused
+// for every colored render.
+func TestEscapeFormattedJSONControls_FastPathMatchesSlowPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []byte
+		wantFast bool
+	}{
+		{name: "printable ascii", input: []byte(`{"key": "value"}`), wantFast: true},
+		{name: "ansi color codes", input: []byte("\x1b[34mkey\x1b[0m"), wantFast: true},
+		{name: "newlines and tabs", input: []byte("{\n\t\"key\": 1\n}"), wantFast: true},
+		{name: "empty", input: nil, wantFast: true},
+		{name: "del", input: []byte("a\x7fb"), wantFast: false},
+		{name: "c1 control", input: []byte("a\u009db"), wantFast: false},
+		{name: "bidi control", input: []byte("a\u202eb"), wantFast: false},
+		{name: "ansi with c1 control", input: []byte("\x1b[34mkey\u009b"), wantFast: false},
+		{name: "valid multibyte", input: []byte("a\u00e4b"), wantFast: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isBelowDEL(tt.input); got != tt.wantFast {
+				t.Errorf("isBelowDEL = %v, want %v", got, tt.wantFast)
+			}
+			if tt.wantFast {
+				if got := escapeFormattedJSONControls(tt.input); got != string(tt.input) {
 					t.Errorf("fast path altered text: got %q, want %q", got, tt.input)
 				}
 			}
