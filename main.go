@@ -299,7 +299,6 @@ func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
 // decode, signature, and claim steps so a single run parses the token once
 // rather than once per step.
 type parsedJWT struct {
-	raw       string
 	header    map[string]any
 	parts     []string
 	claims    jwt.MapClaims
@@ -358,7 +357,6 @@ func parseUnverifiedJWT(tokenStr string) (*parsedJWT, error) {
 	}
 
 	return &parsedJWT{
-		raw:       tokenStr,
 		header:    header,
 		parts:     parts,
 		claims:    claims,
