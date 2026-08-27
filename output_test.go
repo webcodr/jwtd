@@ -532,3 +532,65 @@ func TestPrintSignature_LabelsOnSeparateLines(t *testing.T) {
 		t.Errorf("second line should be 'mysig', got %q", lines[1])
 	}
 }
+
+// TestEscapeTerminalText_FastPathMatchesSlowPath pins that the plain-ASCII
+// shortcut in escapeTerminalText is a pure optimization: text it accepts must
+// come back exactly as the rune-by-rune path would have produced it, and text
+// needing any escape must not reach it.
+func TestEscapeTerminalText_FastPathMatchesSlowPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []byte
+		wantFast bool
+	}{
+		{name: "printable ascii", input: []byte("plain ascii payload"), wantFast: true},
+		{name: "newlines and tabs", input: []byte("a\tb\nc"), wantFast: true},
+		{name: "empty", input: nil, wantFast: true},
+		{name: "escape sequence", input: []byte("a\x1b[31mb"), wantFast: false},
+		{name: "del", input: []byte("a\x7fb"), wantFast: false},
+		{name: "c1 control", input: []byte("a\u009db"), wantFast: false},
+		{name: "bidi control", input: []byte("a\u202eb"), wantFast: false},
+		{name: "invalid utf-8", input: []byte{'a', 0xff, 'b'}, wantFast: false},
+		{name: "valid multibyte", input: []byte("a\u00e4b"), wantFast: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPlainASCIIText(tt.input); got != tt.wantFast {
+				t.Errorf("isPlainASCIIText = %v, want %v", got, tt.wantFast)
+			}
+			if tt.wantFast {
+				if got := escapeTerminalText(tt.input); got != string(tt.input) {
+					t.Errorf("fast path altered text: got %q, want %q", got, tt.input)
+				}
+			}
+		})
+	}
+}
+
+// TestFormatTimestamps_IntegerAndFractionalAgree pins that the whole-second
+// shortcut in claimTime renders the same instant as the exact big.Rat path it
+// bypasses.
+func TestFormatTimestamps_IntegerAndFractionalAgree(t *testing.T) {
+	tests := []struct {
+		integer    string
+		fractional string
+	}{
+		{integer: "1516239022", fractional: "1516239022.0"},
+		{integer: "0", fractional: "0.0"},
+		{integer: "-1", fractional: "-1.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.integer, func(t *testing.T) {
+			whole, wholeOK := claimTime(tt.integer)
+			fraction, fractionOK := claimTime(tt.fractional)
+			if !wholeOK || !fractionOK {
+				t.Fatalf("expected both forms to convert, got %v and %v", wholeOK, fractionOK)
+			}
+			if !whole.Equal(fraction) {
+				t.Errorf("integer path gave %v, fractional path gave %v", whole, fraction)
+			}
+		})
+	}
+}

@@ -1129,3 +1129,140 @@ func TestPrintExecutionError_SuppressesInvalidSignature(t *testing.T) {
 		t.Fatalf("expected no duplicate invalid signature error, got %q", stderr.String())
 	}
 }
+
+// TestVerifyJWTSignature_RejectsAlgOutsideKeyTypeAllowlist pins the algorithm
+// restriction across every supported key type. Verification runs from the
+// already-parsed token rather than through jwt.Parse, so the allowlist that
+// jwt.WithValidMethods used to apply is now jwtd's own check: without it, an
+// HS256 token signed with the bytes of a published public key would verify
+// against that key.
+func TestVerifyJWTSignature_RejectsAlgOutsideKeyTypeAllowlist(t *testing.T) {
+	rsaKey := generateRSAKey(t)
+	ecKey := generateECKey(t)
+	edKey := generateEd25519Key(t)
+	secret := []byte("a-shared-secret-of-sufficient-len")
+
+	hmacToken := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "test"})
+	rsaToken := signJWT(t, rsaKey, jwt.MapClaims{"sub": "test"})
+
+	tests := []struct {
+		name    string
+		token   string
+		keyArg  string
+		wantAlg string
+	}{
+		{
+			name:    "HS256 token against RSA public key",
+			token:   hmacToken,
+			keyArg:  writeRSAPublicKeyFile(t, &rsaKey.PublicKey),
+			wantAlg: "HS256",
+		},
+		{
+			name:    "HS256 token against EC public key",
+			token:   hmacToken,
+			keyArg:  writeECPublicKeyFile(t, &ecKey.PublicKey),
+			wantAlg: "HS256",
+		},
+		{
+			name:    "HS256 token against Ed25519 key",
+			token:   hmacToken,
+			keyArg:  writeEd25519KeyFile(t, edKey),
+			wantAlg: "HS256",
+		},
+		{
+			name:    "RS256 token against symmetric secret",
+			token:   rsaToken,
+			keyArg:  "raw:" + string(secret),
+			wantAlg: "RS256",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := parseUnverifiedJWT(tt.token)
+			if err != nil {
+				t.Fatalf("unexpected parse error: %v", err)
+			}
+
+			valid, reason, err := verifyJWTSignature(p, tt.keyArg)
+			if err != nil {
+				t.Fatalf("unexpected hard error: %v", err)
+			}
+			if valid {
+				t.Fatal("signature accepted for an algorithm the key type cannot carry")
+			}
+			want := "signing method " + tt.wantAlg + " is invalid"
+			if reason == nil || !strings.Contains(reason.Error(), want) {
+				t.Errorf("expected %q in reason, got: %v", want, reason)
+			}
+		})
+	}
+}
+
+// TestParseUnverifiedJWT_RejectsMalformedTokens pins the token shapes the
+// decoder refuses. parseUnverifiedJWT splits and decodes the segments itself
+// instead of calling jwt.ParseUnverified, so these rejections are jwtd's own
+// and must not quietly widen.
+func TestParseUnverifiedJWT_RejectsMalformedTokens(t *testing.T) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"test"}`))
+
+	tests := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{name: "no delimiters", token: "notatoken", want: "invalid number of segments"},
+		{name: "two segments", token: header + "." + payload, want: "invalid number of segments"},
+		{name: "four segments", token: header + "." + payload + ".sig.extra", want: "invalid number of segments"},
+		{name: "unknown alg", token: base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"NOPE"}`)) + "." + payload + ".sig", want: "signing method (alg) is unavailable"},
+		{name: "missing alg", token: base64.RawURLEncoding.EncodeToString([]byte(`{"typ":"JWT"}`)) + "." + payload + ".sig", want: "signing method (alg) is unspecified"},
+		{name: "signature not base64url", token: header + "." + payload + "._!!_", want: "could not base64 decode signature"},
+		{name: "header not base64url", token: "_!!_." + payload + ".sig", want: "decoding header"},
+		{name: "payload not base64url", token: header + "._!!_.sig", want: "decoding payload"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := parseUnverifiedJWT(tt.token)
+			if err == nil {
+				t.Fatalf("expected error, got a parsed token: %+v", p)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("expected %q in error, got: %v", tt.want, err)
+			}
+		})
+	}
+}
+
+// TestParseUnverifiedJWT_DecodesSegmentsOnce checks that the parsed token
+// carries everything the later steps need, so neither the signature check nor
+// claim validation has to decode the token a second time.
+func TestParseUnverifiedJWT_DecodesSegmentsOnce(t *testing.T) {
+	secret := []byte("a-shared-secret-of-sufficient-len")
+	token := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "test"})
+
+	p, err := parseUnverifiedJWT(token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := p.header["alg"]; got != "HS256" {
+		t.Errorf("expected HS256 header alg, got %v", got)
+	}
+	if p.method == nil || p.method.Alg() != "HS256" {
+		t.Errorf("expected HS256 signing method, got %v", p.method)
+	}
+	if len(p.signature) == 0 {
+		t.Error("expected decoded signature bytes")
+	}
+	if got, _ := p.claims["sub"].(string); got != "test" {
+		t.Errorf("expected sub claim, got %v", p.claims["sub"])
+	}
+	if len(p.parts) != 3 {
+		t.Fatalf("expected 3 segments, got %d", len(p.parts))
+	}
+	if p.parts[0]+"."+p.parts[1]+"."+p.parts[2] != token {
+		t.Error("segments do not reassemble into the original token")
+	}
+}

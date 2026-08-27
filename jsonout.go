@@ -50,7 +50,7 @@ func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) err
 	}
 
 	out := jwtJSON{
-		Header:    p.token.Header,
+		Header:    p.header,
 		Payload:   map[string]any(p.claims),
 		Signature: p.parts[2],
 	}
