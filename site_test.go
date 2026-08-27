@@ -364,10 +364,10 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 	}
 
 	wantActions := map[string]string{
-		"actions/checkout":              "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-		"actions/configure-pages":       "actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b",
-		"actions/upload-pages-artifact": "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
-		"actions/deploy-pages":          "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
+		"actions/checkout":              "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+		"actions/configure-pages":       "actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d",
+		"actions/upload-pages-artifact": "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
+		"actions/deploy-pages":          "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
 	}
 	seen := make(map[string]string)
 	shaPinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
@@ -419,7 +419,7 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 func TestWebsiteToolingContract(t *testing.T) {
 	testWorkflow := readWebsiteFile(t, ".github", "workflows", "test.yml")
 	for label, required := range map[string]string{
-		"pinned Node setup":       "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+		"pinned Node setup":       "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
 		"Node version":            "node-version: 26.4.0",
 		"JavaScript syntax check": "node --check site/script.js",
 		"JavaScript unit tests":   "node --test site/script.test.js",
