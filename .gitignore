@@ -8,3 +8,6 @@ site/install.ps1
 .worktrees/
 result
 result-*
+
+# Test binaries left behind by go test -bench with a profile flag.
+*.test

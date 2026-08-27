@@ -271,7 +271,9 @@ func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
 	// on a copy: p.claims stays the authoritative parse for validation.
 	display := maps.Clone(p.claims)
 	formatTimestamps(display)
-	if err := printSection(w, f, "Payload", display); err != nil {
+	// Converted to the plain map type: jwt.MapClaims is a named type, which the
+	// formatter's fast path does not match.
+	if err := printSection(w, f, "Payload", map[string]any(display)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
@@ -482,6 +484,13 @@ func decodeJSON(data []byte, value any) error {
 		return err
 	}
 
+	// Nothing but JSON whitespace after the value is the ordinary case, and
+	// deciding it here saves a second decode. Anything else is handed to the
+	// decoder, which is what phrases the rejection.
+	if isJSONWhitespace(data[decoder.InputOffset():]) {
+		return nil
+	}
+
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
@@ -490,4 +499,16 @@ func decodeJSON(data []byte, value any) error {
 		return fmt.Errorf("invalid trailing JSON data: %w", err)
 	}
 	return nil
+}
+
+// isJSONWhitespace reports whether data is entirely JSON whitespace. The set is
+// JSON's own four characters, not Unicode's: a vertical tab after a value is
+// trailing data, and must reach the decoder that says so.
+func isJSONWhitespace(data []byte) bool {
+	for _, b := range data {
+		if b != ' ' && b != '\t' && b != '\n' && b != '\r' {
+			return false
+		}
+	}
+	return true
 }

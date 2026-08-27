@@ -110,8 +110,8 @@ func BenchmarkParseUnverifiedJWT(b *testing.B) {
 }
 
 // BenchmarkPrintParsedJWT measures rendering alone, with the parse hoisted out
-// of the loop. Comparing it against BenchmarkFormatterMarshal shows how much
-// of rendering is go-prettyjson.
+// of the loop. Comparing it against BenchmarkFormatterMarshal shows how much of
+// rendering is the JSON colorizer and how much is everything around it.
 func BenchmarkPrintParsedJWT(b *testing.B) {
 	benchPinColor(b)
 	p := benchParse(b, benchLargeToken(b))
@@ -123,8 +123,8 @@ func BenchmarkPrintParsedJWT(b *testing.B) {
 	}
 }
 
-// BenchmarkFormatterMarshal isolates the go-prettyjson colorizer, which
-// dominates rendering for large payloads.
+// BenchmarkFormatterMarshal isolates the colorizer, which dominated rendering
+// for large payloads until it replaced go-prettyjson.
 func BenchmarkFormatterMarshal(b *testing.B) {
 	benchPinColor(b)
 	p := benchParse(b, benchLargeToken(b))

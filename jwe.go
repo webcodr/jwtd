@@ -154,7 +154,7 @@ func printEncryptedParts(w io.Writer, tokenStr string) error {
 		return nil
 	}
 
-	if _, err := labelColor.Fprintln(w, "Encrypted Content"); err != nil {
+	if err := labelStyle.fprintln(w, "Encrypted Content"); err != nil {
 		return err
 	}
 	for _, part := range []struct{ label, segment string }{
@@ -163,15 +163,14 @@ func printEncryptedParts(w io.Writer, tokenStr string) error {
 		{"Ciphertext", parts[3]},
 		{"Auth Tag", parts[4]},
 	} {
-		if _, err := dimColor.Fprintf(w, "%-14s: %s\n", part.label, partSize(part.segment)); err != nil {
+		if err := dimStyle.fprintf(w, "%-14s: %s\n", part.label, partSize(part.segment)); err != nil {
 			return err
 		}
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
-	_, err := dimColor.Fprintln(w, "Use --key/-k to provide a decryption key")
-	return err
+	return dimStyle.fprintln(w, "Use --key/-k to provide a decryption key")
 }
 
 // partSize renders the decoded byte length reported by base64URLLen, flagging
