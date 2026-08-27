@@ -270,11 +270,14 @@ func printSection(w io.Writer, f *prettyjson.Formatter, label string, data any) 
 // independent verdicts (see AGENTS.md) but share this rendering, so they cannot
 // drift apart visually.
 func printVerdict(w io.Writer, label string, valid bool, reason string) error {
+	// The newline stays outside the colored region: Fprintln wraps the text
+	// and appends the newline after the reset, so output truncated at the line
+	// break cannot leave the attribute active in the terminal.
 	if valid {
-		_, err := color.New(color.FgGreen, color.Bold).Fprintf(w, "%s: VALID\n", label)
+		_, err := color.New(color.FgGreen, color.Bold).Fprintln(w, label+": VALID")
 		return err
 	}
-	if _, err := color.New(color.FgRed, color.Bold).Fprintf(w, "%s: INVALID\n", label); err != nil {
+	if _, err := color.New(color.FgRed, color.Bold).Fprintln(w, label+": INVALID"); err != nil {
 		return err
 	}
 	_, err := dimColor.Fprintf(w, "  %s\n", reason)

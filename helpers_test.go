@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -362,6 +363,17 @@ func randomSymmetricKey(t *testing.T, size int) []byte {
 		t.Fatalf("generating symmetric key: %v", err)
 	}
 	return key
+}
+
+// verifySignature parses a token and renders its signature verdict. Production
+// code always has a parsedJWT in hand and calls printSignatureVerdict directly;
+// this wrapper exists so the signature tests can work from a compact string.
+func verifySignature(w io.Writer, tokenStr, keyStr string) error {
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return fmt.Errorf("signature verification: %w", err)
+	}
+	return printSignatureVerdict(w, p, keyStr)
 }
 
 // --- JWS signature verification -----------------------------------------------

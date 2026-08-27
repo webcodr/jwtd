@@ -335,18 +335,6 @@ func parseUnverifiedJWT(tokenStr string) (*parsedJWT, error) {
 	return &parsedJWT{raw: tokenStr, token: token, parts: parts, claims: claims}, nil
 }
 
-// verifySignature verifies a JWT signature using the provided key and prints
-// the result. It parses the token itself, for callers that hold only the
-// compact string; printSignatureVerdict is the variant for a token already
-// parsed.
-func verifySignature(w io.Writer, tokenStr, keyStr string) error {
-	p, err := parseUnverifiedJWT(tokenStr)
-	if err != nil {
-		return fmt.Errorf("signature verification: %w", err)
-	}
-	return printSignatureVerdict(w, p, keyStr)
-}
-
 // printSignatureVerdict renders the signature verdict for an already-parsed
 // token and returns the errInvalidSignature sentinel on failure so the CLI
 // exits nonzero.
