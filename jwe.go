@@ -47,6 +47,13 @@ func isJWE(token string) bool {
 	return strings.Count(token, ".") == 4
 }
 
+// isJWT returns true if the token string looks like a JWS/JWT compact
+// serialization (3 dot-separated parts). It is the counterpart of isJWE, so
+// token-shape dispatch has one definition per form.
+func isJWT(token string) bool {
+	return strings.Count(token, ".") == 2
+}
+
 // decodeAndPrintJWE parses a JWE token and prints its contents.
 // If keyStr is provided, the token is decrypted and the plaintext payload is displayed.
 // Otherwise, only the protected header and encrypted part metadata are shown.
@@ -112,27 +119,33 @@ func jweProtectedHeaderMap(token string) (map[string]any, error) {
 	return header, nil
 }
 
+// jweEncryptedParts splits a JWE compact serialization into its five segments,
+// reporting false when the token does not have them. Both output paths measure
+// the same segments, so the shape rule lives in one place.
+func jweEncryptedParts(tokenStr string) ([]string, bool) {
+	parts := strings.SplitN(tokenStr, ".", 5)
+	return parts, len(parts) == 5
+}
+
 // printEncryptedParts displays metadata about the encrypted JWE parts.
 func printEncryptedParts(w io.Writer, tokenStr string) error {
-	parts := strings.SplitN(tokenStr, ".", 5)
-	if len(parts) != 5 {
+	parts, ok := jweEncryptedParts(tokenStr)
+	if !ok {
 		return nil
 	}
 
 	if _, err := labelColor.Fprintln(w, "Encrypted Content"); err != nil {
 		return err
 	}
-	if _, err := dimColor.Fprintf(w, "Encrypted Key : %s\n", partSize(parts[1])); err != nil {
-		return err
-	}
-	if _, err := dimColor.Fprintf(w, "IV            : %s\n", partSize(parts[2])); err != nil {
-		return err
-	}
-	if _, err := dimColor.Fprintf(w, "Ciphertext    : %s\n", partSize(parts[3])); err != nil {
-		return err
-	}
-	if _, err := dimColor.Fprintf(w, "Auth Tag      : %s\n", partSize(parts[4])); err != nil {
-		return err
+	for _, part := range []struct{ label, segment string }{
+		{"Encrypted Key", parts[1]},
+		{"IV", parts[2]},
+		{"Ciphertext", parts[3]},
+		{"Auth Tag", parts[4]},
+	} {
+		if _, err := dimColor.Fprintf(w, "%-14s: %s\n", part.label, partSize(part.segment)); err != nil {
+			return err
+		}
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
 		return err
@@ -141,12 +154,12 @@ func printEncryptedParts(w io.Writer, tokenStr string) error {
 	return err
 }
 
-// partSize describes the decoded byte length of a base64url-encoded JWE part,
-// flagging parts that are not valid base64url instead of reporting 0 bytes.
+// partSize renders the decoded byte length reported by base64URLLen, flagging
+// parts that are not valid base64url instead of reporting 0 bytes.
 func partSize(s string) string {
-	data, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil {
+	n := base64URLLen(s)
+	if n < 0 {
 		return "invalid base64url"
 	}
-	return fmt.Sprintf("%d bytes", len(data))
+	return fmt.Sprintf("%d bytes", n)
 }

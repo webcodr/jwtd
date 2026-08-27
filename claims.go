@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/fatih/color"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -59,23 +58,27 @@ func validateClaimsSet(claims jwt.MapClaims, c claimChecks) (bool, error) {
 // a hard error instead. Claim validation is independent of the signature: it
 // runs with or without a key.
 func verifyClaims(w io.Writer, tokenStr string, c claimChecks) error {
-	_, _, claims, err := parseUnverifiedJWT(tokenStr)
+	p, err := parseUnverifiedJWT(tokenStr)
 	if err != nil {
 		return err
 	}
+	return printClaimsVerdict(w, p.claims, c)
+}
 
+// printClaimsVerdict runs the requested checks against already-parsed claims
+// and renders the verdict, so a caller that has parsed the token (the human
+// decode path) does not parse it again just to validate it. The claims must be
+// the raw parse, not the display copy formatTimestamps rewrites.
+func printClaimsVerdict(w io.Writer, claims jwt.MapClaims, c claimChecks) error {
 	valid, reason := validateClaimsSet(claims, c)
 	if !valid {
-		if _, werr := color.New(color.FgRed, color.Bold).Fprintln(w, "Claims: INVALID"); werr != nil {
+		text := claimReason(reason)
+		if werr := printVerdict(w, "Claims", false, text); werr != nil {
 			return werr
 		}
-		if _, werr := dimColor.Fprintf(w, "  %s\n", claimReason(reason)); werr != nil {
-			return werr
-		}
-		return fmt.Errorf("%w: %s", errInvalidClaims, claimReason(reason))
+		return fmt.Errorf("%w: %s", errInvalidClaims, text)
 	}
-	_, werr := color.New(color.FgGreen, color.Bold).Fprintln(w, "Claims: VALID")
-	return werr
+	return printVerdict(w, "Claims", true, "")
 }
 
 // claimReason flattens a validation error onto a single line. The jwt validator

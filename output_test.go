@@ -100,15 +100,6 @@ func TestEscapeFormattedJSONControls(t *testing.T) {
 
 // --- formatTimestamps --------------------------------------------------------
 
-// pinTime fixes timeNow for the duration of a test so the expired /
-// not-yet-valid annotations are deterministic regardless of the wall clock.
-func pinTime(t *testing.T, unix int64) {
-	t.Helper()
-	prev := timeNow
-	timeNow = func() time.Time { return time.Unix(unix, 0) }
-	t.Cleanup(func() { timeNow = prev })
-}
-
 func TestFormatTimestamps_AllTimestampFields(t *testing.T) {
 	// Pin now to nbf's instant: nbf is already valid (no note) and exp is in the
 	// future, so exp carries an "expires in" note while iat/nbf are bare.

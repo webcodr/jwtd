@@ -11,22 +11,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// decodeJWTJSONMap runs decodeJWTJSON and returns the parsed object plus the
-// error, so tests can assert on both the shape and the exit-driving error.
-func decodeJWTJSONMap(t *testing.T, token, key string) (map[string]any, error) {
-	t.Helper()
-	var buf bytes.Buffer
-	err := decodeJWTJSON(&buf, token, key, claimChecks{})
-
-	var out map[string]any
-	dec := json.NewDecoder(bytes.NewReader(buf.Bytes()))
-	dec.UseNumber()
-	if derr := dec.Decode(&out); derr != nil {
-		t.Fatalf("output is not valid JSON: %v\n%s", derr, buf.String())
-	}
-	return out, err
-}
-
 func TestDecodeJWTJSON_NoKeyOmitsSignatureValid(t *testing.T) {
 	token := makeJWT(`{"alg":"HS256"}`, `{"sub":"abc","exp":1516239022}`, "sig")
 
@@ -63,7 +47,7 @@ func TestDecodeJWTJSON_PreservesLargeIntegerExactly(t *testing.T) {
 
 func TestDecodeJWTJSON_ValidSignature(t *testing.T) {
 	secret := []byte("a-random-looking-test-key-with-32b")
-	token := signHS256(t, secret, jwt.MapClaims{"sub": "abc"})
+	token := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "abc"})
 
 	out, err := decodeJWTJSONMap(t, token, "raw:"+string(secret))
 	if err != nil {

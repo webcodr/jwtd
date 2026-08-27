@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,10 +99,7 @@ func TestLoadKey_RawPrefix(t *testing.T) {
 }
 
 func TestLoadKey_TextKeyFileTrimsTrailingNewline(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "secret.txt")
-	if err := os.WriteFile(path, []byte("my-text-secret\n"), 0600); err != nil {
-		t.Fatalf("writing key file: %v", err)
-	}
+	path := writeTempFile(t, "secret.txt", []byte("my-text-secret\n"))
 
 	loaded, err := loadKey("hmac:" + path)
 	if err != nil {
@@ -242,10 +238,7 @@ func TestLoadKey_PKCS1RSAPublicKeyFromPEMFile(t *testing.T) {
 	priv := generateRSAKey(t)
 	der := x509.MarshalPKCS1PublicKey(&priv.PublicKey)
 	block := &pem.Block{Type: "RSA PUBLIC KEY", Bytes: der}
-	path := filepath.Join(t.TempDir(), "test-rsa-pub-pkcs1.pem")
-	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
-		t.Fatalf("writing key file: %v", err)
-	}
+	path := writeTempFile(t, "test-rsa-pub-pkcs1.pem", pem.EncodeToMemory(block))
 
 	loaded, err := loadKey(path)
 	if err != nil {
@@ -360,10 +353,7 @@ func TestLoadKey_RejectsMalformedStructuredData(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Run("file", func(t *testing.T) {
-				path := filepath.Join(t.TempDir(), "structured-key")
-				if err := os.WriteFile(path, tt.data, 0600); err != nil {
-					t.Fatalf("writing structured key data: %v", err)
-				}
+				path := writeTempFile(t, "structured-key", tt.data)
 				if loaded, err := loadKey(path); err == nil {
 					t.Fatalf("expected parsing error, got %T", loaded)
 				} else if !strings.Contains(err.Error(), path) {
@@ -405,10 +395,7 @@ func TestLoadKey_OpaqueDataRequiresExplicitSymmetricForm(t *testing.T) {
 				t.Run(mode, func(t *testing.T) {
 					input := base64.StdEncoding.EncodeToString(tt.data)
 					if mode == "file" {
-						input = filepath.Join(t.TempDir(), "opaque-key")
-						if err := os.WriteFile(input, tt.data, 0600); err != nil {
-							t.Fatalf("writing opaque key: %v", err)
-						}
+						input = writeTempFile(t, "opaque-key", tt.data)
 					}
 
 					if loaded, err := loadKey(input); err == nil {
@@ -424,15 +411,7 @@ func TestLoadKey_OpaqueDataRequiresExplicitSymmetricForm(t *testing.T) {
 
 func TestLoadKey_RSAPrivateKeyFromJWKFile(t *testing.T) {
 	priv := generateRSAKey(t)
-	jwk := jose.JSONWebKey{Key: priv, KeyID: "test-rsa"}
-	data, err := json.Marshal(jwk)
-	if err != nil {
-		t.Fatalf("marshaling JWK: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "rsa-priv.jwk")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatalf("writing JWK file: %v", err)
-	}
+	path := writeJWKFile(t, "rsa-priv.jwk", priv, "test-rsa")
 
 	loaded, err := loadKey(path)
 	if err != nil {
@@ -450,15 +429,7 @@ func TestLoadKey_RSAPrivateKeyFromJWKFile(t *testing.T) {
 
 func TestLoadKey_RSAPublicKeyFromJWKFile(t *testing.T) {
 	priv := generateRSAKey(t)
-	jwk := jose.JSONWebKey{Key: &priv.PublicKey, KeyID: "test-rsa-pub"}
-	data, err := json.Marshal(jwk)
-	if err != nil {
-		t.Fatalf("marshaling JWK: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "rsa-pub.jwk")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatalf("writing JWK file: %v", err)
-	}
+	path := writeJWKFile(t, "rsa-pub.jwk", &priv.PublicKey, "test-rsa-pub")
 
 	loaded, err := loadKey(path)
 	if err != nil {
@@ -476,15 +447,7 @@ func TestLoadKey_RSAPublicKeyFromJWKFile(t *testing.T) {
 
 func TestLoadKey_ECPrivateKeyFromJWKFile(t *testing.T) {
 	priv := generateECKey(t)
-	jwk := jose.JSONWebKey{Key: priv, KeyID: "test-ec"}
-	data, err := json.Marshal(jwk)
-	if err != nil {
-		t.Fatalf("marshaling JWK: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "ec-priv.jwk")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatalf("writing JWK file: %v", err)
-	}
+	path := writeJWKFile(t, "ec-priv.jwk", priv, "test-ec")
 
 	loaded, err := loadKey(path)
 	if err != nil {
@@ -502,21 +465,11 @@ func TestLoadKey_ECPrivateKeyFromJWKFile(t *testing.T) {
 
 func TestLoadKey_JWKSetFirstKey(t *testing.T) {
 	priv1 := generateRSAKey(t)
-	priv2 := generateRSAKey(t)
-	jwks := jose.JSONWebKeySet{
-		Keys: []jose.JSONWebKey{
-			{Key: &priv1.PublicKey, KeyID: "key-1"},
-			{Key: &priv2.PublicKey, KeyID: "key-2"},
-		},
-	}
-	data, err := json.Marshal(jwks)
-	if err != nil {
-		t.Fatalf("marshaling JWK Set: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "jwks.json")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatalf("writing JWK Set file: %v", err)
-	}
+	priv2 := generateDistinctRSAKey(t)
+	path := writeJWKSetFile(t, "jwks.json",
+		jose.JSONWebKey{Key: &priv1.PublicKey, KeyID: "key-1"},
+		jose.JSONWebKey{Key: &priv2.PublicKey, KeyID: "key-2"},
+	)
 
 	loaded, err := loadKey(path)
 	if err != nil {
@@ -539,21 +492,11 @@ func TestLoadKey_JWKSetFirstKey(t *testing.T) {
 func writeJWKSet(t *testing.T) (path string, priv1, priv2 *rsa.PrivateKey) {
 	t.Helper()
 	priv1 = generateRSAKey(t)
-	priv2 = generateRSAKey(t)
-	jwks := jose.JSONWebKeySet{
-		Keys: []jose.JSONWebKey{
-			{Key: &priv1.PublicKey, KeyID: "key-1"},
-			{Key: &priv2.PublicKey, KeyID: "key-2"},
-		},
-	}
-	data, err := json.Marshal(jwks)
-	if err != nil {
-		t.Fatalf("marshaling JWK Set: %v", err)
-	}
-	path = filepath.Join(t.TempDir(), "jwks.json")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatalf("writing JWK Set file: %v", err)
-	}
+	priv2 = generateDistinctRSAKey(t)
+	path = writeJWKSetFile(t, "jwks.json",
+		jose.JSONWebKey{Key: &priv1.PublicKey, KeyID: "key-1"},
+		jose.JSONWebKey{Key: &priv2.PublicKey, KeyID: "key-2"},
+	)
 	return path, priv1, priv2
 }
 
@@ -606,15 +549,7 @@ func TestLoadKeyForKID_UnknownKIDFailsClosed(t *testing.T) {
 // behavior is preserved and verification fails naturally on a genuine mismatch.
 func TestLoadKeyForKID_SingleJWKIgnoresKID(t *testing.T) {
 	priv := generateRSAKey(t)
-	jwk := jose.JSONWebKey{Key: &priv.PublicKey, KeyID: "the-only-key"}
-	data, err := json.Marshal(jwk)
-	if err != nil {
-		t.Fatalf("marshaling JWK: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "jwk.json")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatalf("writing JWK file: %v", err)
-	}
+	path := writeJWKFile(t, "jwk.json", &priv.PublicKey, "the-only-key")
 
 	loaded, err := loadKeyForKID(path, "some-other-kid")
 	if err != nil {
