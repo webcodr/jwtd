@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -311,14 +312,20 @@ func writeRSACertificateFiles(t *testing.T, key *rsa.PrivateKey) (pemPath, derPa
 // --- JWE algorithm-coverage assertions ---------------------------------------
 
 // assertOutputContains checks that every wanted substring appears in the
-// color-stripped output, reporting the whole output once on a miss.
+// color-stripped output. All misses are collected and reported together, so a
+// regression that drops a whole section names every value it took with it
+// without repeating the output per miss.
 func assertOutputContains(t *testing.T, out string, wants ...string) {
 	t.Helper()
 	plain := stripANSI(out)
+	var missing []string
 	for _, want := range wants {
 		if !strings.Contains(plain, want) {
-			t.Errorf("output missing %q:\n%s", want, plain)
+			missing = append(missing, strconv.Quote(want))
 		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("output missing %s:\n%s", strings.Join(missing, ", "), plain)
 	}
 }
 
