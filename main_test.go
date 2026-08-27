@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -626,7 +625,7 @@ func TestDecodeAndPrint_SignatureValid_RSAPublicKey(t *testing.T) {
 
 func TestDecodeAndPrint_SignatureInvalid_WrongKey(t *testing.T) {
 	signingKey := generateRSAKey(t)
-	wrongKey := generateRSAKey(t)
+	wrongKey := generateDistinctRSAKey(t)
 	wrongKeyPath := writeKeyFile(t, wrongKey)
 	claims := jwt.MapClaims{"sub": "test"}
 	token := signJWT(t, signingKey, claims)
@@ -645,7 +644,7 @@ func TestDecodeAndPrint_SignatureInvalid_WrongKey(t *testing.T) {
 
 func TestVerifySignature_InvalidOutputWriterErrors(t *testing.T) {
 	signingKey := generateRSAKey(t)
-	wrongKeyPath := writeKeyFile(t, generateRSAKey(t))
+	wrongKeyPath := writeKeyFile(t, generateDistinctRSAKey(t))
 	token := signJWT(t, signingKey, jwt.MapClaims{"sub": "test"})
 
 	tests := []struct {
@@ -756,10 +755,7 @@ func TestDecodeAndPrint_UnparseableKeyNeverBecomesHMACSecret(t *testing.T) {
 				t.Run(mode, func(t *testing.T) {
 					keyInput := base64.StdEncoding.EncodeToString(tt.data)
 					if mode == "file" {
-						keyInput = filepath.Join(t.TempDir(), "malformed.jwk")
-						if err := os.WriteFile(keyInput, tt.data, 0600); err != nil {
-							t.Fatalf("writing key material: %v", err)
-						}
+						keyInput = writeTempFile(t, "malformed.jwk", tt.data)
 					}
 					token := signJWTWithHMAC(t, tt.data, jwt.MapClaims{"sub": "test"})
 
@@ -862,10 +858,7 @@ func TestDecodeAndPrint_SignatureValid_Ed25519PublicKey(t *testing.T) {
 		t.Fatalf("marshaling Ed25519 public key: %v", err)
 	}
 	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
-	pubKeyPath := filepath.Join(t.TempDir(), "test-ed25519-pub.pem")
-	if err := os.WriteFile(pubKeyPath, pem.EncodeToMemory(block), 0600); err != nil {
-		t.Fatalf("writing public key file: %v", err)
-	}
+	pubKeyPath := writeTempFile(t, "test-ed25519-pub.pem", pem.EncodeToMemory(block))
 
 	var buf bytes.Buffer
 	err = decodeAndPrint(&buf, token, pubKeyPath)
@@ -968,7 +961,7 @@ func TestRun_JWTDKeyEnvVar_JWSVerification(t *testing.T) {
 
 func TestRun_KeyFlagOverridesEnvVar(t *testing.T) {
 	signingKey := generateRSAKey(t)
-	wrongKey := generateRSAKey(t)
+	wrongKey := generateDistinctRSAKey(t)
 	signingKeyPath := writeKeyFile(t, signingKey)
 	wrongKeyPath := writeKeyFile(t, wrongKey)
 	claims := jwt.MapClaims{"sub": "override-test"}
@@ -1083,7 +1076,7 @@ func TestRun_KeyInterpretationHint(t *testing.T) {
 
 func TestRun_InvalidSignatureReturnsErrorWithoutUsage(t *testing.T) {
 	signingKey := generateRSAKey(t)
-	wrongKeyPath := writeKeyFile(t, generateRSAKey(t))
+	wrongKeyPath := writeKeyFile(t, generateDistinctRSAKey(t))
 	token := signJWT(t, signingKey, jwt.MapClaims{"sub": "test"})
 
 	rootCmd := newRootCommand()

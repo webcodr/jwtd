@@ -192,7 +192,7 @@ func TestDecodeAndPrintJWE_InvalidToken(t *testing.T) {
 
 func TestDecodeAndPrintJWE_WrongKey(t *testing.T) {
 	key := generateRSAKey(t)
-	wrongKey := generateRSAKey(t)
+	wrongKey := generateDistinctRSAKey(t)
 	token := encryptJWE(t, key, []byte(`{"sub":"user1"}`))
 	keyPath := writeKeyFile(t, wrongKey)
 
@@ -591,7 +591,7 @@ func TestDecodeAndPrintJWE_RSAKeyAlgorithms(t *testing.T) {
 		})
 
 		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			key := generateRSAKey(t)
+			key := generateDistinctRSAKey(t)
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"rsa-test","role":"user"}`))
 			keyPath := writeKeyFile(t, key)
 
@@ -968,7 +968,7 @@ func TestDecodeAndPrintJWE_ContentEncryptionAlgorithms(t *testing.T) {
 		})
 
 		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			key := generateRSAKey(t)
+			key := generateDistinctRSAKey(t)
 			token := encryptJWEGeneric(t, jose.RSA_OAEP, tt.enc, &key.PublicKey, []byte(`{"sub":"enc-test","enc_alg":"tested"}`))
 			keyPath := writeKeyFile(t, key)
 
@@ -1122,7 +1122,7 @@ func TestDecodeAndPrintJWE_NestedJWT(t *testing.T) {
 	innerJWT := signJWT(t, signingKey, claims)
 
 	// Encrypt the JWT inside a JWE.
-	encKey := generateRSAKey(t)
+	encKey := generateDistinctRSAKey(t)
 	jweToken := encryptJWE(t, encKey, []byte(innerJWT))
 
 	encKeyPath := writeKeyFile(t, encKey)
