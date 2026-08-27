@@ -109,6 +109,50 @@ func BenchmarkParseUnverifiedJWT(b *testing.B) {
 	}
 }
 
+// BenchmarkDecodeJSON isolates the strict JSON decode, which is the larger half
+// of parsing and the floor the rest of the token path sits on.
+//
+// It is here to be watched, not tuned. The exact-number requirement pins jwtd
+// to json.Decoder with UseNumber: json.Unmarshal is about 27% faster on both
+// sizes (it decodes from the byte slice instead of buffering through an
+// io.Reader), but it cannot produce json.Number values, and neither the v1 API
+// nor encoding/json/v2 exposes an option that would let it. UseNumber itself is
+// free — a decode without it measures the same.
+func BenchmarkDecodeJSON(b *testing.B) {
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{"small", benchSmallToken()},
+		{"large", benchLargeToken(b)},
+	} {
+		payload := decodedPayload(b, tc.token)
+		b.Run(tc.name, func(b *testing.B) {
+			b.SetBytes(int64(len(payload)))
+			for b.Loop() {
+				claims := map[string]any{}
+				if err := decodeJSON(payload, &claims); err != nil {
+					b.Fatalf("decoding claims: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// decodedPayload returns a token's claims segment as raw JSON.
+func decodedPayload(b *testing.B, token string) []byte {
+	b.Helper()
+	parts, ok := splitCompactJWT(token)
+	if !ok {
+		b.Fatalf("splitting token")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		b.Fatalf("decoding payload: %v", err)
+	}
+	return payload
+}
+
 // BenchmarkPrintParsedJWT measures rendering alone, with the parse hoisted out
 // of the loop. Comparing it against BenchmarkFormatterMarshal shows how much of
 // rendering is the JSON colorizer and how much is everything around it.
