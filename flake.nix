@@ -25,7 +25,7 @@
           pname = "jwtd";
           inherit version;
           src = self;
-          vendorHash = "sha256-GZq7U30h1fOrHcDZ+6BPrC6sgIr6u4deGMz5vC/lqFU=";
+          vendorHash = "sha256-vkxGI79RhR8aFDoSThB6Va9eN9WmHeRICd/fEiY+O7Q=";
           # Match the release build: strip symbols and stamp main.version.
           ldflags = [
             "-s"
