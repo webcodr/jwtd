@@ -308,6 +308,55 @@ func writeRSACertificateFiles(t *testing.T, key *rsa.PrivateKey) (pemPath, derPa
 	return pemPath, derPath, pemBytes
 }
 
+// --- JWE algorithm-coverage assertions ---------------------------------------
+
+// assertOutputContains checks that every wanted substring appears in the
+// color-stripped output, reporting the whole output once on a miss.
+func assertOutputContains(t *testing.T, out string, wants ...string) {
+	t.Helper()
+	plain := stripANSI(out)
+	for _, want := range wants {
+		if !strings.Contains(plain, want) {
+			t.Errorf("output missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+// assertJWEHeaderOnly decodes a JWE without a key and asserts the header-only
+// rendering: the protected header, the encrypted-part metadata, and the
+// algorithm names the header is expected to carry.
+func assertJWEHeaderOnly(t *testing.T, token string, wants ...string) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertOutputContains(t, buf.String(), append([]string{"Protected Header", "Encrypted Content"}, wants...)...)
+}
+
+// assertJWEDecrypts decodes a JWE with the given key argument and asserts the
+// decrypted payload section carries the expected values.
+func assertJWEDecrypts(t *testing.T, token, keyArg string, wants ...string) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, keyArg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertOutputContains(t, buf.String(), append([]string{"Decrypted Payload"}, wants...)...)
+}
+
+// randomSymmetricKey returns size random bytes for the AES key-wrapping
+// algorithms, whose key length is fixed by the algorithm rather than derived
+// from the content encryption (that is symmetricKeyForEnc's job).
+func randomSymmetricKey(t *testing.T, size int) []byte {
+	t.Helper()
+	key := make([]byte, size)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("generating symmetric key: %v", err)
+	}
+	return key
+}
+
 // --- JWS signature verification -----------------------------------------------
 
 // signJWT creates a signed JWT with the given claims and RSA private key.

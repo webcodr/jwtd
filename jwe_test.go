@@ -552,65 +552,33 @@ func TestDecodeAndPrintJWE_EndToEnd_WithDecrypt(t *testing.T) {
 }
 
 // --- Algorithm coverage: key management algorithms ---------------------------
+//
+// Each family runs the same two checks per algorithm — decode without a key
+// (header and encrypted-part metadata) and decode with one (decrypted payload)
+// — so they share assertJWEHeaderOnly/assertJWEDecrypts and differ only in how
+// the key for that family is made.
 
 func TestDecodeAndPrintJWE_RSAKeyAlgorithms(t *testing.T) {
 	tests := []struct {
 		name   string
 		keyAlg jose.KeyAlgorithm
-		algStr string
 	}{
-		{"RSA-OAEP", jose.RSA_OAEP, "RSA-OAEP"},
-		{"RSA-OAEP-256", jose.RSA_OAEP_256, "RSA-OAEP-256"},
-		{"RSA1_5", jose.RSA1_5, "RSA1_5"},
+		{"RSA-OAEP", jose.RSA_OAEP},
+		{"RSA-OAEP-256", jose.RSA_OAEP_256},
+		{"RSA1_5", jose.RSA1_5},
 	}
 
 	for _, tt := range tests {
+		key := generateRSAKey(t)
+
 		t.Run(tt.name+"/header_only", func(t *testing.T) {
-			key := generateRSAKey(t)
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"rsa-test"}`))
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, "")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Protected Header") {
-				t.Error("output missing Protected Header")
-			}
-			if !strings.Contains(plain, tt.algStr) {
-				t.Errorf("output missing algorithm %q", tt.algStr)
-			}
-			if !strings.Contains(plain, "A128GCM") {
-				t.Error("output missing content encryption A128GCM")
-			}
-			if !strings.Contains(plain, "Encrypted Content") {
-				t.Error("output missing Encrypted Content section")
-			}
+			assertJWEHeaderOnly(t, token, tt.name, "A128GCM")
 		})
 
 		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			key := generateDistinctRSAKey(t)
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"rsa-test","role":"user"}`))
-			keyPath := writeKeyFile(t, key)
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, keyPath)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "rsa-test") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "user") {
-				t.Error("output missing decrypted role value")
-			}
+			assertJWEDecrypts(t, token, writeKeyFile(t, key), "rsa-test", "user")
 		})
 	}
 }
@@ -619,382 +587,59 @@ func TestDecodeAndPrintJWE_ECDHESKeyAlgorithms(t *testing.T) {
 	tests := []struct {
 		name   string
 		keyAlg jose.KeyAlgorithm
-		algStr string
 	}{
-		{"ECDH-ES", jose.ECDH_ES, "ECDH-ES"},
-		{"ECDH-ES+A128KW", jose.ECDH_ES_A128KW, "ECDH-ES+A128KW"},
-		{"ECDH-ES+A192KW", jose.ECDH_ES_A192KW, "ECDH-ES+A192KW"},
-		{"ECDH-ES+A256KW", jose.ECDH_ES_A256KW, "ECDH-ES+A256KW"},
+		{"ECDH-ES", jose.ECDH_ES},
+		{"ECDH-ES+A128KW", jose.ECDH_ES_A128KW},
+		{"ECDH-ES+A192KW", jose.ECDH_ES_A192KW},
+		{"ECDH-ES+A256KW", jose.ECDH_ES_A256KW},
 	}
 
 	for _, tt := range tests {
+		key := generateECKey(t)
+
 		t.Run(tt.name+"/header_only", func(t *testing.T) {
-			key := generateECKey(t)
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"ec-test"}`))
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, "")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Protected Header") {
-				t.Error("output missing Protected Header")
-			}
-			if !strings.Contains(plain, tt.algStr) {
-				t.Errorf("output missing algorithm %q", tt.algStr)
-			}
-			if !strings.Contains(plain, "Encrypted Content") {
-				t.Error("output missing Encrypted Content section")
-			}
+			assertJWEHeaderOnly(t, token, tt.name)
 		})
 
 		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			key := generateECKey(t)
 			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, &key.PublicKey, []byte(`{"sub":"ec-test","data":"secret"}`))
-			keyPath := writeECKeyFile(t, key)
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, keyPath)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "ec-test") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "secret") {
-				t.Error("output missing decrypted data value")
-			}
+			assertJWEDecrypts(t, token, writeECKeyFile(t, key), "ec-test", "secret")
 		})
 	}
 }
 
-func TestDecodeAndPrintJWE_AESKWKeyAlgorithms(t *testing.T) {
+func TestDecodeAndPrintJWE_AESKeyWrappingAlgorithms(t *testing.T) {
 	tests := []struct {
 		name    string
 		keyAlg  jose.KeyAlgorithm
-		algStr  string
+		enc     jose.ContentEncryption
 		keySize int
 	}{
-		{"A128KW", jose.A128KW, "A128KW", 16},
-		{"A192KW", jose.A192KW, "A192KW", 24},
-		{"A256KW", jose.A256KW, "A256KW", 32},
+		{"A128KW", jose.A128KW, jose.A128GCM, 16},
+		{"A192KW", jose.A192KW, jose.A128GCM, 24},
+		{"A256KW", jose.A256KW, jose.A128GCM, 32},
+		{"A128GCMKW", jose.A128GCMKW, jose.A256GCM, 16},
+		{"A192GCMKW", jose.A192GCMKW, jose.A256GCM, 24},
+		{"A256GCMKW", jose.A256GCMKW, jose.A256GCM, 32},
 	}
 
 	for _, tt := range tests {
+		symKey := randomSymmetricKey(t, tt.keySize)
+
 		t.Run(tt.name+"/header_only", func(t *testing.T) {
-			symKey := make([]byte, tt.keySize)
-			if _, err := rand.Read(symKey); err != nil {
-				t.Fatalf("generating key: %v", err)
-			}
-			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, symKey, []byte(`{"sub":"aeskw-test"}`))
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, "")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Protected Header") {
-				t.Error("output missing Protected Header")
-			}
-			if !strings.Contains(plain, tt.algStr) {
-				t.Errorf("output missing algorithm %q", tt.algStr)
-			}
-			if !strings.Contains(plain, "Encrypted Content") {
-				t.Error("output missing Encrypted Content section")
-			}
+			token := encryptJWEGeneric(t, tt.keyAlg, tt.enc, symKey, []byte(`{"sub":"aeskw-test"}`))
+			assertJWEHeaderOnly(t, token, tt.name)
 		})
 
 		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			symKey := make([]byte, tt.keySize)
-			if _, err := rand.Read(symKey); err != nil {
-				t.Fatalf("generating key: %v", err)
-			}
-			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, symKey, []byte(`{"sub":"aeskw-test","msg":"hello"}`))
-			keyArg := symmetricKeyArg(t, symKey)
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, keyArg)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "aeskw-test") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "hello") {
-				t.Error("output missing decrypted msg value")
-			}
-		})
-	}
-}
-
-func TestDecodeAndPrintJWE_AESGCMKWKeyAlgorithms(t *testing.T) {
-	tests := []struct {
-		name    string
-		keyAlg  jose.KeyAlgorithm
-		algStr  string
-		keySize int
-	}{
-		{"A128GCMKW", jose.A128GCMKW, "A128GCMKW", 16},
-		{"A192GCMKW", jose.A192GCMKW, "A192GCMKW", 24},
-		{"A256GCMKW", jose.A256GCMKW, "A256GCMKW", 32},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name+"/header_only", func(t *testing.T) {
-			symKey := make([]byte, tt.keySize)
-			if _, err := rand.Read(symKey); err != nil {
-				t.Fatalf("generating key: %v", err)
-			}
-			token := encryptJWEGeneric(t, tt.keyAlg, jose.A256GCM, symKey, []byte(`{"sub":"aesgcmkw-test"}`))
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, "")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Protected Header") {
-				t.Error("output missing Protected Header")
-			}
-			if !strings.Contains(plain, tt.algStr) {
-				t.Errorf("output missing algorithm %q", tt.algStr)
-			}
-			if !strings.Contains(plain, "Encrypted Content") {
-				t.Error("output missing Encrypted Content section")
-			}
-		})
-
-		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			symKey := make([]byte, tt.keySize)
-			if _, err := rand.Read(symKey); err != nil {
-				t.Fatalf("generating key: %v", err)
-			}
-			token := encryptJWEGeneric(t, tt.keyAlg, jose.A256GCM, symKey, []byte(`{"sub":"aesgcmkw-test","status":"ok"}`))
-			keyArg := symmetricKeyArg(t, symKey)
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, keyArg)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "aesgcmkw-test") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "ok") {
-				t.Error("output missing decrypted status value")
-			}
+			token := encryptJWEGeneric(t, tt.keyAlg, tt.enc, symKey, []byte(`{"sub":"aeskw-test","msg":"hello"}`))
+			assertJWEDecrypts(t, token, symmetricKeyArg(t, symKey), "aeskw-test", "hello")
 		})
 	}
 }
 
 func TestDecodeAndPrintJWE_DirectKeyAgreement(t *testing.T) {
-	contentEncs := []struct {
-		name   string
-		enc    jose.ContentEncryption
-		encStr string
-	}{
-		{"A128CBC-HS256", jose.A128CBC_HS256, "A128CBC-HS256"},
-		{"A256CBC-HS512", jose.A256CBC_HS512, "A256CBC-HS512"},
-		{"A128GCM", jose.A128GCM, "A128GCM"},
-		{"A256GCM", jose.A256GCM, "A256GCM"},
-	}
-
-	for _, tt := range contentEncs {
-		t.Run(tt.name+"/header_only", func(t *testing.T) {
-			symKey := symmetricKeyForEnc(t, tt.enc)
-			token := encryptJWEGeneric(t, jose.DIRECT, tt.enc, symKey, []byte(`{"sub":"dir-test"}`))
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, "")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Protected Header") {
-				t.Error("output missing Protected Header")
-			}
-			if !strings.Contains(plain, "dir") {
-				t.Error("output missing algorithm 'dir'")
-			}
-			if !strings.Contains(plain, tt.encStr) {
-				t.Errorf("output missing content encryption %q", tt.encStr)
-			}
-		})
-
-		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			symKey := symmetricKeyForEnc(t, tt.enc)
-			token := encryptJWEGeneric(t, jose.DIRECT, tt.enc, symKey, []byte(`{"sub":"dir-test","val":"direct"}`))
-			keyArg := symmetricKeyArg(t, symKey)
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, keyArg)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "dir-test") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "direct") {
-				t.Error("output missing decrypted val value")
-			}
-		})
-	}
-}
-
-func TestDecodeAndPrintJWE_PBES2KeyAlgorithms(t *testing.T) {
-	tests := []struct {
-		name   string
-		keyAlg jose.KeyAlgorithm
-		algStr string
-	}{
-		{"PBES2-HS256+A128KW", jose.PBES2_HS256_A128KW, "PBES2-HS256+A128KW"},
-		{"PBES2-HS384+A192KW", jose.PBES2_HS384_A192KW, "PBES2-HS384+A192KW"},
-		{"PBES2-HS512+A256KW", jose.PBES2_HS512_A256KW, "PBES2-HS512+A256KW"},
-	}
-
-	for _, tt := range tests {
-		password := []byte("test-password-for-jwtd")
-
-		t.Run(tt.name+"/header_only", func(t *testing.T) {
-			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, password, []byte(`{"sub":"pbes2-test"}`))
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, "")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Protected Header") {
-				t.Error("output missing Protected Header")
-			}
-			if !strings.Contains(plain, tt.algStr) {
-				t.Errorf("output missing algorithm %q", tt.algStr)
-			}
-			if !strings.Contains(plain, "Encrypted Content") {
-				t.Error("output missing Encrypted Content section")
-			}
-		})
-
-		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, password, []byte(`{"sub":"pbes2-test","auth":"pass"}`))
-			// For PBES2 the "key" is a password, so it is passed as an
-			// explicit literal secret.
-			passwordArg := "raw:" + string(password)
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, passwordArg)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "pbes2-test") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "pass") {
-				t.Error("output missing decrypted auth value")
-			}
-		})
-	}
-}
-
-// --- Algorithm coverage: content encryption algorithms -----------------------
-
-func TestDecodeAndPrintJWE_ContentEncryptionAlgorithms(t *testing.T) {
-	tests := []struct {
-		name   string
-		enc    jose.ContentEncryption
-		encStr string
-	}{
-		{"A128CBC-HS256", jose.A128CBC_HS256, "A128CBC-HS256"},
-		{"A192CBC-HS384", jose.A192CBC_HS384, "A192CBC-HS384"},
-		{"A256CBC-HS512", jose.A256CBC_HS512, "A256CBC-HS512"},
-		{"A128GCM", jose.A128GCM, "A128GCM"},
-		{"A192GCM", jose.A192GCM, "A192GCM"},
-		{"A256GCM", jose.A256GCM, "A256GCM"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name+"/header_only", func(t *testing.T) {
-			key := generateRSAKey(t)
-			token := encryptJWEGeneric(t, jose.RSA_OAEP, tt.enc, &key.PublicKey, []byte(`{"sub":"enc-test"}`))
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, "")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Protected Header") {
-				t.Error("output missing Protected Header")
-			}
-			if !strings.Contains(plain, tt.encStr) {
-				t.Errorf("output missing content encryption %q", tt.encStr)
-			}
-			if !strings.Contains(plain, "RSA-OAEP") {
-				t.Error("output missing algorithm RSA-OAEP")
-			}
-		})
-
-		t.Run(tt.name+"/decrypt", func(t *testing.T) {
-			key := generateDistinctRSAKey(t)
-			token := encryptJWEGeneric(t, jose.RSA_OAEP, tt.enc, &key.PublicKey, []byte(`{"sub":"enc-test","enc_alg":"tested"}`))
-			keyPath := writeKeyFile(t, key)
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, keyPath)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "enc-test") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "tested") {
-				t.Error("output missing decrypted enc_alg value")
-			}
-		})
-	}
-}
-
-// --- Cross-algorithm combinations --------------------------------------------
-
-func TestDecodeAndPrintJWE_ECDHES_WithAllContentEncryptions(t *testing.T) {
 	contentEncs := []struct {
 		name string
 		enc  jose.ContentEncryption
@@ -1006,34 +651,51 @@ func TestDecodeAndPrintJWE_ECDHES_WithAllContentEncryptions(t *testing.T) {
 	}
 
 	for _, tt := range contentEncs {
-		t.Run("ECDH-ES+A256KW/"+tt.name, func(t *testing.T) {
-			key := generateECKey(t)
-			token := encryptJWEGeneric(t, jose.ECDH_ES_A256KW, tt.enc, &key.PublicKey,
-				[]byte(`{"sub":"cross-test","msg":"combo"}`))
-			keyPath := writeECKeyFile(t, key)
+		symKey := symmetricKeyForEnc(t, tt.enc)
 
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, keyPath)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+		t.Run(tt.name+"/header_only", func(t *testing.T) {
+			token := encryptJWEGeneric(t, jose.DIRECT, tt.enc, symKey, []byte(`{"sub":"dir-test"}`))
+			assertJWEHeaderOnly(t, token, "dir", tt.name)
+		})
 
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "cross-test") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "combo") {
-				t.Error("output missing decrypted msg value")
-			}
+		t.Run(tt.name+"/decrypt", func(t *testing.T) {
+			token := encryptJWEGeneric(t, jose.DIRECT, tt.enc, symKey, []byte(`{"sub":"dir-test","val":"direct"}`))
+			assertJWEDecrypts(t, token, symmetricKeyArg(t, symKey), "dir-test", "direct")
 		})
 	}
 }
 
-func TestDecodeAndPrintJWE_A256KW_WithAllContentEncryptions(t *testing.T) {
-	contentEncs := []struct {
+func TestDecodeAndPrintJWE_PBES2KeyAlgorithms(t *testing.T) {
+	tests := []struct {
+		name   string
+		keyAlg jose.KeyAlgorithm
+	}{
+		{"PBES2-HS256+A128KW", jose.PBES2_HS256_A128KW},
+		{"PBES2-HS384+A192KW", jose.PBES2_HS384_A192KW},
+		{"PBES2-HS512+A256KW", jose.PBES2_HS512_A256KW},
+	}
+
+	password := []byte("test-password-for-jwtd")
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/header_only", func(t *testing.T) {
+			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, password, []byte(`{"sub":"pbes2-test"}`))
+			assertJWEHeaderOnly(t, token, tt.name)
+		})
+
+		t.Run(tt.name+"/decrypt", func(t *testing.T) {
+			token := encryptJWEGeneric(t, tt.keyAlg, jose.A128GCM, password, []byte(`{"sub":"pbes2-test","auth":"pass"}`))
+			// For PBES2 the "key" is a password, so it is passed as an
+			// explicit literal secret.
+			assertJWEDecrypts(t, token, "raw:"+string(password), "pbes2-test", "pass")
+		})
+	}
+}
+
+// --- Algorithm coverage: content encryption algorithms -----------------------
+
+func TestDecodeAndPrintJWE_ContentEncryptionAlgorithms(t *testing.T) {
+	tests := []struct {
 		name string
 		enc  jose.ContentEncryption
 	}{
@@ -1045,33 +707,61 @@ func TestDecodeAndPrintJWE_A256KW_WithAllContentEncryptions(t *testing.T) {
 		{"A256GCM", jose.A256GCM},
 	}
 
-	symKey := make([]byte, 32)
-	if _, err := rand.Read(symKey); err != nil {
-		t.Fatalf("generating key: %v", err)
+	key := generateRSAKey(t)
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/header_only", func(t *testing.T) {
+			token := encryptJWEGeneric(t, jose.RSA_OAEP, tt.enc, &key.PublicKey, []byte(`{"sub":"enc-test"}`))
+			assertJWEHeaderOnly(t, token, tt.name, "RSA-OAEP")
+		})
+
+		t.Run(tt.name+"/decrypt", func(t *testing.T) {
+			token := encryptJWEGeneric(t, jose.RSA_OAEP, tt.enc, &key.PublicKey, []byte(`{"sub":"enc-test","enc_alg":"tested"}`))
+			assertJWEDecrypts(t, token, writeKeyFile(t, key), "enc-test", "tested")
+		})
 	}
+}
+
+// --- Cross-algorithm combinations --------------------------------------------
+
+func TestDecodeAndPrintJWE_ECDHES_WithAllContentEncryptions(t *testing.T) {
+	contentEncs := []jose.ContentEncryption{
+		jose.A128CBC_HS256,
+		jose.A256CBC_HS512,
+		jose.A128GCM,
+		jose.A256GCM,
+	}
+
+	key := generateECKey(t)
+	keyPath := writeECKeyFile(t, key)
+
+	for _, enc := range contentEncs {
+		t.Run("ECDH-ES+A256KW/"+string(enc), func(t *testing.T) {
+			token := encryptJWEGeneric(t, jose.ECDH_ES_A256KW, enc, &key.PublicKey,
+				[]byte(`{"sub":"cross-test","msg":"combo"}`))
+			assertJWEDecrypts(t, token, keyPath, "cross-test", "combo")
+		})
+	}
+}
+
+func TestDecodeAndPrintJWE_A256KW_WithAllContentEncryptions(t *testing.T) {
+	contentEncs := []jose.ContentEncryption{
+		jose.A128CBC_HS256,
+		jose.A192CBC_HS384,
+		jose.A256CBC_HS512,
+		jose.A128GCM,
+		jose.A192GCM,
+		jose.A256GCM,
+	}
+
+	symKey := randomSymmetricKey(t, 32)
 	keyArg := symmetricKeyArg(t, symKey)
 
-	for _, tt := range contentEncs {
-		t.Run("A256KW/"+tt.name, func(t *testing.T) {
-			token := encryptJWEGeneric(t, jose.A256KW, tt.enc, symKey,
+	for _, enc := range contentEncs {
+		t.Run("A256KW/"+string(enc), func(t *testing.T) {
+			token := encryptJWEGeneric(t, jose.A256KW, enc, symKey,
 				[]byte(`{"sub":"a256kw-combo","result":"success"}`))
-
-			var buf bytes.Buffer
-			err := decodeAndPrintJWE(&buf, token, keyArg)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			plain := stripANSI(buf.String())
-			if !strings.Contains(plain, "Decrypted Payload") {
-				t.Error("output missing Decrypted Payload")
-			}
-			if !strings.Contains(plain, "a256kw-combo") {
-				t.Error("output missing decrypted sub value")
-			}
-			if !strings.Contains(plain, "success") {
-				t.Error("output missing decrypted result value")
-			}
+			assertJWEDecrypts(t, token, keyArg, "a256kw-combo", "success")
 		})
 	}
 }
