@@ -494,11 +494,10 @@ func printSection(w io.Writer, f *jsonFormatter, label string, data any) error {
 // megabytes — goes straight to the writer instead of through a second copy of
 // itself.
 func writeFormattedJSON(w io.Writer, pretty []byte) error {
-	if !isBelowDEL(pretty) {
-		_, err := fmt.Fprintln(w, escapeFormattedJSONControls(pretty))
-		return err
-	}
-	if _, err := w.Write(pretty); err != nil {
+	// escapeFormattedJSONControls decides the fast path itself, so the buffer
+	// is scanned once here rather than once per function.
+	escaped := escapeFormattedJSONControls(pretty)
+	if _, err := io.WriteString(w, escaped); err != nil {
 		return err
 	}
 	_, err := io.WriteString(w, "\n")

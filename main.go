@@ -23,6 +23,11 @@ import (
 
 var errInvalidSignature = errors.New("invalid signature")
 
+// errNoToken is returned when stdin or the interactive prompt supplied nothing
+// but whitespace, so an empty pipe is reported as such rather than as a
+// malformed token.
+var errNoToken = errors.New("no token provided")
+
 // version is set at build time via -ldflags.
 var version = "dev"
 
@@ -145,18 +150,18 @@ func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) er
 // color even when piped; "never" disables it. --json output is plain JSON, so
 // color is always off there regardless of the flag.
 func applyColorMode(mode string, jsonOut bool) error {
-	if jsonOut {
-		color.NoColor = true
-		return nil
-	}
+	// The value is validated before --json is consulted, so a typo is
+	// reported the same way whether or not JSON output is on.
 	switch mode {
-	case "auto":
-	case "always":
-		color.NoColor = false
-	case "never":
-		color.NoColor = true
+	case "auto", "always", "never":
 	default:
 		return fmt.Errorf("invalid --color value %q: use auto, always, or never", mode)
+	}
+	switch {
+	case jsonOut, mode == "never":
+		color.NoColor = true
+	case mode == "always":
+		color.NoColor = false
 	}
 	return nil
 }
@@ -208,7 +213,11 @@ func readToken(args []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("reading stdin: %w", err)
 		}
-		return sanitizeToken(string(data)), nil
+		token := sanitizeToken(string(data))
+		if token == "" {
+			return "", errNoToken
+		}
+		return token, nil
 	}
 
 	return readInteractive()
@@ -240,7 +249,7 @@ func readInteractive() (token string, err error) {
 
 	token = sanitizeToken(line)
 	if token == "" {
-		return "", fmt.Errorf("no token provided")
+		return "", errNoToken
 	}
 	return token, nil
 }
@@ -422,8 +431,16 @@ func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, 
 	// it has to be spelled out here, and it must stay ahead of the Verify call
 	// below — without it an HS256 token signed with a published public key
 	// verifies against that key.
+	//
+	// A key type with no JWS algorithms at all (an X25519 key, which is a
+	// valid JWE key but can sign nothing) is rejected here as well, rather
+	// than relying on every Verify implementation to refuse the Go type.
 	alg := p.method.Alg()
-	if methods := validMethodsForKey(key); methods != nil && !slices.Contains(methods, alg) {
+	methods := validMethodsForKey(key)
+	if len(methods) == 0 {
+		return false, fmt.Errorf("%w: key type %T cannot verify a JWS", jwt.ErrTokenSignatureInvalid, key), nil
+	}
+	if !slices.Contains(methods, alg) {
 		return false, fmt.Errorf("%w: signing method %v is invalid", jwt.ErrTokenSignatureInvalid, alg), nil
 	}
 
@@ -446,7 +463,9 @@ func headerKID(header map[string]any) string {
 }
 
 // validMethodsForKey returns the JWS algorithm names compatible with the
-// given verification key type, or nil for unknown key types.
+// given verification key type. An unknown key type gets an empty list, which
+// verifyJWTSignature treats as "verifies nothing": the allowlist fails closed
+// instead of being skipped.
 func validMethodsForKey(key any) []string {
 	switch key.(type) {
 	case *rsa.PublicKey:

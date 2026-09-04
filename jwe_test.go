@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -203,6 +204,23 @@ func TestDecodeAndPrintJWE_WrongKey(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "decrypting JWE") {
 		t.Errorf("expected decrypting error, got: %v", err)
+	}
+}
+
+// TestDecodeAndPrintJWE_UnusableKeyPrintsNothing pins that the key is resolved
+// before any section is written, so an unusable key yields the error alone
+// rather than a partial Protected Header ahead of it.
+func TestDecodeAndPrintJWE_UnusableKeyPrintsNothing(t *testing.T) {
+	key := generateRSAKey(t)
+	token := encryptJWE(t, key, []byte(`{"sub":"user1"}`))
+
+	var buf bytes.Buffer
+	err := decodeAndPrintJWE(&buf, token, filepath.Join(t.TempDir(), "missing.pem"))
+	if err == nil || !strings.Contains(err.Error(), "loading decryption key") {
+		t.Fatalf("expected key loading error, got: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no output before the key error, got:\n%s", buf.String())
 	}
 }
 

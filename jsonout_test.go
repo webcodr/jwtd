@@ -164,6 +164,7 @@ func TestApplyColorMode(t *testing.T) {
 		{name: "never disables color", mode: "never", wantNoColor: true},
 		{name: "json forces color off regardless", mode: "always", jsonOut: true, wantNoColor: true},
 		{name: "invalid value errors", mode: "bogus", wantErr: true},
+		{name: "invalid value errors under json too", mode: "bogus", jsonOut: true, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
