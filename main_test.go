@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -351,6 +353,31 @@ func TestReadToken_FromStdinPipe_WrappedToken(t *testing.T) {
 	}
 	if token != "header.payload.signature" {
 		t.Errorf("expected header.payload.signature, got %q", token)
+	}
+}
+
+// TestReadToken_EmptyStdinPipe pins that a pipe carrying only whitespace is
+// reported as "no token provided", matching the interactive prompt, instead of
+// surfacing as a malformed-token parse error.
+func TestReadToken_EmptyStdinPipe(t *testing.T) {
+	origStdin := os.Stdin
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating pipe: %v", err)
+	}
+
+	go func() {
+		fmt.Fprint(w, " \n")
+		w.Close()
+	}()
+
+	os.Stdin = r
+	defer func() { os.Stdin = origStdin }()
+
+	_, err = readToken([]string{})
+	if !errors.Is(err, errNoToken) {
+		t.Fatalf("expected errNoToken, got: %v", err)
 	}
 }
 
@@ -1196,6 +1223,49 @@ func TestVerifyJWTSignature_RejectsAlgOutsideKeyTypeAllowlist(t *testing.T) {
 				t.Errorf("expected %q in reason, got: %v", want, reason)
 			}
 		})
+	}
+}
+
+// TestVerifyJWTSignature_RejectsKeyTypeWithoutJWSAlgorithms pins that the
+// allowlist fails closed for a key type it does not know. An X25519 key parses
+// (it is a valid JWE key) but can verify no JWS algorithm, so the allowlist
+// itself must refuse it — before any Verify implementation is asked to.
+func TestVerifyJWTSignature_RejectsKeyTypeWithoutJWSAlgorithms(t *testing.T) {
+	x25519Key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating X25519 key: %v", err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(x25519Key)
+	if err != nil {
+		t.Fatalf("marshalling X25519 key: %v", err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "x25519.pem")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatalf("writing key file: %v", err)
+	}
+
+	if methods := validMethodsForKey(x25519Key); len(methods) != 0 {
+		t.Fatalf("validMethodsForKey(X25519) = %v, want none", methods)
+	}
+
+	for _, token := range []string{
+		signJWTWithHMAC(t, []byte("a-shared-secret-of-sufficient-len"), jwt.MapClaims{"sub": "test"}),
+		signJWT(t, generateRSAKey(t), jwt.MapClaims{"sub": "test"}),
+	} {
+		p, err := parseUnverifiedJWT(token)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		valid, reason, err := verifyJWTSignature(p, keyPath)
+		if err != nil {
+			t.Fatalf("unexpected hard error: %v", err)
+		}
+		if valid {
+			t.Fatal("signature accepted against a key type that can verify no JWS")
+		}
+		if reason == nil || !strings.Contains(reason.Error(), "cannot verify a JWS") {
+			t.Errorf("expected key-type rejection in reason, got: %v", reason)
+		}
 	}
 }
 

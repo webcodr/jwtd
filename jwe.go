@@ -83,35 +83,36 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 		return fmt.Errorf("parsing JWE: %w", err)
 	}
 
-	f := newFormatter()
-
 	header, err := jweProtectedHeaderMap(tokenStr)
 	if err != nil {
 		return err
 	}
+
+	// The key is resolved before anything is printed, so an unusable key
+	// fails with the error alone instead of a partial section ahead of it.
+	var key any
+	if keyStr != "" {
+		key, err = loadKeyForKID(keyStr, headerKID(header))
+		if err != nil {
+			return fmt.Errorf("loading decryption key: %w", err)
+		}
+	}
+
+	f := newFormatter()
 	if err := printSection(w, f, "Protected Header", header); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
 
 	if keyStr == "" {
-		if _, err := fmt.Fprintln(w); err != nil {
-			return err
-		}
 		return printEncryptedParts(w, tokenStr)
-	}
-
-	key, err := loadKeyForKID(keyStr, headerKID(header))
-	if err != nil {
-		return fmt.Errorf("loading decryption key: %w", err)
 	}
 
 	plaintext, err := jwe.Decrypt(key)
 	if err != nil {
 		return fmt.Errorf("decrypting JWE: %w", err)
-	}
-
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
 	}
 	return printDecryptedPayload(w, f, plaintext)
 }
