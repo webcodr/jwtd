@@ -56,13 +56,6 @@ func isJWE(token string) bool {
 	return strings.Count(token, ".") == jweDelimiters
 }
 
-// isJWT returns true if the token string looks like a JWS/JWT compact
-// serialization (3 dot-separated parts). It is the counterpart of isJWE, so
-// token-shape dispatch has one definition per form.
-func isJWT(token string) bool {
-	return strings.Count(token, ".") == jwtDelimiters
-}
-
 // isJWEBytes and isJWTBytes are the byte forms, used where the candidate is a
 // decrypted payload that may be large: testing its shape must not cost a full
 // copy of it just to reach the string predicates.

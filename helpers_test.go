@@ -365,15 +365,31 @@ func randomSymmetricKey(t *testing.T, size int) []byte {
 	return key
 }
 
-// verifySignature parses a token and renders its signature verdict. Production
-// code always has a parsedJWT in hand and calls printSignatureVerdict directly;
-// this wrapper exists so the signature tests can work from a compact string.
+// verifySignature parses a token, loads the key, and renders the signature
+// verdict. Production code always has a parsedJWT and a loaded key in hand and
+// calls printSignatureVerdict directly; this wrapper exists so the signature
+// tests can work from a compact string and a key argument.
 func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	p, err := parseUnverifiedJWT(tokenStr)
 	if err != nil {
 		return fmt.Errorf("signature verification: %w", err)
 	}
-	return printSignatureVerdict(w, p, keyStr)
+	key, err := loadKeyForKID(keyStr, headerKID(p.header))
+	if err != nil {
+		return fmt.Errorf("signature verification: error loading key: %w", err)
+	}
+	return printSignatureVerdict(w, p, key)
+}
+
+// verifyClaims parses a token and renders its claim verdict. Production code
+// holds a parsedJWT at this point and calls printClaimsVerdict directly; this
+// wrapper exists so the claim tests can work from a compact string.
+func verifyClaims(w io.Writer, tokenStr string, c claimChecks) error {
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return err
+	}
+	return printClaimsVerdict(w, p.claims, c)
 }
 
 // --- JWS signature verification -----------------------------------------------

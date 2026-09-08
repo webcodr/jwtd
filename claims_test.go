@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -299,5 +300,166 @@ func TestDecodeJWTJSON_SignatureTakesPrecedenceOverClaims(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, `"signatureValid": false`) || !strings.Contains(out, `"claimsValid": false`) {
 		t.Errorf("expected both verdicts false in JSON, got %q", out)
+	}
+}
+
+// golang-jwt converts the temporal claims with a Float64 whose error it
+// discards and then casts to int64, so a value outside int64 range wraps and
+// the validator returns the opposite verdict: an absurd "exp" reads as expired
+// and an absurd "nbf" as long since valid. Such a value must be reported as
+// what it is instead, and the verdict must not depend on which way it wrapped.
+func TestValidateClaimsSet_RejectsUnrepresentableTemporalClaims(t *testing.T) {
+	pinTime(t, 1000)
+
+	tests := []struct {
+		name   string
+		claims jwt.MapClaims
+		want   string
+	}{
+		{
+			name:   "exp past int64 range",
+			claims: jwt.MapClaims{"exp": json.Number("10000000000000000000")},
+			want:   "exp claim 10000000000000000000 is not a representable timestamp",
+		},
+		{
+			name:   "exp with an absurd exponent",
+			claims: jwt.MapClaims{"exp": json.Number("1e400")},
+			want:   "exp claim 1e400 is not a representable timestamp",
+		},
+		{
+			name:   "nbf with an absurd exponent",
+			claims: jwt.MapClaims{"nbf": json.Number("1e400")},
+			want:   "nbf claim 1e400 is not a representable timestamp",
+		},
+		{
+			name:   "nbf below int64 range",
+			claims: jwt.MapClaims{"nbf": json.Number("-10000000000000000000")},
+			want:   "nbf claim -10000000000000000000 is not a representable timestamp",
+		},
+		{
+			name:   "iat unrepresentable alongside a live exp",
+			claims: jwt.MapClaims{"iat": json.Number("1e400"), "exp": json.Number("2000")},
+			want:   "iat claim 1e400 is not a representable timestamp",
+		},
+		{
+			name:   "float64 claim past the representable range",
+			claims: jwt.MapClaims{"exp": 1e300},
+			want:   "exp claim",
+		},
+		{
+			name: "exp reported before nbf",
+			claims: jwt.MapClaims{
+				"exp": json.Number("1e400"),
+				"nbf": json.Number("1e400"),
+			},
+			want: "exp claim",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			valid, reason := validateClaimsSet(tt.claims, claimChecks{verify: true})
+			if valid {
+				t.Fatalf("expected an invalid verdict for %v", tt.claims)
+			}
+			if !strings.Contains(reason.Error(), tt.want) {
+				t.Errorf("reason %q missing %q", reason.Error(), tt.want)
+			}
+		})
+	}
+}
+
+// The pre-check must not change the verdict for values it can represent, and
+// must leave a non-numeric temporal claim to the validator's own message.
+func TestValidateClaimsSet_RepresentableAndNonNumericClaimsUnaffected(t *testing.T) {
+	pinTime(t, 1000)
+
+	tests := []struct {
+		name      string
+		claims    jwt.MapClaims
+		wantValid bool
+		wantAbout string
+	}{
+		{
+			name:      "ordinary integer seconds",
+			claims:    jwt.MapClaims{"exp": json.Number("2000"), "iat": json.Number("900")},
+			wantValid: true,
+		},
+		{
+			name:      "fractional seconds",
+			claims:    jwt.MapClaims{"exp": json.Number("2000.5")},
+			wantValid: true,
+		},
+		{
+			name:      "exponent form within range",
+			claims:    jwt.MapClaims{"exp": json.Number("2e3")},
+			wantValid: true,
+		},
+		{
+			name:      "string exp is the validator's to reject",
+			claims:    jwt.MapClaims{"exp": "tomorrow"},
+			wantValid: false,
+			wantAbout: "exp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			valid, reason := validateClaimsSet(tt.claims, claimChecks{verify: true})
+			if valid != tt.wantValid {
+				t.Fatalf("valid = %v, want %v (reason: %v)", valid, tt.wantValid, reason)
+			}
+			if tt.wantValid {
+				return
+			}
+			if strings.Contains(reason.Error(), "representable") {
+				t.Errorf("a non-numeric claim must not be reported as unrepresentable: %v", reason)
+			}
+			if !strings.Contains(reason.Error(), tt.wantAbout) {
+				t.Errorf("reason %q missing %q", reason.Error(), tt.wantAbout)
+			}
+		})
+	}
+}
+
+// An unrepresentable claim reaches both output paths through the shared core,
+// so neither can report the wrapped verdict.
+func TestUnrepresentableClaimFailsBothOutputPaths(t *testing.T) {
+	pinTime(t, 1000)
+	token := makeJWT(`{"alg":"HS256"}`, `{"nbf":1e400}`, "sig")
+
+	t.Run("human", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := decodeJWTHuman(&buf, token, "", claimChecks{verify: true})
+		if !errors.Is(err, errInvalidClaims) {
+			t.Fatalf("expected errInvalidClaims, got %v", err)
+		}
+		out := stripANSI(buf.String())
+		if !strings.Contains(out, "Claims: INVALID") || !strings.Contains(out, "nbf claim") {
+			t.Errorf("expected an INVALID verdict naming nbf, got %q", out)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := decodeJWTJSON(&buf, token, "", claimChecks{verify: true})
+		if !errors.Is(err, errInvalidClaims) {
+			t.Fatalf("expected errInvalidClaims, got %v", err)
+		}
+		if !strings.Contains(buf.String(), `"claimsValid": false`) {
+			t.Errorf("expected claimsValid false, got %q", buf.String())
+		}
+	})
+}
+
+// The reason is rendered on one line, so a very long claim literal is truncated
+// rather than pasted into it whole.
+func TestTruncateClaimValue(t *testing.T) {
+	got := truncateClaimValue(strings.Repeat("9", 200))
+	if len(got) != 35 || !strings.HasSuffix(got, "...") {
+		t.Errorf("expected a 32-character prefix plus an ellipsis, got %q", got)
+	}
+	if short := truncateClaimValue("1758000000"); short != "1758000000" {
+		t.Errorf("a short value must be kept verbatim, got %q", short)
 	}
 }
