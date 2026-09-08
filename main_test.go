@@ -726,6 +726,125 @@ func TestVerifySignature_RejectsForgedHMACFromPublishedKeyFile(t *testing.T) {
 	}
 }
 
+// An "oct" JWK with empty key material is the same forgery as `raw:`: the
+// empty secret is a published value, so a token HMAC'd with it must never
+// verify, in the human path or under --json.
+func TestVerifySignature_RejectsForgedHMACFromEmptyOctJWK(t *testing.T) {
+	keyPath := writeTextKeyFile(t, "empty.jwk", `{"kty":"oct","k":""}`)
+	forged := signJWTWithHMAC(t, []byte{}, jwt.MapClaims{"sub": "attacker", "role": "admin"})
+
+	var buf bytes.Buffer
+	if err := verifySignature(&buf, forged, keyPath); err == nil {
+		t.Fatal("token forged with the empty JWK secret accepted")
+	}
+	if output := stripANSI(buf.String()); strings.Contains(output, "Signature: VALID") {
+		t.Errorf("forged HMAC token reported as valid:\n%s", output)
+	}
+
+	var jsonBuf bytes.Buffer
+	if err := decodeJWTJSON(&jsonBuf, forged, keyPath, claimChecks{}); err == nil {
+		t.Errorf("--json accepted the token forged with the empty JWK secret:\n%s", jsonBuf.String())
+	}
+}
+
+// RFC 7515 requires "kid" to be a string. A present non-string kid must be an
+// error: treating it as "no kid named" would silently select the first JWK Set
+// entry and report a signature made with a key the token never pointed at.
+func TestVerifySignature_RejectsNonStringKID(t *testing.T) {
+	first := []byte("first-key-32-bytes-of-secret-abc")
+	second := []byte("second-key-32-bytes-of-secret-xy")
+	setPath := writeTextKeyFile(t, "jwks.json", `{"keys":[`+
+		`{"kty":"oct","kid":"a","k":"`+base64.RawURLEncoding.EncodeToString(first)+`"},`+
+		`{"kty":"oct","kid":"b","k":"`+base64.RawURLEncoding.EncodeToString(second)+`"}]}`)
+
+	tests := []struct {
+		name string
+		kid  any
+	}{
+		{name: "number", kid: 123},
+		{name: "null", kid: nil},
+		{name: "bool", kid: true},
+		{name: "array", kid: []any{"a"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := signJWTWithHMACHeader(t, first, map[string]any{"kid": tt.kid},
+				jwt.MapClaims{"sub": "attacker"})
+
+			var buf bytes.Buffer
+			err := verifySignature(&buf, token, setPath)
+			if err == nil {
+				t.Fatal("token with a non-string kid accepted")
+			}
+			if !strings.Contains(err.Error(), "kid") {
+				t.Errorf("error should name the kid header, got %v", err)
+			}
+			if output := stripANSI(buf.String()); strings.Contains(output, "Signature: VALID") {
+				t.Errorf("token with a non-string kid reported as valid:\n%s", output)
+			}
+
+			var jsonBuf bytes.Buffer
+			if err := decodeJWTJSON(&jsonBuf, token, setPath, claimChecks{}); err == nil {
+				t.Errorf("--json accepted a token with a non-string kid:\n%s", jsonBuf.String())
+			}
+		})
+	}
+
+	// A well-formed kid still selects its entry, so the check does not break
+	// ordinary JWK Set verification.
+	t.Run("string kid still verifies", func(t *testing.T) {
+		token := signJWTWithHMACHeader(t, second, map[string]any{"kid": "b"},
+			jwt.MapClaims{"sub": "test"})
+
+		var buf bytes.Buffer
+		if err := verifySignature(&buf, token, setPath); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if output := stripANSI(buf.String()); !strings.Contains(output, "Signature: VALID") {
+			t.Errorf("expected a valid signature, got:\n%s", output)
+		}
+	})
+}
+
+func TestHeaderKID(t *testing.T) {
+	tests := []struct {
+		name    string
+		header  map[string]any
+		want    string
+		wantErr bool
+	}{
+		{name: "absent", header: map[string]any{"alg": "HS256"}},
+		{name: "string", header: map[string]any{"kid": "key-1"}, want: "key-1"},
+		{name: "empty string", header: map[string]any{"kid": ""}},
+		{name: "number", header: map[string]any{"kid": json.Number("123")}, wantErr: true},
+		{name: "null", header: map[string]any{"kid": nil}, wantErr: true},
+		{name: "bool", header: map[string]any{"kid": true}, wantErr: true},
+		{name: "object", header: map[string]any{"kid": map[string]any{}}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := headerKID(tt.header)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %q", got)
+				}
+				if !errors.Is(err, errNonStringKID) {
+					t.Errorf("expected errNonStringKID, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("headerKID = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDecodeAndPrint_SignatureValid_RSA(t *testing.T) {
 	key := generateRSAKey(t)
 	keyPath := writeKeyFile(t, key)

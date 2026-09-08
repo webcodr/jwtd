@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -589,15 +590,99 @@ func TestClassifyKeyArg(t *testing.T) {
 		})
 	}
 
-	// loadKey cannot read a directory, so it must not be reported as a key
-	// file. Which of the remaining readings applies depends on whether the
-	// path itself happens to be valid base64, so only the file reading is
-	// ruled out here.
-	t.Run("directory is not a key file", func(t *testing.T) {
-		if got := classifyKeyArg(filepath.Dir(keyPath)); got == keySourceFile {
-			t.Error("a directory must not classify as a key file")
+	// A directory can hold no key material. It gets its own classification so
+	// it neither reports as a key file nor degrades into a base64 reading of
+	// its own path text, which would be a nonsense interpretation of a path
+	// the user clearly meant as a key file.
+	t.Run("directory is classified as a directory", func(t *testing.T) {
+		if got := classifyKeyArg(filepath.Dir(keyPath)); got != keySourceDirectory {
+			t.Errorf("a directory must classify as keySourceDirectory, got %d", got)
 		}
 	})
+}
+
+// A directory passed as --key must say so, not be reinterpreted as base64 of
+// its own path or reported as unsupported key material.
+func TestLoadKey_RejectsDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	loaded, err := loadKey(dir)
+	if err == nil {
+		t.Fatalf("directory accepted as a %T key", loaded)
+	}
+	for _, want := range []string{dir, "directory"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "base64") {
+		t.Errorf("a directory must not be reported as a base64 reading, got %v", err)
+	}
+}
+
+// An "oct" JWK carries a symmetric secret, so it must pass the same empty-key
+// gate as raw: and hmac:. {"kty":"oct","k":""} otherwise yields an empty HMAC
+// key, and every attacker knows the empty secret.
+func TestLoadKeyForKID_RejectsEmptyOctJWK(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		kid  string
+	}{
+		{
+			name: "single JWK",
+			data: `{"kty":"oct","k":""}`,
+		},
+		{
+			name: "first entry of a JWK Set",
+			data: `{"keys":[{"kty":"oct","kid":"a","k":""}]}`,
+		},
+		{
+			name: "kid-selected entry of a JWK Set",
+			data: `{"keys":[{"kty":"oct","kid":"a","k":"c2VjcmV0LXNlY3JldC1zZWNyZXQtMzJieXRlcyE"},{"kty":"oct","kid":"b","k":""}]}`,
+			kid:  "b",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTextKeyFile(t, "oct.jwk", tt.data)
+
+			loaded, err := loadKeyForKID(path, tt.kid)
+			if err == nil {
+				t.Fatalf("empty oct JWK accepted as a %T key", loaded)
+			}
+			if !errors.Is(err, errEmptyKey) {
+				t.Errorf("expected errEmptyKey, got %v", err)
+			}
+			// The material parsed as a JWK, so the rejection is final: it
+			// must not degrade into the "pass it as hmac:<file>" hint, which
+			// would turn the JWK's own JSON text into a secret.
+			if strings.Contains(err.Error(), "hmac:") {
+				t.Errorf("empty oct JWK must not suggest the hmac: fallback, got %v", err)
+			}
+		})
+	}
+}
+
+// The gate must not break ordinary oct JWKs: a non-empty secret still loads as
+// the symmetric key bytes it encodes.
+func TestLoadKeyForKID_AcceptsOctJWK(t *testing.T) {
+	secret := []byte("a-32-byte-symmetric-test-secret!")
+	path := writeTextKeyFile(t, "oct.jwk", `{"keys":[{"kty":"oct","kid":"a","k":"`+
+		base64.RawURLEncoding.EncodeToString(secret)+`"}]}`)
+
+	loaded, err := loadKeyForKID(path, "a")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	symKey, ok := loaded.([]byte)
+	if !ok {
+		t.Fatalf("expected []byte, got %T", loaded)
+	}
+	if !bytes.Equal(symKey, secret) {
+		t.Errorf("expected the encoded secret, got %q", symKey)
+	}
 }
 
 // --- public key material must never degrade into a symmetric secret --------

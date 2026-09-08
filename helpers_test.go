@@ -392,6 +392,14 @@ func verifyClaims(w io.Writer, tokenStr string, c claimChecks) error {
 	return printClaimsVerdict(w, p.claims, c)
 }
 
+// loadKey resolves a key argument without a kid, the shape most key tests
+// exercise. Production code always has a token header at this point and so
+// always knows the kid (possibly ""), which is why this wrapper lives with the
+// test helpers rather than in keys.go.
+func loadKey(keyStr string) (any, error) {
+	return loadKeyForKID(keyStr, "")
+}
+
 // --- JWS signature verification -----------------------------------------------
 
 // signJWT creates a signed JWT with the given claims and RSA private key.
@@ -412,6 +420,22 @@ func signJWT(t *testing.T, key *rsa.PrivateKey, claims jwt.MapClaims) string {
 func signJWTWithHMAC(t *testing.T, key []byte, claims jwt.MapClaims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+	return signed
+}
+
+// signJWTWithHMACHeader signs with HMAC-SHA256 like signJWTWithHMAC, but lets
+// the caller set extra header members — including ones RFC 7515 does not
+// allow, such as a non-string "kid".
+func signJWTWithHMACHeader(t *testing.T, key []byte, header map[string]any, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	for k, v := range header {
+		token.Header[k] = v
+	}
 	signed, err := token.SignedString(key)
 	if err != nil {
 		t.Fatalf("signing JWT: %v", err)

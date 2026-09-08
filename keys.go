@@ -21,25 +21,35 @@ import (
 // surfaces it as-is.
 var errKIDNotFound = errors.New("kid not found in JWK Set")
 
-// loadKey resolves a key argument. Symmetric secrets must be requested
-// explicitly, with "raw:<secret>" for a literal or "hmac:<file>" for a file of
-// secret bytes. Everything else must parse as structured key material: JWK/JWK
-// Set, PEM, DER, or an X.509 certificate, read from a file path or from inline
-// base64.
-//
-// The explicit prefixes are the security boundary. Inferring "symmetric
-// secret" from "did not parse" made every unsupported key format forgeable: a
-// public key is a published value, so anyone who knew its bytes could sign an
-// HS256 token that verified against it. Unparseable material is now an error,
-// so the failure direction is always closed no matter what format shows up.
-func loadKey(keyStr string) (any, error) {
-	return loadKeyForKID(keyStr, "")
+// errEmptyKey marks empty symmetric key material. Like errKIDNotFound it is a
+// definitive answer: the material parsed, it is simply unusable, so it must not
+// degrade into a base64 retry or an "unsupported format" message that would
+// point the user at a workaround for a key that is deliberately refused.
+var errEmptyKey = errors.New("key is empty")
+
+// finalKeyError reports whether a parse failure is a definitive verdict on the
+// key material rather than a reason to try the next reading. Both sentinels
+// mean the bytes were understood, so reinterpreting them can only pick a key
+// the user did not mean.
+func finalKeyError(err error) bool {
+	return errors.Is(err, errKIDNotFound) || errors.Is(err, errEmptyKey)
 }
 
 // loadKeyForKID resolves a key argument, selecting the entry that matches kid
 // when the material is a JWK Set. kid is the token's "kid" header ("" when the
 // token carries none); it only affects JWK Set selection and is ignored for
 // every other key form.
+//
+// Symmetric secrets must be requested explicitly, with "raw:<secret>" for a
+// literal or "hmac:<file>" for a file of secret bytes. Everything else must
+// parse as structured key material: JWK/JWK Set, PEM, DER, or an X.509
+// certificate, read from a file path or from inline base64.
+//
+// The explicit prefixes are the security boundary. Inferring "symmetric
+// secret" from "did not parse" made every unsupported key format forgeable: a
+// public key is a published value, so anyone who knew its bytes could sign an
+// HS256 token that verified against it. Unparseable material is now an error,
+// so the failure direction is always closed no matter what format shows up.
 func loadKeyForKID(keyStr, kid string) (any, error) {
 	// The precedence lives in classifyKeyArg and is applied here, so the
 	// reading the CLI reports is by construction the reading that happens.
@@ -52,6 +62,8 @@ func loadKeyForKID(keyStr, kid string) (any, error) {
 		return loadKeyFile(keyStr, kid)
 	case keySourceBase64:
 		return loadInlineKey(keyStr, kid)
+	case keySourceDirectory:
+		return nil, fmt.Errorf("key path %q is a directory, not a key file", keyStr)
 	default:
 		return nil, fmt.Errorf("key is neither a valid file path nor base64-encoded data")
 	}
@@ -89,9 +101,10 @@ func loadKeyFile(path, kid string) (any, error) {
 	if err == nil {
 		return key, nil
 	}
-	// The file is a valid JWK Set; a kid miss is final, not a reason to try
-	// base64 or fall through to the unsupported-format error.
-	if errors.Is(err, errKIDNotFound) {
+	// The file parsed as JWK material; a kid miss or an empty secret is final,
+	// not a reason to try base64 or fall through to the unsupported-format
+	// error.
+	if finalKeyError(err) {
 		return nil, err
 	}
 
@@ -101,7 +114,7 @@ func loadKeyFile(path, kid string) (any, error) {
 			if err == nil {
 				return key, nil
 			}
-			if errors.Is(err, errKIDNotFound) {
+			if finalKeyError(err) {
 				return nil, err
 			}
 		}
@@ -112,13 +125,12 @@ func loadKeyFile(path, kid string) (any, error) {
 // loadInlineKey parses base64/base64url key material given directly on the
 // command line or in JWTD_KEY.
 func loadInlineKey(keyStr, kid string) (any, error) {
-	decoded, ok := decodeBase64Key([]byte(keyStr))
-	if !ok {
-		return nil, fmt.Errorf("key is neither a valid file path nor base64-encoded data")
-	}
+	// classifyKeyArg only returns keySourceBase64 after decoding this same
+	// argument, so the decode cannot fail here.
+	decoded, _ := decodeBase64Key([]byte(keyStr))
 	key, err := parseKeyData(decoded, kid)
 	if err != nil {
-		if errors.Is(err, errKIDNotFound) {
+		if finalKeyError(err) {
 			return nil, err
 		}
 		return nil, unsupportedKeyError(decoded, "inline key", "raw:<secret> or hmac:<file>")
@@ -143,7 +155,7 @@ func unsupportedKeyError(data []byte, subject, symmetricForm string) error {
 // empty secret, so accepting it would report forged HMAC tokens as valid.
 func symmetricKey(data []byte) (any, error) {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("key is empty")
+		return nil, errEmptyKey
 	}
 	return data, nil
 }
@@ -163,7 +175,12 @@ const (
 	keySourceSecretFile
 	// keySourceBase64 is inline base64/base64url key material.
 	keySourceBase64
-	// keySourceUnusable is neither, and loadKey will reject it.
+	// keySourceDirectory is an existing path that is a directory. It can never
+	// hold key material, and must not fall through to a base64 reading of its
+	// own path text, which would report a nonsense interpretation of a path
+	// the user clearly meant as a key file.
+	keySourceDirectory
+	// keySourceUnusable is none of these, and loadKeyForKID will reject it.
 	keySourceUnusable
 )
 
@@ -180,7 +197,10 @@ func classifyKeyArg(keyStr string) keySource {
 	if strings.HasPrefix(keyStr, "hmac:") {
 		return keySourceSecretFile
 	}
-	if info, err := os.Stat(keyStr); err == nil && !info.IsDir() {
+	if info, err := os.Stat(keyStr); err == nil {
+		if info.IsDir() {
+			return keySourceDirectory
+		}
 		return keySourceFile
 	}
 	if _, ok := decodeBase64Key([]byte(keyStr)); ok {
@@ -277,9 +297,10 @@ func parseKeyData(data []byte, kid string) (any, error) {
 	// Try JWK / JWK Set (JSON-based formats).
 	if key, err := parseJWK(data, kid); err == nil {
 		return key, nil
-	} else if errors.Is(err, errKIDNotFound) {
-		// The data is a valid JWK Set; the kid simply did not match. That is
-		// a final answer, not a reason to reinterpret the bytes as PEM/DER.
+	} else if finalKeyError(err) {
+		// The data is valid JWK material: the kid simply did not match, or the
+		// selected entry holds an empty secret. Either is a final answer, not
+		// a reason to reinterpret the bytes as PEM/DER.
 		return nil, err
 	}
 
@@ -363,7 +384,7 @@ func parseJWK(data []byte, kid string) (any, error) {
 	// Try single JWK.
 	var jwk jose.JSONWebKey
 	if err := json.Unmarshal(data, &jwk); err == nil && jwk.Key != nil {
-		return jwk.Key, nil
+		return jwkKey(jwk)
 	}
 
 	// Try JWK Set ({"keys": [...]}).
@@ -376,10 +397,28 @@ func parseJWK(data []byte, kid string) (any, error) {
 			}
 			// Multiple entries can share a kid (e.g. one per use/alg). The
 			// first match is deterministic and matches go-jose's own order.
-			return matches[0].Key, nil
+			return jwkKey(matches[0])
 		}
-		return jwks.Keys[0].Key, nil
+		return jwkKey(jwks.Keys[0])
 	}
 
 	return nil, fmt.Errorf("not a valid JWK or JWK Set")
+}
+
+// jwkKey unwraps a parsed JWK into the key it holds. An "oct" JWK carries a
+// symmetric secret, which go-jose hands back as a []byte, so it goes through
+// symmetricKey like every other symmetric form: {"kty":"oct","k":""} otherwise
+// yields an empty HMAC key, and the empty secret is known to everyone, so an
+// HS256 token forged with it would verify. Every JWK path — single key,
+// first-of-set, and the kid-selected entry — routes through here, so none of
+// them can skip that gate.
+func jwkKey(jwk jose.JSONWebKey) (any, error) {
+	if secret, ok := jwk.Key.([]byte); ok {
+		key, err := symmetricKey(secret)
+		if err != nil {
+			return nil, fmt.Errorf("oct JWK (kid %q): %w", jwk.KeyID, err)
+		}
+		return key, nil
+	}
+	return jwk.Key, nil
 }

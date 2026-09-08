@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,6 +141,42 @@ func TestDecodeAndPrintJWE_WithDecryption(t *testing.T) {
 	}
 	if !strings.Contains(plain, `"sub"`) {
 		t.Error("output missing decrypted sub key")
+	}
+}
+
+// The JWE path resolves its decryption key through the same headerKID, so a
+// non-string "kid" must fail closed here too instead of silently taking the
+// first entry of a JWK Set. go-jose refuses such a header while parsing, so
+// the refusal arrives before headerKID is even reached; this pins the outcome
+// so a future parser change cannot let it through unnoticed.
+func TestDecodeJWE_RejectsNonStringKID(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	token := encryptJWE(t, key, []byte(`{"sub":"user1"}`))
+
+	// Rewrite only the protected header segment; the key is resolved from it
+	// before any decryption is attempted.
+	_, rest, _ := strings.Cut(token, ".")
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RSA-OAEP","enc":"A256GCM","kid":123}`))
+	tampered := header + "." + rest
+
+	for _, tc := range []struct {
+		name string
+		fn   func(w *bytes.Buffer) error
+	}{
+		{name: "human", fn: func(w *bytes.Buffer) error { return decodeAndPrintJWE(w, tampered, keyPath) }},
+		{name: "json", fn: func(w *bytes.Buffer) error { return decodeJWEJSON(w, tampered, keyPath) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := tc.fn(&buf)
+			if err == nil {
+				t.Fatalf("JWE with a non-string kid accepted:\n%s", buf.String())
+			}
+			if !errors.Is(err, errNonStringKID) && !strings.Contains(err.Error(), "key ID") {
+				t.Errorf("error should reject the kid header, got %v", err)
+			}
+		})
 	}
 }
 
