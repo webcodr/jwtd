@@ -293,7 +293,11 @@ func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
 	// reason.
 	var key any
 	if keyStr != "" {
-		loaded, err := loadKeyForKID(keyStr, headerKID(p.header))
+		kid, err := headerKID(p.header)
+		if err != nil {
+			return fmt.Errorf("signature verification: %w", err)
+		}
+		loaded, err := loadKeyForKID(keyStr, kid)
 		if err != nil {
 			return fmt.Errorf("signature verification: error loading key: %w", err)
 		}

@@ -374,7 +374,11 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	if err != nil {
 		return fmt.Errorf("signature verification: %w", err)
 	}
-	key, err := loadKeyForKID(keyStr, headerKID(p.header))
+	kid, err := headerKID(p.header)
+	if err != nil {
+		return fmt.Errorf("signature verification: %w", err)
+	}
+	key, err := loadKeyForKID(keyStr, kid)
 	if err != nil {
 		return fmt.Errorf("signature verification: error loading key: %w", err)
 	}
