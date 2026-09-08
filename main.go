@@ -187,8 +187,10 @@ func printKeyInterpretation(w io.Writer, keyStr string, fromFlag bool) {
 	case keySourceBase64:
 		note = fmt.Sprintf("Note: %s is not an existing file; decoded as base64 key material.", origin)
 	default:
-		// A file, including an hmac: secret file, is the expected reading,
-		// and unusable values produce an error that speaks for itself.
+		// A file, including an hmac: secret file, is the expected reading.
+		// Directories and otherwise unusable values are rejected by
+		// loadKeyForKID with an error that speaks for itself, so there is no
+		// reading to narrate.
 		return
 	}
 
@@ -417,7 +419,11 @@ func printSignatureVerdict(w io.Writer, p *parsedJWT, keyStr string) error {
 // hard failures (unparseable token, unusable key) that are not a verdict on the
 // signature itself.
 func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, err error) {
-	key, err := loadKeyForKID(keyStr, headerKID(p.header))
+	kid, err := headerKID(p.header)
+	if err != nil {
+		return false, nil, err
+	}
+	key, err := loadKeyForKID(keyStr, kid)
 	if err != nil {
 		return false, nil, fmt.Errorf("error loading key: %w", err)
 	}
@@ -453,13 +459,26 @@ func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, 
 	return true, nil, nil
 }
 
-// headerKID returns the token's "kid" header as a string, or "" when it is
-// absent or not a string. It selects the matching key from a JWK Set.
-func headerKID(header map[string]any) string {
-	if kid, ok := header["kid"].(string); ok {
-		return kid
+// errNonStringKID rejects a "kid" header that is present but not a string.
+var errNonStringKID = errors.New(`token header "kid" must be a string (RFC 7515)`)
+
+// headerKID returns the token's "kid" header, which selects the matching entry
+// from a JWK Set, or "" when the token carries none.
+//
+// A present but non-string "kid" is an error, not an absent one. RFC 7515
+// requires the value to be a string, and treating {"kid":123} as "no kid
+// named" would silently select the first JWK Set entry instead of the one the
+// token points at — a key mismatch reported as a valid signature.
+func headerKID(header map[string]any) (string, error) {
+	raw, ok := header["kid"]
+	if !ok {
+		return "", nil
 	}
-	return ""
+	kid, ok := raw.(string)
+	if !ok {
+		return "", errNonStringKID
+	}
+	return kid, nil
 }
 
 // validMethodsForKey returns the JWS algorithm names compatible with the

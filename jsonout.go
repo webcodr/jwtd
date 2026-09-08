@@ -107,7 +107,11 @@ func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
 		return writeJSON(w, out)
 	}
 
-	key, err := loadKeyForKID(keyStr, headerKID(header))
+	kid, err := headerKID(header)
+	if err != nil {
+		return err
+	}
+	key, err := loadKeyForKID(keyStr, kid)
 	if err != nil {
 		return fmt.Errorf("loading decryption key: %w", err)
 	}

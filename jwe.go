@@ -92,7 +92,11 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	// fails with the error alone instead of a partial section ahead of it.
 	var key any
 	if keyStr != "" {
-		key, err = loadKeyForKID(keyStr, headerKID(header))
+		kid, kerr := headerKID(header)
+		if kerr != nil {
+			return kerr
+		}
+		key, err = loadKeyForKID(keyStr, kid)
 		if err != nil {
 			return fmt.Errorf("loading decryption key: %w", err)
 		}
