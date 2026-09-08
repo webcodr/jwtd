@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -182,5 +183,81 @@ func TestApplyColorMode(t *testing.T) {
 				t.Errorf("color.NoColor = %v, want %v", color.NoColor, tt.wantNoColor)
 			}
 		})
+	}
+}
+
+// A decrypted payload that is the JSON literal null must still be reported: it
+// is a nil interface, the one value omitempty would drop, which would leave the
+// object with neither encrypted nor decryptedPayload.
+func TestDecodeJWEJSON_NullDecryptedPayloadIsEmitted(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	token := encryptJWE(t, key, []byte(`null`))
+
+	var buf bytes.Buffer
+	if err := decodeJWEJSON(&buf, token, keyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	payload, present := out["decryptedPayload"]
+	if !present {
+		t.Fatalf("decryptedPayload missing for a null plaintext: %s", buf.String())
+	}
+	if payload != nil {
+		t.Errorf("decryptedPayload = %v, want null", payload)
+	}
+	if _, present := out["encrypted"]; present {
+		t.Error("encrypted metadata must be omitted once the payload is decrypted")
+	}
+}
+
+// base64URLLen measures a part arithmetically instead of decoding it, so it must
+// answer exactly what a full decode would, for valid and invalid input alike.
+func TestBase64URLLenMatchesDecode(t *testing.T) {
+	inputs := []string{
+		"",
+		"A",
+		"AA",
+		"AAA",
+		"AAAA",
+		"AAAAA",
+		"AAAAAA",
+		"aGVsbG8",
+		"aGVsbG8gd29ybGQ",
+		"-_-_-_-_",
+		"AA=",
+		"AAA=",
+		"AAAA====",
+		"!!!invalid!!!",
+		"AA+/",
+		"AA\nAA",
+		"AA\r\nAA",
+		"\n",
+		"AAA\n",
+		"AA A",
+		"AAAé",
+		"AAAA\x00",
+	}
+	// Plus every one- and two-character string over a small alphabet, which
+	// covers the remainder cases and the alphabet boundaries exhaustively.
+	alphabet := "AZaz09-_+/=. \n\r\t\x00é"
+	for _, a := range alphabet {
+		inputs = append(inputs, string(a))
+		for _, b := range alphabet {
+			inputs = append(inputs, string(a)+string(b), "AA"+string(a)+string(b))
+		}
+	}
+
+	for _, in := range inputs {
+		want := -1
+		if data, err := base64.RawURLEncoding.DecodeString(in); err == nil {
+			want = len(data)
+		}
+		if got := base64URLLen(in); got != want {
+			t.Errorf("base64URLLen(%q) = %d, want %d (full decode)", in, got, want)
+		}
 	}
 }

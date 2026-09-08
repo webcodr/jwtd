@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -164,8 +165,10 @@ func newFormatter() *jsonFormatter {
 
 // printDecryptedPayload formats and prints the decrypted JWE plaintext.
 // If the plaintext is valid JSON, it is pretty-printed. If the plaintext
-// is itself a JWT or JWE, it is decoded and printed recursively.
-func printDecryptedPayload(w io.Writer, f *jsonFormatter, plaintext []byte) error {
+// is itself a JWT or JWE, it is decoded and printed recursively with the same
+// key, so --key applies all the way down instead of stopping at the outer
+// token.
+func printDecryptedPayload(w io.Writer, f *jsonFormatter, plaintext []byte, keyStr string) error {
 	// The shape checks run on the bytes, so a payload that is not a nested
 	// token — the common case, and the one that can be large — is never copied
 	// into a string just to be measured.
@@ -174,17 +177,25 @@ func printDecryptedPayload(w io.Writer, f *jsonFormatter, plaintext []byte) erro
 	// buffered so nothing is printed if decoding fails and the payload falls
 	// through to the JSON/raw handling below.
 	if isJWEBytes(plaintext) {
-		var nested bytes.Buffer
-		if err := decodeAndPrintJWE(&nested, string(plaintext), ""); err == nil {
-			return printNestedPayload(w, "Decrypted Payload (nested JWE)", nested.Bytes())
+		if nested, verdict, ok := renderNested(keyStr, func(w io.Writer, key string) error {
+			return decodeAndPrintJWE(w, string(plaintext), key)
+		}); ok {
+			if err := printNestedPayload(w, "Decrypted Payload (nested JWE)", nested); err != nil {
+				return err
+			}
+			return verdict
 		}
 	}
 
 	// Check if the decrypted payload is a nested JWT.
 	if isJWTBytes(plaintext) {
-		var nested bytes.Buffer
-		if err := decodeAndPrint(&nested, string(plaintext), ""); err == nil {
-			return printNestedPayload(w, "Decrypted Payload (nested JWT)", nested.Bytes())
+		if nested, verdict, ok := renderNested(keyStr, func(w io.Writer, key string) error {
+			return decodeAndPrint(w, string(plaintext), key)
+		}); ok {
+			if err := printNestedPayload(w, "Decrypted Payload (nested JWT)", nested); err != nil {
+				return err
+			}
+			return verdict
 		}
 	}
 
@@ -207,6 +218,40 @@ func printDecryptedPayload(w io.Writer, f *jsonFormatter, plaintext []byte) erro
 	}
 	_, err := fmt.Fprintln(w, escapeTerminalText(plaintext))
 	return err
+}
+
+// renderNested decodes a nested token into a buffer, reporting the rendered
+// output, the verdict error it should propagate, and whether the decode
+// succeeded at all.
+//
+// The outer key is offered to the nested token first, so a JWE wrapping another
+// token to the same key decrypts all the way down and a nested JWS gets a real
+// Signature verdict — whose errInvalidSignature is handed back so the exit code
+// reflects the innermost check. A key the nested token cannot use (a different
+// key type, or one that fails to load for it) is not fatal: the decode is
+// retried keyless, which is exactly what the nested output was before the key
+// was threaded through. A nested token that does not decode at all reports
+// false, and the payload falls back to the JSON/raw handling.
+func renderNested(keyStr string, decode func(io.Writer, string) error) ([]byte, error, bool) {
+	var nested bytes.Buffer
+	err := decode(&nested, keyStr)
+	if err == nil {
+		return nested.Bytes(), nil, true
+	}
+	// An invalid signature is a verdict, not a decode failure: the section was
+	// printed, and the sentinel only drives the exit code.
+	if errors.Is(err, errInvalidSignature) {
+		return nested.Bytes(), err, true
+	}
+	if keyStr == "" {
+		return nil, nil, false
+	}
+
+	nested.Reset()
+	if err := decode(&nested, ""); err != nil {
+		return nil, nil, false
+	}
+	return nested.Bytes(), nil, true
 }
 
 func escapeTerminalText(text []byte) string {
@@ -445,34 +490,60 @@ func timestampStatus(key string, t time.Time) string {
 	switch key {
 	case "exp":
 		if t.Before(now) {
-			return "expired " + humanizeDuration(now.Sub(t)) + " ago"
+			return "expired " + humanizeSeconds(secondsBetween(now, t)) + " ago"
 		}
-		return "expires in " + humanizeDuration(t.Sub(now))
+		return "expires in " + humanizeSeconds(secondsBetween(t, now))
 	case "nbf":
 		if now.Before(t) {
-			return "not yet valid, in " + humanizeDuration(t.Sub(now))
+			return "not yet valid, in " + humanizeSeconds(secondsBetween(t, now))
 		}
 	}
 	return ""
 }
 
-// humanizeDuration renders a non-negative approximation of d using its largest
-// whole unit (seconds, minutes, hours, or days), truncating toward zero so the
-// output is deterministic. It is meant for a compact at-a-glance annotation, not
-// exact arithmetic; the raw epoch value stays alongside it for that.
-func humanizeDuration(d time.Duration) string {
-	if d < 0 {
-		d = -d
-	}
+// secondsBetween returns a-b in whole seconds, truncated toward zero.
+//
+// It deliberately does not go through time.Time.Sub, whose time.Duration result
+// saturates at roughly ±292 years: a claim further out than that would
+// otherwise be annotated with that ceiling, so every distant exp rendered as
+// the same bogus "106751d". Unix second counts are far inside int64, so the
+// subtraction here cannot overflow for any instant representableTime admits.
+func secondsBetween(a, b time.Time) int64 {
+	seconds := a.Unix() - b.Unix()
+	nanos := int64(a.Nanosecond()) - int64(b.Nanosecond())
+	// |nanos| < 1e9, so it can only pull the result one second toward zero.
 	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int64(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int64(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int64(d.Hours()))
+	case seconds > 0 && nanos < 0:
+		seconds--
+	case seconds < 0 && nanos > 0:
+		seconds++
+	}
+	return seconds
+}
+
+// humanizeSeconds renders a non-negative approximation of a second count using
+// its largest whole unit (seconds, minutes, hours, or days), truncating toward
+// zero so the output is deterministic. It is meant for a compact at-a-glance
+// annotation, not exact arithmetic; the raw epoch value stays alongside it for
+// that.
+func humanizeSeconds(seconds int64) string {
+	if seconds < 0 {
+		seconds = -seconds
+	}
+	const (
+		minute = 60
+		hour   = 60 * minute
+		day    = 24 * hour
+	)
+	switch {
+	case seconds < minute:
+		return fmt.Sprintf("%ds", seconds)
+	case seconds < hour:
+		return fmt.Sprintf("%dm", seconds/minute)
+	case seconds < day:
+		return fmt.Sprintf("%dh", seconds/hour)
 	default:
-		return fmt.Sprintf("%dd", int64(d.Hours())/24)
+		return fmt.Sprintf("%dd", seconds/day)
 	}
 }
 

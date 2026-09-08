@@ -114,7 +114,7 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	if err != nil {
 		return fmt.Errorf("decrypting JWE: %w", err)
 	}
-	return printDecryptedPayload(w, f, plaintext)
+	return printDecryptedPayload(w, f, plaintext, keyStr)
 }
 
 // jweProtectedHeaderMap decodes every field in the compact JWE protected header
