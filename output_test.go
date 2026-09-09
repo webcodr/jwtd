@@ -367,26 +367,109 @@ func TestFormatTimestamps_FractionalFloat64(t *testing.T) {
 	}
 }
 
-func TestHumanizeDuration(t *testing.T) {
+func TestHumanizeSeconds(t *testing.T) {
 	tests := []struct {
-		name string
-		d    time.Duration
-		want string
+		name    string
+		seconds int64
+		want    string
 	}{
-		{"sub-minute seconds", 45 * time.Second, "45s"},
+		{"sub-minute seconds", 45, "45s"},
 		{"zero", 0, "0s"},
-		{"minute boundary rounds down", 119 * time.Second, "1m"},
-		{"minutes", 14 * time.Minute, "14m"},
-		{"hour boundary rounds down", 119 * time.Minute, "1h"},
-		{"hours", 5 * time.Hour, "5h"},
-		{"day boundary rounds down", 47 * time.Hour, "1d"},
-		{"days", 10 * 24 * time.Hour, "10d"},
-		{"negative magnitude", -90 * time.Second, "1m"},
+		{"minute boundary rounds down", 119, "1m"},
+		{"minutes", 14 * 60, "14m"},
+		{"hour boundary rounds down", 119 * 60, "1h"},
+		{"hours", 5 * 3600, "5h"},
+		{"day boundary rounds down", 47 * 3600, "1d"},
+		{"days", 10 * 86400, "10d"},
+		{"negative magnitude", -90, "1m"},
+		// Beyond what a time.Duration can hold: the old Duration-based
+		// arithmetic saturated at ~292 years and rendered every one of these
+		// as "106751d".
+		{"beyond duration range", 20000000000 - 1700000000, "211805d"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := humanizeDuration(tt.d); got != tt.want {
-				t.Errorf("humanizeDuration(%v) = %q, want %q", tt.d, got, tt.want)
+			if got := humanizeSeconds(tt.seconds); got != tt.want {
+				t.Errorf("humanizeSeconds(%d) = %q, want %q", tt.seconds, got, tt.want)
+			}
+		})
+	}
+}
+
+// secondsBetween must truncate toward zero on both sides, including when the
+// sub-second parts pull the result across a whole second.
+func TestSecondsBetween(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b time.Time
+		want int64
+	}{
+		{"whole seconds", time.Unix(100, 0), time.Unix(40, 0), 60},
+		{"negative whole seconds", time.Unix(40, 0), time.Unix(100, 0), -60},
+		{"fraction truncates toward zero", time.Unix(1, 0), time.Unix(0, 5e8), 0},
+		{"negative fraction truncates toward zero", time.Unix(0, 5e8), time.Unix(1, 0), 0},
+		{"fraction adds nothing", time.Unix(2, 5e8), time.Unix(0, 0), 2},
+		{"far apart", time.Unix(253402300799, 0), time.Unix(0, 0), 253402300799},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := secondsBetween(tt.a, tt.b); got != tt.want {
+				t.Errorf("secondsBetween = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// Timestamps further out than a time.Duration can represent used to saturate at
+// ~292 years, annotating every distant claim with the same bogus "106751d".
+func TestTimestampStatus_BeyondDurationRange(t *testing.T) {
+	const now = 1700000000
+	pinTime(t, now)
+
+	tests := []struct {
+		name    string
+		claim   string
+		seconds int64
+		want    string
+	}{
+		{"future exp", "exp", 20000000000, "expires in 211805d"},
+		{"far future exp", "exp", 30000000000, "expires in 327546d"},
+		{"furthest representable exp", "exp", 253402300799, "expires in 2913221d"},
+		{"future nbf", "nbf", 20000000000, "not yet valid, in 211805d"},
+		{"far future nbf", "nbf", 30000000000, "not yet valid, in 327546d"},
+		{"furthest representable nbf", "nbf", 253402300799, "not yet valid, in 2913221d"},
+		{"past exp", "exp", -20000000000, "expired 251157d ago"},
+		{"far past exp", "exp", -30000000000, "expired 366898d ago"},
+		{"furthest representable past exp", "exp", -62135596800, "expired 738837d ago"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := timestampStatus(tt.claim, time.Unix(tt.seconds, 0).UTC())
+			if got != tt.want {
+				t.Errorf("timestampStatus(%q, %d) = %q, want %q", tt.claim, tt.seconds, got, tt.want)
+			}
+		})
+	}
+}
+
+// The same values through the display path they actually reach.
+func TestFormatTimestamps_BeyondDurationRange(t *testing.T) {
+	pinTime(t, 1700000000)
+
+	for _, seconds := range []string{"20000000000", "30000000000", "253402300799"} {
+		t.Run(seconds, func(t *testing.T) {
+			data := map[string]any{"exp": json.Number(seconds)}
+			formatTimestamps(data)
+
+			text, ok := data["exp"].(string)
+			if !ok {
+				t.Fatalf("exp not rewritten: %v", data["exp"])
+			}
+			if strings.Contains(text, "106751d") {
+				t.Errorf("saturated duration in %q", text)
+			}
+			if !strings.Contains(text, "expires in ") {
+				t.Fatalf("missing annotation in %q", text)
 			}
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,6 +141,42 @@ func TestDecodeAndPrintJWE_WithDecryption(t *testing.T) {
 	}
 	if !strings.Contains(plain, `"sub"`) {
 		t.Error("output missing decrypted sub key")
+	}
+}
+
+// The JWE path resolves its decryption key through the same headerKID, so a
+// non-string "kid" must fail closed here too instead of silently taking the
+// first entry of a JWK Set. go-jose refuses such a header while parsing, so
+// the refusal arrives before headerKID is even reached; this pins the outcome
+// so a future parser change cannot let it through unnoticed.
+func TestDecodeJWE_RejectsNonStringKID(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	token := encryptJWE(t, key, []byte(`{"sub":"user1"}`))
+
+	// Rewrite only the protected header segment; the key is resolved from it
+	// before any decryption is attempted.
+	_, rest, _ := strings.Cut(token, ".")
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RSA-OAEP","enc":"A256GCM","kid":123}`))
+	tampered := header + "." + rest
+
+	for _, tc := range []struct {
+		name string
+		fn   func(w *bytes.Buffer) error
+	}{
+		{name: "human", fn: func(w *bytes.Buffer) error { return decodeAndPrintJWE(w, tampered, keyPath) }},
+		{name: "json", fn: func(w *bytes.Buffer) error { return decodeJWEJSON(w, tampered, keyPath) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := tc.fn(&buf)
+			if err == nil {
+				t.Fatalf("JWE with a non-string kid accepted:\n%s", buf.String())
+			}
+			if !errors.Is(err, errNonStringKID) && !strings.Contains(err.Error(), "key ID") {
+				t.Errorf("error should reject the kid header, got %v", err)
+			}
+		})
 	}
 }
 
@@ -836,9 +873,11 @@ func TestDecodeAndPrintJWE_NestedJWT(t *testing.T) {
 	encKeyPath := writeKeyFile(t, encKey)
 
 	var buf bytes.Buffer
+	// The outer key is an RSA key the inner JWT was not signed with, so the
+	// nested signature verdict is INVALID and its sentinel reaches the caller.
 	err := decodeAndPrintJWE(&buf, jweToken, encKeyPath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("expected errInvalidSignature from the nested token, got: %v", err)
 	}
 
 	output := stripANSI(buf.String())
@@ -875,8 +914,10 @@ func TestDecodeAndPrintJWE_NestedJWTEscapesC1Controls(t *testing.T) {
 	encKeyPath := writeKeyFile(t, encKey)
 
 	var buf bytes.Buffer
-	if err := decodeAndPrintJWE(&buf, jweToken, encKeyPath); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// alg "none" is outside the outer RSA key's allowlist, so the nested
+	// verdict is INVALID; the sections are still rendered.
+	if err := decodeAndPrintJWE(&buf, jweToken, encKeyPath); !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("expected errInvalidSignature from the nested token, got: %v", err)
 	}
 
 	output := buf.Bytes()
@@ -884,4 +925,82 @@ func TestDecodeAndPrintJWE_NestedJWTEscapesC1Controls(t *testing.T) {
 		t.Fatalf("expected nested JWT output, got:\n%q", output)
 	}
 	assertEscapedControlRunes(t, output, '\u009b', '\u009d', '\u009c')
+}
+
+// --- the key applies to nested tokens too ------------------------------------
+
+// A JWE whose plaintext is another JWE to the same key must be decrypted all the
+// way down: before the key was threaded into printDecryptedPayload, the inner
+// token fell back to encrypted part sizes and the "use a key" hint.
+func TestDecodeAndPrintJWE_NestedJWEDecryptsWithOuterKey(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+
+	innerJWE := encryptJWE(t, key, []byte(`{"secret":"inner-plaintext"}`))
+	outerJWE := encryptJWE(t, key, []byte(innerJWE))
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, outerJWE, keyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	assertOutputContains(t, output, "nested JWE", "inner-plaintext")
+	if strings.Contains(output, "provide a decryption key") {
+		t.Errorf("inner JWE was not decrypted with the outer key, got:\n%s", output)
+	}
+	if strings.Contains(output, "Encrypted Content") {
+		t.Errorf("inner JWE reported encrypted part sizes despite a usable key, got:\n%s", output)
+	}
+}
+
+// A JWE whose plaintext is a JWS signed with the same secret must get a real
+// Signature verdict, so the exit code can reflect the innermost check.
+func TestDecodeAndPrintJWE_NestedJWTVerifiesWithOuterKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		signWith    func(secret []byte) []byte
+		wantVerdict string
+		wantErr     error
+	}{
+		{"valid signature", func(secret []byte) []byte { return secret }, "Signature: VALID", nil},
+		{"wrong secret", func(secret []byte) []byte { return []byte("a-different-secret-entirely") }, "Signature: INVALID", errInvalidSignature},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			secret := randomSymmetricKey(t, 32)
+			keyArg := symmetricKeyArg(t, secret)
+
+			innerJWT := signJWTWithHMAC(t, tt.signWith(secret), jwt.MapClaims{"sub": "nested-verified"})
+			outerJWE := encryptJWEGeneric(t, jose.A256KW, jose.A256GCM, secret, []byte(innerJWT))
+
+			var buf bytes.Buffer
+			err := decodeAndPrintJWE(&buf, outerJWE, keyArg)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+
+			output := stripANSI(buf.String())
+			assertOutputContains(t, output, "nested JWT", "nested-verified", tt.wantVerdict)
+		})
+	}
+}
+
+// A nested token the outer key simply cannot be used for must not lose its
+// sections: the decode is retried keyless, which is what it produced before.
+func TestDecodeAndPrintJWE_NestedJWEFallsBackWhenKeyDoesNotFit(t *testing.T) {
+	outerKey := generateRSAKey(t)
+	outerKeyPath := writeKeyFile(t, outerKey)
+
+	innerKey := randomSymmetricKey(t, 32)
+	innerJWE := encryptJWEGeneric(t, jose.A256KW, jose.A128CBC_HS256, innerKey, []byte(`{"secret":"nested"}`))
+	outerJWE := encryptJWE(t, outerKey, []byte(innerJWE))
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, outerJWE, outerKeyPath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := stripANSI(buf.String())
+	assertOutputContains(t, output, "nested JWE", "A256KW", "provide a decryption key")
 }

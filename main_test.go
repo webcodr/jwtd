@@ -299,7 +299,119 @@ func TestDecodeAndPrint_TimestampsFormatted(t *testing.T) {
 	}
 }
 
+// A JSON "null" decodes without error and leaves the target map nil, which
+// would otherwise be rendered as an empty object with a VALID claim verdict.
+// Both segments must be rejected as not naming a JSON object, the way the JWE
+// protected header already is.
+func TestParseUnverifiedJWT_RejectsNullHeaderAndPayload(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{
+			name:  "null payload",
+			token: makeJWT(`{"alg":"none"}`, `null`, ""),
+			want:  "parsing JWT claims: expected JSON object",
+		},
+		{
+			name:  "null header",
+			token: makeJWT(`null`, `{"sub":"x"}`, ""),
+			want:  "parsing JWT header: expected JSON object",
+		},
+		{
+			name:  "non-object payload",
+			token: makeJWT(`{"alg":"none"}`, `[1,2]`, ""),
+			want:  "parsing JWT claims",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseUnverifiedJWT(tt.token); err == nil {
+				t.Fatalf("expected an error for %q", tt.token)
+			} else if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q missing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// A null header or payload must not reach the output at all: a nil map renders
+// as "{}", which would silently misreport the token's contents.
+func TestDecodeAndPrint_NullPayloadWritesNothing(t *testing.T) {
+	var buf bytes.Buffer
+	if err := decodeAndPrint(&buf, makeJWT(`{"alg":"none"}`, `null`, ""), ""); err == nil {
+		t.Fatal("expected an error for a null payload")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("nothing should be written for a null payload, got %q", buf.String())
+	}
+}
+
+// The key is resolved before any section is written, so an unusable key
+// argument produces an error alone instead of a decoded token followed by one.
+// The JWE and --json paths behave the same way.
+func TestPrintParsedJWT_KeyErrorWritesNothing(t *testing.T) {
+	token := makeJWT(`{"alg":"HS256"}`, `{"sub":"x"}`, "sig")
+	p, err := parseUnverifiedJWT(token)
+	if err != nil {
+		t.Fatalf("parsing token: %v", err)
+	}
+
+	var buf bytes.Buffer
+	err = printParsedJWT(&buf, p, filepath.Join(t.TempDir(), "missing.pem"))
+	if err == nil {
+		t.Fatal("expected an error for an unusable key")
+	}
+	if !strings.Contains(err.Error(), "error loading key") {
+		t.Errorf("error should name the key load failure, got: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("no section may be written before the key is resolved, got %q", buf.String())
+	}
+}
+
 // --- readToken ---------------------------------------------------------------
+
+// An empty or whitespace-only token argument carries no token, so it is
+// reported the same way an empty pipe is instead of as a malformed token.
+func TestReadToken_EmptyArgIsNoToken(t *testing.T) {
+	for _, arg := range []string{"", "   ", "\n\t "} {
+		if _, err := readToken([]string{arg}); !errors.Is(err, errNoToken) {
+			t.Errorf("readToken(%q): expected errNoToken, got %v", arg, err)
+		}
+	}
+}
+
+// stdin is bounded, so an unbounded pipe fails with a clear message rather than
+// being buffered whole or silently truncated into a wrong token.
+func TestReadToken_StdinOverLimitErrors(t *testing.T) {
+	origStdin := os.Stdin
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating pipe: %v", err)
+	}
+
+	go func() {
+		// Exactly one byte past the limit: enough to be detected, and fully
+		// consumed by the reader so this goroutine finishes.
+		_, _ = w.Write(bytes.Repeat([]byte("a"), maxStdinTokenBytes+1))
+		w.Close()
+	}()
+
+	os.Stdin = r
+	defer func() { os.Stdin = origStdin }()
+
+	_, err = readToken([]string{})
+	if err == nil {
+		t.Fatal("expected an error for stdin past the limit")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error should report the limit, got: %v", err)
+	}
+}
 
 func TestReadToken_FromArgs(t *testing.T) {
 	token, err := readToken([]string{"my.jwt.token"})
@@ -609,6 +721,125 @@ func TestVerifySignature_RejectsForgedHMACFromPublishedKeyFile(t *testing.T) {
 			}
 			if output := stripANSI(buf.String()); strings.Contains(output, "Signature: VALID") {
 				t.Errorf("forged HMAC token reported as valid:\n%s", output)
+			}
+		})
+	}
+}
+
+// An "oct" JWK with empty key material is the same forgery as `raw:`: the
+// empty secret is a published value, so a token HMAC'd with it must never
+// verify, in the human path or under --json.
+func TestVerifySignature_RejectsForgedHMACFromEmptyOctJWK(t *testing.T) {
+	keyPath := writeTextKeyFile(t, "empty.jwk", `{"kty":"oct","k":""}`)
+	forged := signJWTWithHMAC(t, []byte{}, jwt.MapClaims{"sub": "attacker", "role": "admin"})
+
+	var buf bytes.Buffer
+	if err := verifySignature(&buf, forged, keyPath); err == nil {
+		t.Fatal("token forged with the empty JWK secret accepted")
+	}
+	if output := stripANSI(buf.String()); strings.Contains(output, "Signature: VALID") {
+		t.Errorf("forged HMAC token reported as valid:\n%s", output)
+	}
+
+	var jsonBuf bytes.Buffer
+	if err := decodeJWTJSON(&jsonBuf, forged, keyPath, claimChecks{}); err == nil {
+		t.Errorf("--json accepted the token forged with the empty JWK secret:\n%s", jsonBuf.String())
+	}
+}
+
+// RFC 7515 requires "kid" to be a string. A present non-string kid must be an
+// error: treating it as "no kid named" would silently select the first JWK Set
+// entry and report a signature made with a key the token never pointed at.
+func TestVerifySignature_RejectsNonStringKID(t *testing.T) {
+	first := []byte("first-key-32-bytes-of-secret-abc")
+	second := []byte("second-key-32-bytes-of-secret-xy")
+	setPath := writeTextKeyFile(t, "jwks.json", `{"keys":[`+
+		`{"kty":"oct","kid":"a","k":"`+base64.RawURLEncoding.EncodeToString(first)+`"},`+
+		`{"kty":"oct","kid":"b","k":"`+base64.RawURLEncoding.EncodeToString(second)+`"}]}`)
+
+	tests := []struct {
+		name string
+		kid  any
+	}{
+		{name: "number", kid: 123},
+		{name: "null", kid: nil},
+		{name: "bool", kid: true},
+		{name: "array", kid: []any{"a"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := signJWTWithHMACHeader(t, first, map[string]any{"kid": tt.kid},
+				jwt.MapClaims{"sub": "attacker"})
+
+			var buf bytes.Buffer
+			err := verifySignature(&buf, token, setPath)
+			if err == nil {
+				t.Fatal("token with a non-string kid accepted")
+			}
+			if !strings.Contains(err.Error(), "kid") {
+				t.Errorf("error should name the kid header, got %v", err)
+			}
+			if output := stripANSI(buf.String()); strings.Contains(output, "Signature: VALID") {
+				t.Errorf("token with a non-string kid reported as valid:\n%s", output)
+			}
+
+			var jsonBuf bytes.Buffer
+			if err := decodeJWTJSON(&jsonBuf, token, setPath, claimChecks{}); err == nil {
+				t.Errorf("--json accepted a token with a non-string kid:\n%s", jsonBuf.String())
+			}
+		})
+	}
+
+	// A well-formed kid still selects its entry, so the check does not break
+	// ordinary JWK Set verification.
+	t.Run("string kid still verifies", func(t *testing.T) {
+		token := signJWTWithHMACHeader(t, second, map[string]any{"kid": "b"},
+			jwt.MapClaims{"sub": "test"})
+
+		var buf bytes.Buffer
+		if err := verifySignature(&buf, token, setPath); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if output := stripANSI(buf.String()); !strings.Contains(output, "Signature: VALID") {
+			t.Errorf("expected a valid signature, got:\n%s", output)
+		}
+	})
+}
+
+func TestHeaderKID(t *testing.T) {
+	tests := []struct {
+		name    string
+		header  map[string]any
+		want    string
+		wantErr bool
+	}{
+		{name: "absent", header: map[string]any{"alg": "HS256"}},
+		{name: "string", header: map[string]any{"kid": "key-1"}, want: "key-1"},
+		{name: "empty string", header: map[string]any{"kid": ""}},
+		{name: "number", header: map[string]any{"kid": json.Number("123")}, wantErr: true},
+		{name: "null", header: map[string]any{"kid": nil}, wantErr: true},
+		{name: "bool", header: map[string]any{"kid": true}, wantErr: true},
+		{name: "object", header: map[string]any{"kid": map[string]any{}}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := headerKID(tt.header)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %q", got)
+				}
+				if !errors.Is(err, errNonStringKID) {
+					t.Errorf("expected errNonStringKID, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("headerKID = %q, want %q", got, tt.want)
 			}
 		})
 	}

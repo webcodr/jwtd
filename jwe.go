@@ -56,13 +56,6 @@ func isJWE(token string) bool {
 	return strings.Count(token, ".") == jweDelimiters
 }
 
-// isJWT returns true if the token string looks like a JWS/JWT compact
-// serialization (3 dot-separated parts). It is the counterpart of isJWE, so
-// token-shape dispatch has one definition per form.
-func isJWT(token string) bool {
-	return strings.Count(token, ".") == jwtDelimiters
-}
-
 // isJWEBytes and isJWTBytes are the byte forms, used where the candidate is a
 // decrypted payload that may be large: testing its shape must not cost a full
 // copy of it just to reach the string predicates.
@@ -92,7 +85,11 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	// fails with the error alone instead of a partial section ahead of it.
 	var key any
 	if keyStr != "" {
-		key, err = loadKeyForKID(keyStr, headerKID(header))
+		kid, kerr := headerKID(header)
+		if kerr != nil {
+			return kerr
+		}
+		key, err = loadKeyForKID(keyStr, kid)
 		if err != nil {
 			return fmt.Errorf("loading decryption key: %w", err)
 		}
@@ -114,7 +111,7 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	if err != nil {
 		return fmt.Errorf("decrypting JWE: %w", err)
 	}
-	return printDecryptedPayload(w, f, plaintext)
+	return printDecryptedPayload(w, f, plaintext, keyStr)
 }
 
 // jweProtectedHeaderMap decodes every field in the compact JWE protected header

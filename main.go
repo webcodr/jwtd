@@ -187,8 +187,10 @@ func printKeyInterpretation(w io.Writer, keyStr string, fromFlag bool) {
 	case keySourceBase64:
 		note = fmt.Sprintf("Note: %s is not an existing file; decoded as base64 key material.", origin)
 	default:
-		// A file, including an hmac: secret file, is the expected reading,
-		// and unusable values produce an error that speaks for itself.
+		// A file, including an hmac: secret file, is the expected reading.
+		// Directories and otherwise unusable values are rejected by
+		// loadKeyForKID with an error that speaks for itself, so there is no
+		// reading to narrate.
 		return
 	}
 
@@ -198,10 +200,22 @@ func printKeyInterpretation(w io.Writer, keyStr string, fromFlag bool) {
 	_, _ = fmt.Fprintln(w, note)
 }
 
+// maxStdinTokenBytes bounds how much of a piped stdin is read. A compact token
+// is a few kilobytes at most, so the limit is generous; it exists so a stray
+// pipe from an unbounded source (a log file, /dev/zero) fails with a clear
+// message instead of being buffered whole into memory.
+const maxStdinTokenBytes = 16 << 20 // 16 MiB
+
 // readToken resolves the JWT string from arguments, stdin pipe, or interactive prompt.
 func readToken(args []string) (string, error) {
 	if len(args) > 0 {
-		return sanitizeToken(args[0]), nil
+		// An empty or whitespace-only argument carries no token, so it is
+		// reported the same way an empty pipe is rather than as malformed.
+		token := sanitizeToken(args[0])
+		if token == "" {
+			return "", errNoToken
+		}
+		return token, nil
 	}
 
 	// A nil FileInfo (Stat failed, e.g. a closed or detached stdin) is treated
@@ -209,9 +223,14 @@ func readToken(args []string) (string, error) {
 	// dereferencing nil.
 	stat, err := os.Stdin.Stat()
 	if err == nil && stat != nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-		data, err := io.ReadAll(os.Stdin)
+		// One byte past the limit is read so exceeding it is detected rather
+		// than silently truncating the token.
+		data, err := io.ReadAll(io.LimitReader(os.Stdin, maxStdinTokenBytes+1))
 		if err != nil {
 			return "", fmt.Errorf("reading stdin: %w", err)
+		}
+		if len(data) > maxStdinTokenBytes {
+			return "", fmt.Errorf("reading stdin: input exceeds the %d byte limit", maxStdinTokenBytes)
 		}
 		token := sanitizeToken(string(data))
 		if token == "" {
@@ -268,6 +287,23 @@ func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
 // claims (claim validation) or the header (signature verification) parse once
 // and share the result instead of decoding the same segments again.
 func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
+	// The key is resolved before anything is written, so a bad key argument
+	// fails with an error alone instead of three decoded sections followed by
+	// one. The JWE and --json paths resolve their key up front for the same
+	// reason.
+	var key any
+	if keyStr != "" {
+		kid, err := headerKID(p.header)
+		if err != nil {
+			return fmt.Errorf("signature verification: %w", err)
+		}
+		loaded, err := loadKeyForKID(keyStr, kid)
+		if err != nil {
+			return fmt.Errorf("signature verification: error loading key: %w", err)
+		}
+		key = loaded
+	}
+
 	f := newFormatter()
 
 	if err := printSection(w, f, "Header", p.header); err != nil {
@@ -296,7 +332,7 @@ func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
 		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
-		if err := printSignatureVerdict(w, p, keyStr); err != nil {
+		if err := printSignatureVerdict(w, p, key); err != nil {
 			return err
 		}
 	}
@@ -342,6 +378,12 @@ func parseUnverifiedJWT(tokenStr string) (*parsedJWT, error) {
 	if err := decodeJSON(headerData, &header); err != nil {
 		return nil, fmt.Errorf("parsing JWT header: %w", err)
 	}
+	// A literal "null" decodes without error and leaves the map nil, which
+	// would otherwise be rendered as an empty object. The JWE header decoder
+	// carries the same guard.
+	if header == nil {
+		return nil, fmt.Errorf("parsing JWT header: expected JSON object")
+	}
 
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
@@ -351,6 +393,9 @@ func parseUnverifiedJWT(tokenStr string) (*parsedJWT, error) {
 	claims := jwt.MapClaims{}
 	if err := decodeJSON(payload, &claims); err != nil {
 		return nil, fmt.Errorf("parsing JWT claims: %w", err)
+	}
+	if claims == nil {
+		return nil, fmt.Errorf("parsing JWT claims: expected JSON object")
 	}
 
 	alg, ok := header["alg"].(string)
@@ -393,13 +438,12 @@ func splitCompactJWT(tokenStr string) ([]string, bool) {
 }
 
 // printSignatureVerdict renders the signature verdict for an already-parsed
-// token and returns the errInvalidSignature sentinel on failure so the CLI
-// exits nonzero.
-func printSignatureVerdict(w io.Writer, p *parsedJWT, keyStr string) error {
-	valid, reason, err := verifyJWTSignature(p, keyStr)
-	if err != nil {
-		return fmt.Errorf("signature verification: %w", err)
-	}
+// token and an already-loaded key, and returns the errInvalidSignature sentinel
+// on failure so the CLI exits nonzero. It takes the loaded key rather than the
+// key argument so its caller can fail on an unusable key before printing
+// anything.
+func printSignatureVerdict(w io.Writer, p *parsedJWT, key any) error {
+	valid, reason := verifyLoadedKeySignature(p, key)
 
 	if !valid {
 		if werr := printVerdict(w, "Signature", false, reason.Error()); werr != nil {
@@ -417,11 +461,23 @@ func printSignatureVerdict(w io.Writer, p *parsedJWT, keyStr string) error {
 // hard failures (unparseable token, unusable key) that are not a verdict on the
 // signature itself.
 func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, err error) {
-	key, err := loadKeyForKID(keyStr, headerKID(p.header))
+	kid, err := headerKID(p.header)
+	if err != nil {
+		return false, nil, err
+	}
+	key, err := loadKeyForKID(keyStr, kid)
 	if err != nil {
 		return false, nil, fmt.Errorf("error loading key: %w", err)
 	}
+	valid, reason = verifyLoadedKeySignature(p, key)
+	return valid, reason, nil
+}
 
+// verifyLoadedKeySignature is the verification core, taking a key that has
+// already been loaded. Everything that can fail here is a verdict on the
+// signature, so there is no separate hard error: the one hard failure, an
+// unusable key argument, was decided by the caller that loaded it.
+func verifyLoadedKeySignature(p *parsedJWT, key any) (valid bool, reason error) {
 	// Extract the public key from private keys for verification.
 	key = publicKeyForVerification(key)
 
@@ -438,28 +494,41 @@ func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, 
 	alg := p.method.Alg()
 	methods := validMethodsForKey(key)
 	if len(methods) == 0 {
-		return false, fmt.Errorf("%w: key type %T cannot verify a JWS", jwt.ErrTokenSignatureInvalid, key), nil
+		return false, fmt.Errorf("%w: key type %T cannot verify a JWS", jwt.ErrTokenSignatureInvalid, key)
 	}
 	if !slices.Contains(methods, alg) {
-		return false, fmt.Errorf("%w: signing method %v is invalid", jwt.ErrTokenSignatureInvalid, alg), nil
+		return false, fmt.Errorf("%w: signing method %v is invalid", jwt.ErrTokenSignatureInvalid, alg)
 	}
 
 	// Only the signature is checked here: the claims are never consulted, so
 	// the verdict reflects the cryptography alone and not token expiry.
 	signingInput := p.parts[0] + "." + p.parts[1]
 	if verr := p.method.Verify(signingInput, p.signature, key); verr != nil {
-		return false, fmt.Errorf("%w: %w", jwt.ErrTokenSignatureInvalid, verr), nil
+		return false, fmt.Errorf("%w: %w", jwt.ErrTokenSignatureInvalid, verr)
 	}
-	return true, nil, nil
+	return true, nil
 }
 
-// headerKID returns the token's "kid" header as a string, or "" when it is
-// absent or not a string. It selects the matching key from a JWK Set.
-func headerKID(header map[string]any) string {
-	if kid, ok := header["kid"].(string); ok {
-		return kid
+// errNonStringKID rejects a "kid" header that is present but not a string.
+var errNonStringKID = errors.New(`token header "kid" must be a string (RFC 7515)`)
+
+// headerKID returns the token's "kid" header, which selects the matching entry
+// from a JWK Set, or "" when the token carries none.
+//
+// A present but non-string "kid" is an error, not an absent one. RFC 7515
+// requires the value to be a string, and treating {"kid":123} as "no kid
+// named" would silently select the first JWK Set entry instead of the one the
+// token points at — a key mismatch reported as a valid signature.
+func headerKID(header map[string]any) (string, error) {
+	raw, ok := header["kid"]
+	if !ok {
+		return "", nil
 	}
-	return ""
+	kid, ok := raw.(string)
+	if !ok {
+		return "", errNonStringKID
+	}
+	return kid, nil
 }
 
 // validMethodsForKey returns the JWS algorithm names compatible with the

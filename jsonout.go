@@ -24,10 +24,17 @@ type jwtJSON struct {
 // jweJSON is the machine-readable form of a JWE. Without a key it reports the
 // protected header and the byte sizes of the encrypted parts; with a key it
 // reports the decrypted payload instead.
+//
+// DecryptedPayload is a pointer so presence and content stay separate: a
+// payload that decodes to the JSON literal null is a nil interface, which
+// omitempty on a plain any field would drop — leaving output with neither
+// encrypted nor decryptedPayload. A non-nil pointer is always emitted, so a
+// null plaintext renders as "decryptedPayload": null and the field is absent
+// only when no key was given.
 type jweJSON struct {
 	ProtectedHeader  map[string]any `json:"protectedHeader"`
 	Encrypted        *jweEncrypted  `json:"encrypted,omitempty"`
-	DecryptedPayload any            `json:"decryptedPayload,omitempty"`
+	DecryptedPayload *any           `json:"decryptedPayload,omitempty"`
 }
 
 type jweEncrypted struct {
@@ -107,7 +114,11 @@ func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
 		return writeJSON(w, out)
 	}
 
-	key, err := loadKeyForKID(keyStr, headerKID(header))
+	kid, err := headerKID(header)
+	if err != nil {
+		return err
+	}
+	key, err := loadKeyForKID(keyStr, kid)
 	if err != nil {
 		return fmt.Errorf("loading decryption key: %w", err)
 	}
@@ -116,7 +127,8 @@ func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
 		return fmt.Errorf("decrypting JWE: %w", err)
 	}
 
-	out.DecryptedPayload = jsonPayloadValue(plaintext)
+	payload := jsonPayloadValue(plaintext)
+	out.DecryptedPayload = &payload
 	return writeJSON(w, out)
 }
 
@@ -133,12 +145,31 @@ func jsonPayloadValue(plaintext []byte) any {
 
 // base64URLLen returns the decoded byte length of a base64url part, or -1 when
 // the part is not valid base64url.
+//
+// The length is derived from the encoded text rather than by decoding it: the
+// ciphertext of a JWE is unbounded, and this only ever reports its size. The
+// accepted input matches base64.RawURLEncoding.DecodeString exactly — the
+// unpadded base64url alphabet, with CR and LF skipped the way the standard
+// decoder skips them, and a remainder of one character rejected as corrupt.
+// Trailing bits are not checked, because RawURLEncoding is not strict either.
+// TestBase64URLLenMatchesDecode holds the two to the same answers.
 func base64URLLen(s string) int {
-	data, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil {
+	n := 0
+	for i := range len(s) {
+		switch c := s[i]; {
+		case c == '\r' || c == '\n':
+			// Skipped by encoding/base64, so skipped here too.
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			c == '-', c == '_':
+			n++
+		default:
+			return -1
+		}
+	}
+	if n%4 == 1 {
 		return -1
 	}
-	return len(data)
+	return base64.RawURLEncoding.DecodedLen(n)
 }
 
 // writeJSON encodes v as indented JSON. json.Number values are written as their

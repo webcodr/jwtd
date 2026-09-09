@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -45,24 +47,17 @@ func validateClaimsSet(claims jwt.MapClaims, c claimChecks) (bool, error) {
 	if c.issuer != "" {
 		opts = append(opts, jwt.WithIssuer(c.issuer))
 	}
+	// The validator has to be shielded from timestamps it cannot convert: see
+	// unrepresentableTimeClaim, which would otherwise silently invert the
+	// verdict.
+	if err := unrepresentableTimeClaim(claims); err != nil {
+		return false, err
+	}
+
 	if err := jwt.NewValidator(opts...).Validate(claims); err != nil {
 		return false, err
 	}
 	return true, nil
-}
-
-// verifyClaims parses the token, runs the requested claim validations, and
-// prints "Claims: VALID" or "Claims: INVALID" with the reason. It returns the
-// errInvalidClaims sentinel (wrapping the reason) when a check fails so the CLI
-// exits nonzero, mirroring signature verification; an unparseable token returns
-// a hard error instead. Claim validation is independent of the signature: it
-// runs with or without a key.
-func verifyClaims(w io.Writer, tokenStr string, c claimChecks) error {
-	p, err := parseUnverifiedJWT(tokenStr)
-	if err != nil {
-		return err
-	}
-	return printClaimsVerdict(w, p.claims, c)
 }
 
 // printClaimsVerdict runs the requested checks against already-parsed claims
@@ -86,4 +81,58 @@ func printClaimsVerdict(w io.Writer, claims jwt.MapClaims, c claimChecks) error 
 // "; "-separated line keeps the dim reason and the wrapped error readable.
 func claimReason(err error) string {
 	return strings.ReplaceAll(err.Error(), "\n", "; ")
+}
+
+// temporalClaimKeys are the numeric date claims the validator consults, in a
+// fixed order so the reported reason does not depend on map iteration.
+var temporalClaimKeys = [...]string{"exp", "nbf", "iat"}
+
+// unrepresentableTimeClaim reports the first temporal claim whose numeric value
+// does not name a time jwtd can represent.
+//
+// It has to run before the validator. golang-jwt converts these claims with a
+// Float64 whose error it discards and then casts to int64 (map_claims.go), so a
+// value outside int64 range wraps - typically to math.MinInt64 - and the
+// validator returns the opposite verdict: "exp":1e400 reads as long expired,
+// "nbf":1e400 as long since valid. Neither is visible in the output, because
+// claimTime declines to annotate a timestamp it cannot represent. Rejecting the
+// value up front makes the verdict say what is actually wrong and keeps it
+// agreeing with the displayed claims; the representability rule is claimTime's
+// own, so the two cannot drift.
+//
+// Only numeric values are examined: a non-numeric temporal claim is not a
+// timestamp at all, and the validator rejects it with its own message.
+func unrepresentableTimeClaim(claims jwt.MapClaims) error {
+	for _, key := range temporalClaimKeys {
+		val, ok := claims[key]
+		if !ok {
+			continue
+		}
+
+		var text string
+		switch num := val.(type) {
+		case json.Number:
+			text = num.String()
+		case float64:
+			text = strconv.FormatFloat(num, 'f', -1, 64)
+		default:
+			continue
+		}
+
+		if _, ok := claimTime(text); !ok {
+			return fmt.Errorf("%s claim %s is not a representable timestamp", key, truncateClaimValue(text))
+		}
+	}
+	return nil
+}
+
+// truncateClaimValue shortens a claim literal for an error message: a numeric
+// claim comes from the token and can be arbitrarily long, while the reason is
+// rendered on one line.
+func truncateClaimValue(text string) string {
+	const max = 32
+	if len(text) <= max {
+		return text
+	}
+	return text[:max] + "..."
 }
