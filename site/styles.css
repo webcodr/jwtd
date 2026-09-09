@@ -29,7 +29,7 @@
   /* text */
   --text: #f2e9ff;
   --muted: #c3b0e0;
-  --comment: #7d6aa3;
+  --comment: #a08cbd;
 
   /* chrome accent */
   --pink: #ff45c8;
@@ -367,8 +367,13 @@ li > code {
    breakpoint this collapses back to one column in reading order. */
 .hero-detail {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: clamp(1.75rem, 3.5vw, 3.25rem);
   align-items: start;
+}
+
+.hero-detail > * {
+  min-width: 0;
 }
 
 /* 1040px, not a smaller breakpoint: below this the right column is narrower
@@ -1018,7 +1023,7 @@ li > code {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 800px) {
   .header-inner,
   .hero,
   .section,
@@ -1063,7 +1068,9 @@ li > code {
   .js .header-actions {
     justify-self: start;
   }
+}
 
+@media (max-width: 720px) {
   h1 {
     font-size: clamp(2.4rem, 11vw, 3.4rem);
   }

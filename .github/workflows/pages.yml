@@ -9,6 +9,13 @@ on:
       - "install.ps1"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+  # Release events created with GITHUB_TOKEN do not start another workflow.
+  # Follow the completed release workflow, then resolve GitHub's latest release
+  # as usual so prereleases and older releases cannot downgrade the site version.
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -20,6 +27,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

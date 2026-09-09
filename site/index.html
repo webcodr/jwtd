@@ -634,7 +634,8 @@ scoop install jwtd</code></pre>
           <h2 id="usage-title">Common workflows.</h2>
           <p>
             Pass a token as an argument, pipe it through stdin, or use the
-            interactive prompt.
+            interactive prompt. Try the complete sample below; replace the
+            abbreviated tokens and key paths in other examples with your own.
           </p>
         </div>
         <div class="usage-list">
@@ -642,10 +643,13 @@ scoop install jwtd</code></pre>
             <div class="usage-number">01</div>
             <div class="usage-copy">
               <h3>Decode a JWT</h3>
-              <p>View the header, claims, and signature without a key.</p>
+              <p>
+                View the header, claims, and signature without a key. This
+                complete sample token is ready to copy and run.
+              </p>
             </div>
             <div class="command-block">
-              <pre><code id="decode-command">jwtd eyJhbGciOiJIUzI1NiIs...</code></pre>
+              <pre><code id="decode-command">jwtd eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZW1vLXVzZXIiLCJuYW1lIjoiand0ZCBleGFtcGxlIn0.DhKnmQkIzRhh80z2PO3qmGQdjN4ngFpK3xzvkVamvNk</code></pre>
               <div class="command-actions">
                 <button type="button" data-copy-target="decode-command">
                   Copy</button
@@ -736,9 +740,32 @@ scoop install jwtd</code></pre>
               </p>
             </div>
             <div class="command-block">
+              <p>macOS</p>
               <pre><code id="stdin-command">pbpaste | jwtd</code></pre>
               <div class="command-actions">
                 <button type="button" data-copy-target="stdin-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+              <p>Linux / Wayland (requires wl-clipboard)</p>
+              <pre><code id="stdin-linux-command">wl-paste | jwtd</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="stdin-linux-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+              <p>Windows / PowerShell</p>
+              <pre><code id="stdin-windows-command">Get-Clipboard | jwtd</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="stdin-windows-command">
                   Copy</button
                 ><span
                   class="copy-feedback"
@@ -759,9 +786,22 @@ scoop install jwtd</code></pre>
               </p>
             </div>
             <div class="command-block">
+              <p>macOS / Linux (bash or zsh)</p>
               <pre><code id="env-command">JWTD_KEY=/path/to/public-key.pem jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               <div class="command-actions">
                 <button type="button" data-copy-target="env-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+              <p>Windows / PowerShell (sets the key for this session)</p>
+              <pre><code id="env-windows-command">$env:JWTD_KEY = 'C:\path\to\public-key.pem'
+jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="env-windows-command">
                   Copy</button
                 ><span
                   class="copy-feedback"

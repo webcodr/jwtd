@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,7 +100,7 @@ func TestWebsiteContentContract(t *testing.T) {
 		"surface":         "#1c0f36",
 		"text":            "#f2e9ff",
 		"muted text":      "#c3b0e0",
-		"comment":         "#7d6aa3",
+		"comment":         "#a08cbd",
 		"pink":            "#ff45c8",
 		"blue":            "#6d8cff",
 		"cyan":            "#5fdcff",
@@ -134,6 +135,25 @@ func TestWebsiteContentContract(t *testing.T) {
 		if _, err := os.Stat(filepath.Join("site", asset)); err != nil {
 			t.Errorf("local asset site/%s must exist: %v", asset, err)
 		}
+	}
+}
+
+func TestWebsiteDecodeExample(t *testing.T) {
+	index := readWebsiteFile(t, "site", "index.html")
+	match := regexp.MustCompile(`<code id="decode-command">([^<]+)</code>`).FindStringSubmatch(index)
+	if match == nil {
+		t.Fatal("website must provide a copyable decode example")
+	}
+	args := strings.Fields(match[1])
+	if len(args) != 2 || args[0] != "jwtd" {
+		t.Fatalf("decode example must be a runnable jwtd command, got %q", match[1])
+	}
+	parsed, err := parseUnverifiedJWT(args[1])
+	if err != nil {
+		t.Fatalf("website sample token must decode: %v", err)
+	}
+	if parsed.claims["sub"] != "demo-user" || parsed.claims["name"] != "jwtd example" {
+		t.Errorf("sample must decode to its documented demo claims, got %v", parsed.claims)
 	}
 }
 
@@ -312,12 +332,20 @@ func TestLinuxPackageHeaderLayout(t *testing.T) {
 }
 
 type pagesWorkflowContract struct {
+	On struct {
+		WorkflowRun struct {
+			Workflows []string `yaml:"workflows"`
+			Types     []string `yaml:"types"`
+			Branches  []string `yaml:"branches"`
+		} `yaml:"workflow_run"`
+	} `yaml:"on"`
 	Permissions map[string]string `yaml:"permissions"`
 	Concurrency struct {
 		Group            string `yaml:"group"`
 		CancelInProgress bool   `yaml:"cancel-in-progress"`
 	} `yaml:"concurrency"`
 	Jobs map[string]struct {
+		If          string            `yaml:"if"`
 		Needs       string            `yaml:"needs"`
 		Permissions map[string]string `yaml:"permissions"`
 		Environment struct {
@@ -350,6 +378,15 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 	build, ok := workflow.Jobs["build"]
 	if !ok {
 		t.Fatal("Pages workflow must define a build job")
+	}
+	trigger := workflow.On.WorkflowRun
+	if !slices.Equal(trigger.Workflows, []string{"release"}) ||
+		!slices.Equal(trigger.Types, []string{"completed"}) ||
+		!slices.Equal(trigger.Branches, []string{"main"}) {
+		t.Errorf("Pages must refresh after the release workflow completes on main, got %+v", trigger)
+	}
+	if build.If != "github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'" {
+		t.Errorf("Pages must preserve push/manual builds and skip unsuccessful releases, got %q", build.If)
 	}
 	deploy, ok := workflow.Jobs["deploy"]
 	if !ok {

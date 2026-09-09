@@ -154,6 +154,22 @@ in the HTML so nobody assumes clickjacking protection is in place.
 
 ## Suggested quick wins
 
-Items 1–5 are done. Item 6 remains a small, high-value change that fits the
-existing architecture and test setup (`site_test.go` contract tests,
-`node --test site/script.test.js` for the script).
+Items 1–10 are done.
+
+## Follow-up review — September 2026
+
+The following findings are now fixed:
+
+- Constrained the inner hero grid so its text and command cannot widen the page
+  on phones, and moved the mobile navigation breakpoint to 800px. Chromium
+  checks covered all five install panels at nine widths from 320px to 1440px.
+- Lightened dim text to `#a08cbd`, giving at least 5.96:1 contrast against the
+  site's solid backgrounds. Updated and regenerated the Open Graph card too.
+- Replaced the first copyable decode example with a complete sample JWT. A Go
+  test decodes it and checks its demo claims. Other examples explicitly ask
+  readers to substitute their tokens and key paths.
+- Labeled shell-specific examples and added Linux/Wayland and PowerShell
+  clipboard commands plus a PowerShell environment-variable example.
+- Added a Pages trigger after successful release workflows on `main`. Version
+  metadata still resolves GitHub's latest release, so publishing a prerelease
+  or an older version cannot replace it. Failed release workflows skip the build.
