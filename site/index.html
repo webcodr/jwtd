@@ -30,6 +30,10 @@
     />
     <meta name="twitter:image" content="https://jwtd.sh/og.png" />
     <meta
+      name="twitter:image:alt"
+      content="jwtd terminal output: decode JWTs, verify JWS signatures, and decrypt JWEs"
+    />
+    <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests"
     />
@@ -133,30 +137,31 @@
           </div>
         </div>
 
-        <div class="specimen" aria-label="Example jwtd terminal output">
-          <div class="specimen-caption">
+        <figure class="specimen">
+          <figcaption class="specimen-caption">
             <p>jwtd - token inspection</p>
             <p>example output</p>
-          </div>
+          </figcaption>
           <pre><code><span class="prompt">$</span> jwtd eyJhbGciOiJSUzI1NiIs...
 
-<span class="token-label">Header:</span>
+<span class="token-label">Header</span>
 {
   <span class="token-key">"alg"</span>: <span class="token-string">"RS256"</span>,
   <span class="token-key">"typ"</span>: <span class="token-string">"JWT"</span>
 }
 
-<span class="token-label">Payload:</span>
+<span class="token-label">Payload</span>
 {
-  <span class="token-key">"sub"</span>: <span class="token-string">"user_2048"</span>,
   <span class="token-key">"admin"</span>: <span class="token-boolean">true</span>,
-  <span class="token-key">"iat"</span>: <span class="token-string">"2026-07-25T09:45:00Z (1784972700)"</span>,
   <span class="token-key">"exp"</span>: <span class="token-string">"2026-07-25T10:00:00Z (1784973600, expires in 15m)"</span>,
-  <span class="token-key">"note"</span>: <span class="token-null">null</span>
+  <span class="token-key">"iat"</span>: <span class="token-string">"2026-07-25T09:45:00Z (1784972700)"</span>,
+  <span class="token-key">"note"</span>: <span class="token-null">null</span>,
+  <span class="token-key">"sub"</span>: <span class="token-string">"user_2048"</span>
 }
 
-<span class="signature">Signature: eyJfX2p3dGRfXyI...</span></code></pre>
-        </div>
+<span class="token-label">Signature</span>
+<span class="signature">Xb9pT2mQeL4vJwZs0nRkH7yF3cA...</span></code></pre>
+        </figure>
       </section>
 
       <section
@@ -568,15 +573,32 @@ scoop install jwtd</code></pre>
               nix run.
             </p>
           </div>
-          <div class="command-block">
-            <pre><code id="nix-command">nix profile install github:webcodr/jwtd</code></pre>
-            <div class="command-actions">
-              <button type="button" data-copy-target="nix-command">Copy</button
-              ><span
-                class="copy-feedback"
-                data-copy-feedback
-                aria-live="polite"
-              ></span>
+          <div class="install-methods">
+            <div class="command-block">
+              <p>Install into your profile</p>
+              <pre><code id="nix-command">nix profile install github:webcodr/jwtd</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="nix-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+            <div class="command-block">
+              <p>Run without installing</p>
+              <pre><code id="nix-run-command">nix run github:webcodr/jwtd -- eyJhbGciOiJIUzI1NiIs...</code></pre>
+              <div class="command-actions">
+                <button type="button" data-copy-target="nix-run-command">
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
             </div>
           </div>
         </div>
@@ -774,29 +796,6 @@ scoop install jwtd</code></pre>
           <article>
             <div class="usage-number">08</div>
             <div class="usage-copy">
-              <h3>Verify with a raw HMAC secret</h3>
-              <p>
-                Prefix the key with <code>raw:</code> to pass a literal
-                symmetric secret instead of a file, so an HS256 token verifies
-                without touching disk.
-              </p>
-            </div>
-            <div class="command-block">
-              <pre><code id="raw-secret-command">jwtd --key raw:my-hmac-secret eyJhbGciOiJIUzI1NiIs...</code></pre>
-              <div class="command-actions">
-                <button type="button" data-copy-target="raw-secret-command">
-                  Copy</button
-                ><span
-                  class="copy-feedback"
-                  data-copy-feedback
-                  aria-live="polite"
-                ></span>
-              </div>
-            </div>
-          </article>
-          <article>
-            <div class="usage-number">09</div>
-            <div class="usage-copy">
               <h3>Emit machine-readable JSON</h3>
               <p>
                 Add <code>--json</code> for a single object per token, with exact
@@ -818,7 +817,7 @@ scoop install jwtd</code></pre>
             </div>
           </article>
           <article>
-            <div class="usage-number">10</div>
+            <div class="usage-number">09</div>
             <div class="usage-copy">
               <h3>Control color output</h3>
               <p>
@@ -991,7 +990,7 @@ scoop install jwtd</code></pre>
           </p>
           <a
             class="text-link"
-            href="https://github.com/webcodr/jwtd#installation"
+            href="https://github.com/webcodr/jwtd#from-releases"
             >View verification instructions</a
           >
         </div>
@@ -1079,7 +1078,10 @@ scoop install jwtd</code></pre>
               <code>signatureValid</code> when a key is given. Numbers are exact
               and timestamps stay raw, so it pipes cleanly into
               <code>jq</code>. An invalid signature still prints and exits
-              nonzero.
+              nonzero. A JWE emits <code>protectedHeader</code> plus either
+              the encrypted part sizes or, with a key,
+              <code>decryptedPayload</code>; a nested token inside it is
+              reported as its compact string rather than decoded.
             </p>
           </details>
         </div>

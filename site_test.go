@@ -51,30 +51,32 @@ func TestWebsiteContentContract(t *testing.T) {
 	index := readWebsiteFile(t, "site", "index.html")
 	normalizedIndex := normalizeMarkup(index)
 	for label, required := range map[string]string{
-		"canonical URL":    `<link rel="canonical" href="https://jwtd.sh/">`,
-		"content security": `default-src 'none'`,
-		"skip link":        `href="#main-content"`,
-		"header landmark":  `<header class="site-header">`,
-		"main landmark":    `<main id="main-content">`,
-		"output specimen":  `<div class="specimen" aria-label="Example jwtd terminal output">`,
-		"hero install":     `<p class="hero-install-method" id="hero-install-method">`,
-		"capabilities":     `id="capabilities"`,
-		"installation":     `id="install"`,
-		"usage":            `id="usage"`,
-		"key formats":      `id="key-formats"`,
-		"release security": `id="release-security"`,
-		"footer landmark":  `<footer class="site-footer">`,
-		"local stylesheet": `href="/styles.css"`,
-		"local script":     `src="/script.js"`,
-		"local favicon":    `href="/favicon.svg"`,
-		"structured data":  `<script type="application/ld+json">`,
-		"Open Graph image": `<meta property="og:image" content="https://jwtd.sh/og.png">`,
-		"Twitter card":     `<meta name="twitter:card" content="summary_large_image">`,
-		"FAQ accordion":    `<summary><h3>Does jwtd send my token anywhere?</h3></summary>`,
-		"release version":  `<p class="panel-kicker">Latest release: <a href="https://github.com/webcodr/jwtd/releases/latest">VERSION</a></p>`,
-		"install controls": `data-install-tabs`,
-		"install methods":  `data-install-method="macos"`,
-		"install panels":   `data-install-panel="macos"`,
+		"canonical URL":     `<link rel="canonical" href="https://jwtd.sh/">`,
+		"content security":  `default-src 'none'`,
+		"skip link":         `href="#main-content"`,
+		"header landmark":   `<header class="site-header">`,
+		"main landmark":     `<main id="main-content">`,
+		"output specimen":   `<figure class="specimen"><figcaption class="specimen-caption">`,
+		"Twitter image alt": `<meta name="twitter:image:alt" content="jwtd terminal output: decode JWTs, verify JWS signatures, and decrypt JWEs">`,
+		"verification link": `href="https://github.com/webcodr/jwtd#from-releases"`,
+		"hero install":      `<p class="hero-install-method" id="hero-install-method">`,
+		"capabilities":      `id="capabilities"`,
+		"installation":      `id="install"`,
+		"usage":             `id="usage"`,
+		"key formats":       `id="key-formats"`,
+		"release security":  `id="release-security"`,
+		"footer landmark":   `<footer class="site-footer">`,
+		"local stylesheet":  `href="/styles.css"`,
+		"local script":      `src="/script.js"`,
+		"local favicon":     `href="/favicon.svg"`,
+		"structured data":   `<script type="application/ld+json">`,
+		"Open Graph image":  `<meta property="og:image" content="https://jwtd.sh/og.png">`,
+		"Twitter card":      `<meta name="twitter:card" content="summary_large_image">`,
+		"FAQ accordion":     `<summary><h3>Does jwtd send my token anywhere?</h3></summary>`,
+		"release version":   `<p class="panel-kicker">Latest release: <a href="https://github.com/webcodr/jwtd/releases/latest">VERSION</a></p>`,
+		"install controls":  `data-install-tabs`,
+		"install methods":   `data-install-method="macos"`,
+		"install panels":    `data-install-panel="macos"`,
 	} {
 		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
 			t.Errorf("site/index.html is missing %s marker %q", label, required)
@@ -403,6 +405,12 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 	}
 	if !strings.Contains(bakeScript, "gh release view") || !strings.Contains(bakeScript, "VERSION") {
 		t.Errorf("Pages build job must bake the latest release version into the site, got %q", bakeScript)
+	}
+	if !strings.Contains(bakeScript, "git log -1 --format=%cs") || !strings.Contains(bakeScript, "LASTMOD") {
+		t.Errorf("Pages build job must bake the deployed commit date into the sitemap, got %q", bakeScript)
+	}
+	if sitemap := readWebsiteFile(t, "site", "sitemap.xml"); !strings.Contains(sitemap, "<lastmod>LASTMOD</lastmod>") {
+		t.Error("site/sitemap.xml must carry the LASTMOD placeholder the Pages build fills in")
 	}
 
 	var deploymentID string

@@ -454,6 +454,7 @@ li > code {
 .specimen {
   position: relative;
   min-width: 0;
+  margin: 0;
   border: 1px solid var(--border);
   background: var(--background-deep);
 }

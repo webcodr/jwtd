@@ -30,6 +30,12 @@ jobs:
         run: |
           version="$(gh release view --json tagName --jq .tagName)"
           sed -i "s/VERSION/${version}/g" site/index.html
+      # The sitemap's lastmod is the date of the commit being deployed, so it
+      # moves with the site instead of freezing at whatever date was typed in.
+      - name: Bake the deployed commit date into the sitemap
+        run: |
+          lastmod="$(git log -1 --format=%cs)"
+          sed -i "s/LASTMOD/${lastmod}/" site/sitemap.xml
       # The installers live at the repository root as the single source of
       # truth and are copied into the Pages artifact so that
       # https://jwtd.sh/install.sh and /install.ps1 serve them. They are never
