@@ -406,7 +406,7 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 		"actions/checkout":              "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
 		"actions/configure-pages":       "actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d",
 		"actions/upload-pages-artifact": "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
-		"actions/deploy-pages":          "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
+		"actions/deploy-pages":          "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
 	}
 	seen := make(map[string]string)
 	shaPinned := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
@@ -464,8 +464,8 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 func TestWebsiteToolingContract(t *testing.T) {
 	testWorkflow := readWebsiteFile(t, ".github", "workflows", "test.yml")
 	for label, required := range map[string]string{
-		"pinned Node setup":       "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-		"Node version":            "node-version: 26.4.0",
+		"pinned Node setup":       "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+		"Node version":            "node-version: 26.13.1",
 		"JavaScript syntax check": "node --check site/script.js",
 		"JavaScript unit tests":   "node --test site/script.test.js",
 	} {
