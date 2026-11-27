@@ -1004,3 +1004,43 @@ func TestDecodeAndPrintJWE_NestedJWEFallsBackWhenKeyDoesNotFit(t *testing.T) {
 	output := stripANSI(buf.String())
 	assertOutputContains(t, output, "nested JWE", "A256KW", "provide a decryption key")
 }
+
+func TestDecodeAndPrintJWE_JWKSetDisambiguatesByUseAndAlg(t *testing.T) {
+	sigKey := generateRSAKey(t)
+	encKey := generateDistinctRSAKey(t)
+	jwksPath := writeJWKSetFile(t, "jwks.json",
+		jose.JSONWebKey{Key: sigKey, KeyID: "shared-kid", Use: "sig", Algorithm: "RS256"},
+		jose.JSONWebKey{Key: encKey, KeyID: "shared-kid", Use: "enc", Algorithm: "RSA-OAEP-256"},
+	)
+
+	enc, err := jose.NewEncrypter(
+		jose.A256GCM,
+		jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: &encKey.PublicKey, KeyID: "shared-kid"},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating encrypter: %v", err)
+	}
+	jwe, err := enc.Encrypt([]byte(`{"sub":"jwe-disambiguated"}`))
+	if err != nil {
+		t.Fatalf("encrypting: %v", err)
+	}
+	token, err := jwe.CompactSerialize()
+	if err != nil {
+		t.Fatalf("serializing JWE: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := decodeAndPrintJWE(&buf, token, jwksPath); err != nil {
+		t.Fatalf("human decode failed: %v", err)
+	}
+	assertOutputContains(t, buf.String(), "Decrypted Payload", "jwe-disambiguated")
+
+	var jsonBuf bytes.Buffer
+	if err := decodeJWEJSON(&jsonBuf, token, jwksPath); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if !strings.Contains(jsonBuf.String(), "jwe-disambiguated") {
+		t.Errorf("json output missing decrypted payload:\n%s", jsonBuf.String())
+	}
+}

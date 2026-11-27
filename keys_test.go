@@ -903,3 +903,110 @@ func TestLoadKey_JWKFromBase64(t *testing.T) {
 		t.Error("loaded key from base64 JWK does not match original")
 	}
 }
+
+func TestLoadKeyForToken_JWKSetDisambiguatesByUseAndAlg(t *testing.T) {
+	keySig := generateRSAKey(t)
+	keyEnc := generateDistinctRSAKey(t)
+	keyOther := generateDistinctRSAKey(t)
+
+	t.Run("shared kid disambiguates by use", func(t *testing.T) {
+		path := writeJWKSetFile(t, "jwks.json",
+			jose.JSONWebKey{Key: &keyEnc.PublicKey, KeyID: "shared", Use: "enc"},
+			jose.JSONWebKey{Key: &keySig.PublicKey, KeyID: "shared", Use: "sig"},
+		)
+
+		loadedSig, err := loadKeyForToken(path, keySelector{kid: "shared", use: "sig", alg: "RS256"})
+		if err != nil {
+			t.Fatalf("loading sig key: %v", err)
+		}
+		if loadedSig.(*rsa.PublicKey).N.Cmp(keySig.PublicKey.N) != 0 {
+			t.Error("expected sig key when use=sig")
+		}
+
+		loadedEnc, err := loadKeyForToken(path, keySelector{kid: "shared", use: "enc", alg: "RSA-OAEP-256"})
+		if err != nil {
+			t.Fatalf("loading enc key: %v", err)
+		}
+		if loadedEnc.(*rsa.PublicKey).N.Cmp(keyEnc.PublicKey.N) != 0 {
+			t.Error("expected enc key when use=enc")
+		}
+	})
+
+	t.Run("shared kid disambiguates by alg", func(t *testing.T) {
+		path := writeJWKSetFile(t, "jwks.json",
+			jose.JSONWebKey{Key: &keyOther.PublicKey, KeyID: "shared", Use: "sig", Algorithm: "PS256"},
+			jose.JSONWebKey{Key: &keySig.PublicKey, KeyID: "shared", Use: "sig", Algorithm: "RS256"},
+		)
+
+		loaded, err := loadKeyForToken(path, keySelector{kid: "shared", use: "sig", alg: "RS256"})
+		if err != nil {
+			t.Fatalf("loading key: %v", err)
+		}
+		if loaded.(*rsa.PublicKey).N.Cmp(keySig.PublicKey.N) != 0 {
+			t.Error("expected RS256 key when alg=RS256")
+		}
+	})
+
+	t.Run("omitted use or alg beats conflicting value", func(t *testing.T) {
+		path := writeJWKSetFile(t, "jwks.json",
+			jose.JSONWebKey{Key: &keyEnc.PublicKey, KeyID: "shared", Use: "enc", Algorithm: "RSA-OAEP-256"},
+			jose.JSONWebKey{Key: &keySig.PublicKey, KeyID: "shared"},
+		)
+
+		loaded, err := loadKeyForToken(path, keySelector{kid: "shared", use: "sig", alg: "RS256"})
+		if err != nil {
+			t.Fatalf("loading key: %v", err)
+		}
+		if loaded.(*rsa.PublicKey).N.Cmp(keySig.PublicKey.N) != 0 {
+			t.Error("expected entry omitting use/alg to beat conflicting entry")
+		}
+	})
+
+	t.Run("empty kid prefers matching use and alg", func(t *testing.T) {
+		path := writeJWKSetFile(t, "jwks.json",
+			jose.JSONWebKey{Key: &keyEnc.PublicKey, KeyID: "k-enc", Use: "enc", Algorithm: "RSA-OAEP-256"},
+			jose.JSONWebKey{Key: &keySig.PublicKey, KeyID: "k-sig", Use: "sig", Algorithm: "RS256"},
+		)
+
+		loaded, err := loadKeyForToken(path, keySelector{use: "sig", alg: "RS256"})
+		if err != nil {
+			t.Fatalf("loading key: %v", err)
+		}
+		if loaded.(*rsa.PublicKey).N.Cmp(keySig.PublicKey.N) != 0 {
+			t.Error("expected sig key even without kid")
+		}
+	})
+
+	t.Run("all conflicting falls back to first candidate", func(t *testing.T) {
+		path := writeJWKSetFile(t, "jwks.json",
+			jose.JSONWebKey{Key: &keyEnc.PublicKey, KeyID: "shared", Use: "enc", Algorithm: "RSA-OAEP"},
+			jose.JSONWebKey{Key: &keyOther.PublicKey, KeyID: "shared", Use: "enc", Algorithm: "RSA-OAEP-256"},
+		)
+
+		loaded, err := loadKeyForToken(path, keySelector{kid: "shared", use: "sig", alg: "RS256"})
+		if err != nil {
+			t.Fatalf("loading key: %v", err)
+		}
+		if loaded.(*rsa.PublicKey).N.Cmp(keyEnc.PublicKey.N) != 0 {
+			t.Error("expected deterministic fallback to first candidate when none match")
+		}
+	})
+
+	t.Run("unknown kid still fails closed", func(t *testing.T) {
+		path := writeJWKSetFile(t, "jwks.json",
+			jose.JSONWebKey{Key: &keySig.PublicKey, KeyID: "k-sig", Use: "sig", Algorithm: "RS256"},
+		)
+
+		if _, err := loadKeyForToken(path, keySelector{kid: "missing", use: "sig", alg: "RS256"}); !errors.Is(err, errKIDNotFound) {
+			t.Fatalf("expected errKIDNotFound, got %v", err)
+		}
+	})
+
+	t.Run("empty oct still fails closed when use and alg match", func(t *testing.T) {
+		path := writeTextKeyFile(t, "oct.jwk", `{"keys":[{"kty":"oct","kid":"a","use":"sig","alg":"HS256","k":""}]}`)
+
+		if _, err := loadKeyForToken(path, keySelector{kid: "a", use: "sig", alg: "HS256"}); !errors.Is(err, errEmptyKey) {
+			t.Fatalf("expected errEmptyKey, got %v", err)
+		}
+	})
+}

@@ -8,6 +8,8 @@ wins to larger additions and deliberate scope expansions.
 
 ## High-impact daily-driver ergonomics (low effort)
 
+> Status: items 1–5 are implemented.
+
 ### 1. Strip `Authorization: Bearer ` prefix and surrounding quotes
 
 `main.go` (`sanitizeToken`)

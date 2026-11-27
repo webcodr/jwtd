@@ -13,7 +13,11 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
@@ -54,9 +58,17 @@ func newRootCommand() *cobra.Command {
 	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification: a PEM/DER/JWK file or inline base64, hmac:<file> for a symmetric secret file, or raw:<secret> for a literal one (inline values are visible to other local users in the process list, so prefer a file or JWTD_KEY)")
 	rootCmd.Flags().Bool("json", false, "emit machine-readable JSON instead of colorized sections")
 	rootCmd.Flags().String("color", "auto", "colorize output: auto (color only on a TTY), always, or never")
+	rootCmd.Flags().BoolP("quiet", "q", false, "suppress standard output and only report status via exit code")
 	rootCmd.Flags().Bool("verify-claims", false, "validate the temporal claims (exp, nbf) and exit nonzero if the token is expired or not yet valid")
 	rootCmd.Flags().String("aud", "", "require this audience in the aud claim (implies --verify-claims)")
 	rootCmd.Flags().String("iss", "", "require this issuer in the iss claim (implies --verify-claims)")
+	rootCmd.Flags().String("sub", "", "require this subject in the sub claim (implies --verify-claims)")
+	rootCmd.Flags().Duration("leeway", 0, "clock-skew leeway for exp/nbf validation (e.g. 30s, 1m; implies --verify-claims)")
+	rootCmd.Flags().Bool("require-exp", false, "require the exp claim to be present (implies --verify-claims)")
+	rootCmd.Flags().String("alg", "", "require this exact alg header value (fails closed on mismatch for both JWT and JWE)")
+	rootCmd.Flags().String("at", "", "evaluate timestamps and claim validity at this time (RFC3339 or Unix seconds)")
+	rootCmd.Flags().Bool("local", false, "display formatted timestamps in the local timezone instead of UTC")
+	rootCmd.Flags().String("tz", "", "display formatted timestamps in an IANA timezone (e.g. Europe/Berlin, America/New_York)")
 	return rootCmd
 }
 
@@ -75,6 +87,46 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	quiet, _ := cmd.Flags().GetBool("quiet")
+	verifyClaimsFlag, _ := cmd.Flags().GetBool("verify-claims")
+	aud, _ := cmd.Flags().GetString("aud")
+	iss, _ := cmd.Flags().GetString("iss")
+	sub, _ := cmd.Flags().GetString("sub")
+	leeway, _ := cmd.Flags().GetDuration("leeway")
+	if leeway < 0 {
+		return fmt.Errorf("invalid --leeway value %v: must not be negative", leeway)
+	}
+	requireExp, _ := cmd.Flags().GetBool("require-exp")
+	expectedAlg, _ := cmd.Flags().GetString("alg")
+	atStr, _ := cmd.Flags().GetString("at")
+	localTZ, _ := cmd.Flags().GetBool("local")
+	tzName, _ := cmd.Flags().GetString("tz")
+
+	loc, err := resolveDisplayLocation(localTZ, tzName)
+	if err != nil {
+		return err
+	}
+
+	var hasAt bool
+	var atTime time.Time
+	if atStr != "" {
+		atTime, err = parseAtTime(atStr)
+		if err != nil {
+			return err
+		}
+		hasAt = true
+	}
+
+	prevLoc := displayLocation
+	displayLocation = loc
+	defer func() { displayLocation = prevLoc }()
+
+	if hasAt {
+		prevNow := timeNow
+		timeNow = func() time.Time { return atTime }
+		defer func() { timeNow = prevNow }()
+	}
+
 	token, err := readToken(args)
 	if err != nil {
 		return err
@@ -89,27 +141,91 @@ func run(cmd *cobra.Command, args []string) error {
 		printKeyInterpretation(cmd.ErrOrStderr(), keyStr, fromFlag)
 	}
 
-	verifyClaimsFlag, _ := cmd.Flags().GetBool("verify-claims")
-	aud, _ := cmd.Flags().GetString("aud")
-	iss, _ := cmd.Flags().GetString("iss")
-	checks := claimChecks{verify: verifyClaimsFlag, audience: aud, issuer: iss}
+	checks := claimChecks{
+		verify:     verifyClaimsFlag,
+		audience:   aud,
+		issuer:     iss,
+		subject:    sub,
+		leeway:     leeway,
+		requireExp: requireExp,
+	}
 
 	w := cmd.OutOrStdout()
+	if quiet {
+		w = io.Discard
+	}
 
 	if isJWE(token) {
 		if checks.requested() {
-			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Note: claim validation (--verify-claims/--aud/--iss) applies to JWTs only and is skipped for JWE.")
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Note: claim validation (--verify-claims/--aud/--iss/--sub/--leeway/--require-exp) applies to JWTs only and is skipped for JWE.")
+		}
+		jwe, header, err := parseJWE(token)
+		if err != nil {
+			return err
+		}
+		alg, _ := header["alg"].(string)
+		if err := checkExpectedAlg(alg, expectedAlg); err != nil {
+			return err
 		}
 		if jsonOut {
-			return decodeJWEJSON(w, token, keyStr)
+			return decodeParsedJWEJSON(w, token, jwe, header, keyStr)
 		}
-		return decodeAndPrintJWE(w, token, keyStr)
+		return decodeParsedJWEHuman(w, token, jwe, header, keyStr)
 	}
 
-	if jsonOut {
-		return decodeJWTJSON(w, token, keyStr, checks)
+	p, err := parseUnverifiedJWT(token)
+	if err != nil {
+		return err
 	}
-	return decodeJWTHuman(w, token, keyStr, checks)
+	if err := checkExpectedAlg(p.method.Alg(), expectedAlg); err != nil {
+		return err
+	}
+	if jsonOut {
+		return decodeParsedJWTJSON(w, p, keyStr, checks)
+	}
+	return decodeParsedJWTHuman(w, p, keyStr, checks)
+}
+
+func parseAtTime(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		rt, ok := representableTime(t)
+		if !ok {
+			return time.Time{}, fmt.Errorf("invalid --at value %q: timestamp out of representable range", s)
+		}
+		return rt, nil
+	}
+	if sec, err := strconv.ParseInt(s, 10, 64); err == nil {
+		rt, ok := representableTime(time.Unix(sec, 0))
+		if !ok {
+			return time.Time{}, fmt.Errorf("invalid --at value %q: timestamp out of representable range", s)
+		}
+		return rt, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid --at value %q: expected RFC3339 timestamp or Unix seconds", s)
+}
+
+func resolveDisplayLocation(local bool, tz string) (*time.Location, error) {
+	if local && tz != "" {
+		return nil, errors.New("--local and --tz cannot be used together")
+	}
+	if local {
+		return time.Local, nil
+	}
+	if tz != "" {
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --tz value %q: %w", tz, err)
+		}
+		return loc, nil
+	}
+	return time.UTC, nil
+}
+
+func checkExpectedAlg(actual, expected string) error {
+	if expected != "" && actual != expected {
+		return fmt.Errorf("token algorithm %q does not match expected --alg %q", actual, expected)
+	}
+	return nil
 }
 
 // decodeJWTHuman prints the decoded JWT and, when claim validation was
@@ -122,7 +238,10 @@ func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) er
 	if err != nil {
 		return err
 	}
+	return decodeParsedJWTHuman(w, p, keyStr, checks)
+}
 
+func decodeParsedJWTHuman(w io.Writer, p *parsedJWT, keyStr string, checks claimChecks) error {
 	derr := printParsedJWT(w, p, keyStr)
 	if derr != nil && !errors.Is(derr, errInvalidSignature) {
 		return derr
@@ -242,11 +361,43 @@ func readToken(args []string) (string, error) {
 	return readInteractive()
 }
 
-// sanitizeToken removes all whitespace from a token, so tokens that were
-// wrapped across lines when copied from logs or emails still parse. Tokens
-// never contain whitespace themselves.
+// sanitizeToken strips an optional HTTP "Authorization:" header name,
+// "Bearer" scheme prefix, surrounding matching quotes, and all whitespace from
+// a token, so tokens copied from DevTools, curl output, logs, or emails still
+// parse. Tokens never contain whitespace themselves.
 func sanitizeToken(s string) string {
+	s = stripMatchingQuotes(strings.TrimSpace(s))
+
+	hadAuthHeader := false
+	const authPrefix = "authorization"
+	if len(s) >= len(authPrefix) && strings.EqualFold(s[:len(authPrefix)], authPrefix) {
+		rest := strings.TrimLeft(s[len(authPrefix):], " \t")
+		if afterColon, ok := strings.CutPrefix(rest, ":"); ok {
+			hadAuthHeader = true
+			s = stripMatchingQuotes(strings.TrimSpace(afterColon))
+		}
+	}
+
+	const bearerPrefix = "bearer"
+	if len(s) >= len(bearerPrefix) && strings.EqualFold(s[:len(bearerPrefix)], bearerPrefix) {
+		afterBearer := s[len(bearerPrefix):]
+		if afterBearer == "" {
+			if hadAuthHeader {
+				return ""
+			}
+		} else if r, _ := utf8.DecodeRuneInString(afterBearer); unicode.IsSpace(r) {
+			s = stripMatchingQuotes(strings.TrimSpace(afterBearer))
+		}
+	}
+
 	return strings.Join(strings.Fields(s), "")
+}
+
+func stripMatchingQuotes(s string) string {
+	if len(s) >= 2 && ((s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'')) {
+		return strings.TrimSpace(s[1 : len(s)-1])
+	}
+	return s
 }
 
 // readInteractive prompts the user for a token using readline.
@@ -297,7 +448,7 @@ func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
 		if err != nil {
 			return fmt.Errorf("signature verification: %w", err)
 		}
-		loaded, err := loadKeyForKID(keyStr, kid)
+		loaded, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
 		if err != nil {
 			return fmt.Errorf("signature verification: error loading key: %w", err)
 		}
@@ -465,7 +616,7 @@ func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, 
 	if err != nil {
 		return false, nil, err
 	}
-	key, err := loadKeyForKID(keyStr, kid)
+	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
 	if err != nil {
 		return false, nil, fmt.Errorf("error loading key: %w", err)
 	}

@@ -35,10 +35,19 @@ func finalKeyError(err error) bool {
 	return errors.Is(err, errKIDNotFound) || errors.Is(err, errEmptyKey)
 }
 
-// loadKeyForKID resolves a key argument, selecting the entry that matches kid
-// when the material is a JWK Set. kid is the token's "kid" header ("" when the
-// token carries none); it only affects JWK Set selection and is ignored for
-// every other key form.
+// keySelector identifies which entry of a JWK Set matches the token being
+// verified or decrypted. kid is the token's "kid" header ("" when absent), use
+// is the expected JWK "use" ("sig" for JWS, "enc" for JWE), and alg is the
+// token's "alg" header. Only JWK Set selection consults this; every other key
+// form ignores it.
+type keySelector struct {
+	kid string
+	use string
+	alg string
+}
+
+// loadKeyForToken resolves a key argument, selecting the entry that matches
+// sel when the material is a JWK Set.
 //
 // Symmetric secrets must be requested explicitly, with "raw:<secret>" for a
 // literal or "hmac:<file>" for a file of secret bytes. Everything else must
@@ -50,7 +59,7 @@ func finalKeyError(err error) bool {
 // public key is a published value, so anyone who knew its bytes could sign an
 // HS256 token that verified against it. Unparseable material is now an error,
 // so the failure direction is always closed no matter what format shows up.
-func loadKeyForKID(keyStr, kid string) (any, error) {
+func loadKeyForToken(keyStr string, sel keySelector) (any, error) {
 	// The precedence lives in classifyKeyArg and is applied here, so the
 	// reading the CLI reports is by construction the reading that happens.
 	switch classifyKeyArg(keyStr) {
@@ -59,9 +68,9 @@ func loadKeyForKID(keyStr, kid string) (any, error) {
 	case keySourceSecretFile:
 		return loadSymmetricKeyFile(strings.TrimPrefix(keyStr, "hmac:"))
 	case keySourceFile:
-		return loadKeyFile(keyStr, kid)
+		return loadKeyFile(keyStr, sel)
 	case keySourceBase64:
-		return loadInlineKey(keyStr, kid)
+		return loadInlineKey(keyStr, sel)
 	case keySourceDirectory:
 		return nil, fmt.Errorf("key path %q is a directory, not a key file", keyStr)
 	default:
@@ -88,7 +97,7 @@ func loadSymmetricKeyFile(path string) (any, error) {
 // loadKeyFile parses structured key material from a file, falling back to
 // base64-decoding its contents so a text file holding encoded key material
 // means the same key as that material passed inline.
-func loadKeyFile(path, kid string) (any, error) {
+func loadKeyFile(path string, sel keySelector) (any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading key file %q: %w", path, err)
@@ -97,7 +106,7 @@ func loadKeyFile(path, kid string) (any, error) {
 		return nil, fmt.Errorf("key file %q is empty", path)
 	}
 
-	key, err := parseKeyData(data, kid)
+	key, err := parseKeyData(data, sel)
 	if err == nil {
 		return key, nil
 	}
@@ -110,7 +119,7 @@ func loadKeyFile(path, kid string) (any, error) {
 
 	if isTextKey(data) {
 		if decoded, ok := decodeBase64Key(bytes.TrimRight(data, "\r\n")); ok {
-			key, err := parseKeyData(decoded, kid)
+			key, err := parseKeyData(decoded, sel)
 			if err == nil {
 				return key, nil
 			}
@@ -124,11 +133,11 @@ func loadKeyFile(path, kid string) (any, error) {
 
 // loadInlineKey parses base64/base64url key material given directly on the
 // command line or in JWTD_KEY.
-func loadInlineKey(keyStr, kid string) (any, error) {
+func loadInlineKey(keyStr string, sel keySelector) (any, error) {
 	// classifyKeyArg only returns keySourceBase64 after decoding this same
 	// argument, so the decode cannot fail here.
 	decoded, _ := decodeBase64Key([]byte(keyStr))
-	key, err := parseKeyData(decoded, kid)
+	key, err := parseKeyData(decoded, sel)
 	if err != nil {
 		if finalKeyError(err) {
 			return nil, err
@@ -291,11 +300,11 @@ func isTextKey(data []byte) bool {
 }
 
 // parseKeyData attempts to parse key data as JWK, JWK Set, PEM, or DER encoded
-// key material. Supports both private and public keys. For a JWK Set, kid
-// selects the matching key ("" falls back to the first key).
-func parseKeyData(data []byte, kid string) (any, error) {
+// key material. Supports both private and public keys. For a JWK Set, sel
+// selects the matching key (kid first, then use/alg disambiguation).
+func parseKeyData(data []byte, sel keySelector) (any, error) {
 	// Try JWK / JWK Set (JSON-based formats).
-	if key, err := parseJWK(data, kid); err == nil {
+	if key, err := parseJWK(data, sel); err == nil {
 		return key, nil
 	} else if finalKeyError(err) {
 		// The data is valid JWK material: the kid simply did not match, or the
@@ -375,12 +384,10 @@ func parseDERKey(der []byte, blockType string) (any, error) {
 }
 
 // parseJWK attempts to parse data as a JWK (JSON Web Key) or JWK Set. For a JWK
-// Set, kid selects the entry whose "kid" matches the token; when the token
-// carries no kid ("") the first key is used, preserving the historical
-// single-key behavior. A kid that matches nothing is an error rather than a
-// silent fallback to the wrong key, so verification never runs against a key
-// the token did not name.
-func parseJWK(data []byte, kid string) (any, error) {
+// Set, sel.kid selects the entries whose "kid" matches the token (a kid that
+// matches nothing is an error rather than a silent fallback), and sel.use /
+// sel.alg disambiguate when multiple entries remain.
+func parseJWK(data []byte, sel keySelector) (any, error) {
 	// Try single JWK.
 	var jwk jose.JSONWebKey
 	if err := json.Unmarshal(data, &jwk); err == nil && jwk.Key != nil {
@@ -390,19 +397,53 @@ func parseJWK(data []byte, kid string) (any, error) {
 	// Try JWK Set ({"keys": [...]}).
 	var jwks jose.JSONWebKeySet
 	if err := json.Unmarshal(data, &jwks); err == nil && len(jwks.Keys) > 0 {
-		if kid != "" {
-			matches := jwks.Key(kid)
-			if len(matches) == 0 {
-				return nil, fmt.Errorf("%w (kid %q)", errKIDNotFound, kid)
+		candidates := jwks.Keys
+		if sel.kid != "" {
+			candidates = jwks.Key(sel.kid)
+			if len(candidates) == 0 {
+				return nil, fmt.Errorf("%w (kid %q)", errKIDNotFound, sel.kid)
 			}
-			// Multiple entries can share a kid (e.g. one per use/alg). The
-			// first match is deterministic and matches go-jose's own order.
-			return jwkKey(matches[0])
 		}
-		return jwkKey(jwks.Keys[0])
+		return jwkKey(selectJWK(candidates, sel))
 	}
 
 	return nil, fmt.Errorf("not a valid JWK or JWK Set")
+}
+
+// selectJWK picks the best-matching entry from candidates (already filtered by
+// kid when one was specified) by narrowing on use ("sig" / "enc") and then on
+// the token's alg.
+func selectJWK(candidates []jose.JSONWebKey, sel keySelector) jose.JSONWebKey {
+	candidates = narrowJWKs(candidates, sel.use, func(k jose.JSONWebKey) string { return k.Use })
+	candidates = narrowJWKs(candidates, sel.alg, func(k jose.JSONWebKey) string { return k.Algorithm })
+	return candidates[0]
+}
+
+// narrowJWKs filters keys by one optional metadata attribute (such as use or
+// alg) while preserving a deterministic fallback when only one key remains or
+// no entry matches. Exact matches win; otherwise entries that omit the
+// attribute are preferred over entries that explicitly carry a different one;
+// otherwise the input slice is returned unchanged.
+func narrowJWKs(keys []jose.JSONWebKey, want string, field func(jose.JSONWebKey) string) []jose.JSONWebKey {
+	if want == "" || len(keys) <= 1 {
+		return keys
+	}
+	var exact, compatible []jose.JSONWebKey
+	for _, k := range keys {
+		switch field(k) {
+		case want:
+			exact = append(exact, k)
+		case "":
+			compatible = append(compatible, k)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	if len(compatible) > 0 {
+		return compatible
+	}
+	return keys
 }
 
 // jwkKey unwraps a parsed JWK into the key it holds. An "oct" JWK carries a

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -20,6 +21,9 @@ func TestClaimChecks_Requested(t *testing.T) {
 		{"verify", claimChecks{verify: true}, true},
 		{"audience", claimChecks{audience: "api"}, true},
 		{"issuer", claimChecks{issuer: "iss"}, true},
+		{"subject", claimChecks{subject: "user-1"}, true},
+		{"leeway", claimChecks{leeway: 30 * time.Second}, true},
+		{"requireExp", claimChecks{requireExp: true}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -461,5 +465,98 @@ func TestTruncateClaimValue(t *testing.T) {
 	}
 	if short := truncateClaimValue("1758000000"); short != "1758000000" {
 		t.Errorf("a short value must be kept verbatim, got %q", short)
+	}
+}
+
+func TestValidateClaimsSet_SubjectLeewayAndRequireExp(t *testing.T) {
+	// now = 1000
+	pinTime(t, 1000)
+
+	tests := []struct {
+		name       string
+		claims     jwt.MapClaims
+		checks     claimChecks
+		wantValid  bool
+		wantReason []string
+	}{
+		{
+			name:      "subject match",
+			claims:    jwt.MapClaims{"sub": "user-42"},
+			checks:    claimChecks{subject: "user-42"},
+			wantValid: true,
+		},
+		{
+			name:       "subject mismatch",
+			claims:     jwt.MapClaims{"sub": "user-99"},
+			checks:     claimChecks{subject: "user-42"},
+			wantValid:  false,
+			wantReason: []string{"subject"},
+		},
+		{
+			name:       "subject missing",
+			claims:     jwt.MapClaims{"iss": "https://issuer.example"},
+			checks:     claimChecks{subject: "user-42"},
+			wantValid:  false,
+			wantReason: []string{"sub"},
+		},
+		{
+			name:      "expired within leeway passes",
+			claims:    jwt.MapClaims{"exp": json.Number("980")},
+			checks:    claimChecks{leeway: 30 * time.Second},
+			wantValid: true,
+		},
+		{
+			name:       "expired past leeway fails",
+			claims:     jwt.MapClaims{"exp": json.Number("950")},
+			checks:     claimChecks{leeway: 30 * time.Second},
+			wantValid:  false,
+			wantReason: []string{"expired"},
+		},
+		{
+			name:      "nbf within leeway passes",
+			claims:    jwt.MapClaims{"nbf": json.Number("1020")},
+			checks:    claimChecks{leeway: 30 * time.Second},
+			wantValid: true,
+		},
+		{
+			name:       "nbf past leeway fails",
+			claims:     jwt.MapClaims{"nbf": json.Number("1050")},
+			checks:     claimChecks{leeway: 30 * time.Second},
+			wantValid:  false,
+			wantReason: []string{"not valid yet"},
+		},
+		{
+			name:       "require-exp fails when exp is missing",
+			claims:     jwt.MapClaims{"sub": "user-42"},
+			checks:     claimChecks{requireExp: true},
+			wantValid:  false,
+			wantReason: []string{"exp"},
+		},
+		{
+			name:      "require-exp passes when exp is present and live",
+			claims:    jwt.MapClaims{"exp": json.Number("2000")},
+			checks:    claimChecks{requireExp: true},
+			wantValid: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			valid, reason := validateClaimsSet(tt.claims, tt.checks)
+			if valid != tt.wantValid {
+				t.Fatalf("valid = %v (reason %v), want %v", valid, reason, tt.wantValid)
+			}
+			if tt.wantValid {
+				if reason != nil {
+					t.Errorf("expected nil reason, got %v", reason)
+				}
+				return
+			}
+			for _, want := range tt.wantReason {
+				if !strings.Contains(reason.Error(), want) {
+					t.Errorf("reason %q missing %q", reason.Error(), want)
+				}
+			}
+		})
 	}
 }
