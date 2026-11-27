@@ -189,7 +189,7 @@ func run(cmd *cobra.Command, args []string) error {
 			return extractJWE(w, jwe, header, keys.decrypt, sel, jsonOut)
 		}
 		if jsonOut {
-			return decodeParsedJWEJSON(w, token, jwe, header, keys.decrypt)
+			return decodeLayerJSON(w, l, checks)
 		}
 		return decodeLayerHuman(w, l, checks)
 	}
@@ -209,7 +209,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return extractJWT(w, cmd.ErrOrStderr(), p, verifyKeyStr, checks, sel, jsonOut)
 	}
 	if jsonOut {
-		return decodeParsedJWTJSON(w, p, verifyKeyStr, checks)
+		return decodeLayerJSON(w, l, checks)
 	}
 	return decodeLayerHuman(w, l, checks)
 }

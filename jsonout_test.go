@@ -261,3 +261,77 @@ func TestBase64URLLenMatchesDecode(t *testing.T) {
 		}
 	}
 }
+
+func decodeLayerJSONMap(t *testing.T, token string, keys tokenKeys, checks claimChecks) (map[string]any, error) {
+	t.Helper()
+	l, err := openToken(token, keys)
+	if err != nil {
+		t.Fatalf("openToken: %v", err)
+	}
+	var buf bytes.Buffer
+	err = decodeLayerJSON(&buf, l, checks)
+	var out map[string]any
+	if derr := json.Unmarshal(buf.Bytes(), &out); derr != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", derr, buf.String())
+	}
+	return out, err
+}
+
+func TestDecodeJWEJSON_Nested(t *testing.T) {
+	token, recipientPath, issuerPub := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	out, err := decodeLayerJSONMap(t, token, tokenKeys{decrypt: recipientPath, verify: issuerPub}, claimChecks{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	nested, ok := out["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested = %v, want an object", out["nested"])
+	}
+	if nested["signatureValid"] != true {
+		t.Errorf("nested.signatureValid = %v, want true", nested["signatureValid"])
+	}
+	if payload, _ := nested["payload"].(map[string]any); payload["sub"] != "alice" {
+		t.Errorf("nested.payload = %v, want sub alice", nested["payload"])
+	}
+	if s, _ := out["decryptedPayload"].(string); strings.Count(s, ".") != 2 {
+		t.Errorf("decryptedPayload = %v, want the compact inner token unchanged", out["decryptedPayload"])
+	}
+	if _, present := nested["claimsValid"]; present {
+		t.Errorf("claimsValid belongs on the top-level object only")
+	}
+}
+
+func TestDecodeJWEJSON_NestedBadSignature(t *testing.T) {
+	token, recipientPath, _ := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	other := writeRSAPublicKeyFile(t, &generateDistinctRSAKey(t).PublicKey)
+	out, err := decodeLayerJSONMap(t, token, tokenKeys{decrypt: recipientPath, verify: other}, claimChecks{})
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("err = %v, want errInvalidSignature from the inner token", err)
+	}
+	if nested, _ := out["nested"].(map[string]any); nested["signatureValid"] != false {
+		t.Errorf("nested.signatureValid = %v, want false", nested["signatureValid"])
+	}
+}
+
+func TestDecodeJWEJSON_ClaimsValid(t *testing.T) {
+	key := generateRSAKey(t)
+	token := encryptJWE(t, key, []byte(`{"sub":"x","aud":"other"}`))
+	out, err := decodeLayerJSONMap(t, token, tokenKeys{decrypt: writeKeyFile(t, key)}, claimChecks{audience: "mine"})
+	if !errors.Is(err, errInvalidClaims) {
+		t.Fatalf("err = %v, want errInvalidClaims", err)
+	}
+	if out["claimsValid"] != false {
+		t.Errorf("claimsValid = %v, want false", out["claimsValid"])
+	}
+}
+
+func TestDecodeJWEJSON_ClaimsUnreachable(t *testing.T) {
+	token := encryptJWE(t, generateRSAKey(t), []byte(`{"sub":"x"}`))
+	out, err := decodeLayerJSONMap(t, token, tokenKeys{}, claimChecks{verify: true})
+	if !errors.Is(err, errInvalidClaims) {
+		t.Fatalf("err = %v, want errInvalidClaims", err)
+	}
+	if out["claimsValid"] != false {
+		t.Errorf("claimsValid = %v, want false", out["claimsValid"])
+	}
+}

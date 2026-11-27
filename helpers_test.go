@@ -607,3 +607,29 @@ func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
 	}
 	return decodeParsedJWEHuman(w, tokenStr, jwe, header, keyStr)
 }
+
+// decodeJWTJSON and decodeJWEJSON open a compact token with a single key and
+// write it as JSON, for the tests written against the one-key API.
+func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return err
+	}
+	l, err := openJWT(p, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return decodeLayerJSON(w, l, checks)
+}
+
+func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
+	jwe, header, err := parseJWE(tokenStr)
+	if err != nil {
+		return err
+	}
+	l, err := openJWE(tokenStr, jwe, header, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return decodeLayerJSON(w, l, claimChecks{})
+}
