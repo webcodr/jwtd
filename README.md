@@ -208,7 +208,7 @@ A token that is signed by an issuer and then encrypted to you (an encrypted OIDC
 jwtd --key /path/to/private-key.pem --verify-key /path/to/issuer-public-key.pem eyJhbGciOiJSU0EtT0FF...
 ```
 
-`--key` decrypts every JWE layer, and `--verify-key` verifies every JWS layer, at the top level or nested. Without `--verify-key`, `--key` is offered for verification too, which is right when one key serves every layer. With two different keys of the same type (an RSA recipient key and an RSA issuer key, say), offering the recipient key to the inner signature reports `Signature: INVALID`, so pass `--verify-key`. A `--verify-key` is never skipped: if it cannot be used on a nested signature, that is an error, and if the token holds no signature at all, the command fails instead of passing a check that never ran.
+`--key` decrypts every JWE layer, and `--verify-key` verifies every JWS layer, at the top level or nested. Without `--verify-key`, `--key` is offered for verification too, which is right when one key serves every layer. When the issuer signed with a different key than the one that decrypts — the normal case for an encrypted ID token — offering the recipient key to the inner signature reports `Signature: INVALID` (or, if the key cannot be used for it at all, leaves the signature unchecked), and a note on stderr says to pass `--verify-key`. A `--verify-key` flag is never skipped: if it cannot be used on a nested signature, that is an error, and if the token holds no signature at all, the command fails instead of passing a check that never ran. An empty `--verify-key` is rejected. A `JWTD_VERIFY_KEY` that meets no signature is standing configuration rather than a request about this token, so it only produces a note.
 
 ### Verify a JWT signature
 

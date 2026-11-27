@@ -47,6 +47,9 @@ type tokenLayer struct {
 	// sig is nil when no verification ran: no key was given, or, in fallback
 	// mode on a nested JWS, the decryption key could not be used for it.
 	sig *verdict
+	// sigSkipped records why, in that second case, so every mode can say on
+	// stderr that a nested signature went unverified although a key was given.
+	sigSkipped string
 
 	jweToken  string
 	jwe       *jose.JSONWebEncryption
@@ -107,6 +110,7 @@ func openJWT(p *parsedJWT, keys tokenKeys, nested bool) (*tokenLayer, error) {
 	case explicit:
 		return nil, fmt.Errorf("nested JWT signature verification: %w", err)
 	default:
+		l.sigSkipped = err.Error()
 		return l, nil
 	}
 }

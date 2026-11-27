@@ -2109,3 +2109,61 @@ func TestRun_VerifyKeyInterpretationNote(t *testing.T) {
 		t.Errorf("stderr missing the --verify-key interpretation note:\n%s", stderr)
 	}
 }
+
+func TestRun_FallbackInvalidNestedSignatureHintsVerifyKey(t *testing.T) {
+	token, recipientPath, _ := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	for _, mode := range [][]string{{}, {"--json"}, {"--header"}} {
+		args := append(append([]string{"--key", recipientPath}, mode...), token)
+		_, stderr, err := runRootCommand(t, args...)
+		if !errors.Is(err, errInvalidSignature) {
+			t.Fatalf("%v: err = %v, want errInvalidSignature", mode, err)
+		}
+		if !strings.Contains(stderr, "pass --verify-key") {
+			t.Errorf("%v: stderr = %q, want a hint that the fallback key was used and --verify-key is the fix", mode, stderr)
+		}
+	}
+}
+
+func TestRun_FallbackSkippedNestedSignatureIsNoted(t *testing.T) {
+	recipient := generateRSAKey(t)
+	issuer := generateDistinctRSAKey(t)
+	decryptSet := writeJWKSetFile(t, "recipient.jwks", jose.JSONWebKey{Key: recipient, KeyID: "rec1"})
+	token := encryptJWE(t, recipient, []byte(signJWTWithKID(t, issuer, "nope", jwt.MapClaims{"sub": "alice"})))
+
+	for _, mode := range [][]string{{}, {"--json"}, {"--claim", "sub"}} {
+		args := append(append([]string{"--key", decryptSet}, mode...), token)
+		_, stderr, err := runRootCommand(t, args...)
+		if err != nil {
+			t.Fatalf("%v: unexpected error: %v", mode, err)
+		}
+		if !strings.Contains(stderr, "could not be used to verify the nested JWS") {
+			t.Errorf("%v: stderr = %q, want a note that the nested signature was not verified", mode, stderr)
+		}
+	}
+}
+
+func TestRun_VerifyKeyEnvUnusedIsANote(t *testing.T) {
+	token, _, issuerPub := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	t.Setenv("JWTD_VERIFY_KEY", issuerPub)
+
+	stdout, stderr, err := runRootCommand(t, token)
+	if err != nil {
+		t.Fatalf("a global JWTD_VERIFY_KEY must not break JWE inspection: %v", err)
+	}
+	if !strings.Contains(stripANSI(stdout), "Protected Header") {
+		t.Errorf("stdout = %q, want the JWE header", stdout)
+	}
+	if !strings.Contains(stderr, "JWTD_VERIFY_KEY was set but no JWS signature was reached") {
+		t.Errorf("stderr = %q, want a note naming JWTD_VERIFY_KEY", stderr)
+	}
+}
+
+func TestRun_EmptyVerifyKeyRejected(t *testing.T) {
+	_, _, err := runRootCommand(t, "--verify-key", "")
+	if err == nil || !strings.Contains(err.Error(), "--verify-key requires a key") {
+		t.Fatalf("err = %v, want an empty --verify-key to be rejected", err)
+	}
+	if errors.Is(err, errNoToken) {
+		t.Errorf("an empty --verify-key must be rejected before the token is read")
+	}
+}

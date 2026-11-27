@@ -110,6 +110,11 @@ func run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// An empty --verify-key (typically an unset shell variable) would fall back
+	// to --key silently, which is the one thing this flag exists to prevent.
+	if v, _ := cmd.Flags().GetString("verify-key"); cmd.Flags().Changed("verify-key") && v == "" {
+		return errors.New("--verify-key requires a key")
+	}
 
 	loc, err := resolveDisplayLocation(localTZ, tzName)
 	if err != nil {
@@ -141,10 +146,9 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	keys := tokenKeys{
-		decrypt: resolveKeyArg(cmd, "key", "JWTD_KEY"),
-		verify:  resolveKeyArg(cmd, "verify-key", "JWTD_VERIFY_KEY"),
-	}
+	decryptKey, _ := resolveKeyArg(cmd, "key", "JWTD_KEY")
+	verifyKey, verifyFromFlag := resolveKeyArg(cmd, "verify-key", "JWTD_VERIFY_KEY")
+	keys := tokenKeys{decrypt: decryptKey, verify: verifyKey}
 
 	checks := claimChecks{
 		verify:     verifyClaimsFlag,
@@ -173,9 +177,10 @@ func run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := checkVerifyKeyUsed(l, keys); err != nil {
+		if err := checkVerifyKeyUsed(cmd.ErrOrStderr(), l, keys, verifyFromFlag); err != nil {
 			return err
 		}
+		printVerificationNotes(cmd.ErrOrStderr(), l, keys)
 		if sel.active() {
 			return extractLayer(w, cmd.ErrOrStderr(), l, checks, sel, jsonOut)
 		}
@@ -206,8 +211,9 @@ func run(cmd *cobra.Command, args []string) error {
 }
 
 // resolveKeyArg reads a key flag, falling back to its environment variable, and
-// narrates on stderr how a value that is not a key file was read.
-func resolveKeyArg(cmd *cobra.Command, flag, env string) string {
+// narrates on stderr how a value that is not a key file was read. It reports
+// whether the value came from the flag.
+func resolveKeyArg(cmd *cobra.Command, flag, env string) (string, bool) {
 	keyStr, _ := cmd.Flags().GetString(flag)
 	fromFlag := keyStr != ""
 	origin := "--" + flag
@@ -218,20 +224,51 @@ func resolveKeyArg(cmd *cobra.Command, flag, env string) string {
 	if keyStr != "" {
 		printKeyInterpretation(cmd.ErrOrStderr(), keyStr, origin, fromFlag)
 	}
-	return keyStr
+	return keyStr, fromFlag
 }
 
-// checkVerifyKeyUsed fails when a verification key was given but the opened
-// token holds no JWS for it: a signature check the user asked for that never
-// ran must not pass silently. It runs before any output.
-func checkVerifyKeyUsed(l *tokenLayer, keys tokenKeys) error {
+// checkVerifyKeyUsed fails when --verify-key was given but the opened token
+// holds no JWS for it: a signature check the user asked for on this command
+// line that never ran must not pass silently. It runs before any output.
+//
+// JWTD_VERIFY_KEY is standing configuration rather than a request about this
+// token, so the same situation is only a note there: a global verification key
+// must not break inspecting a JWE, just as a global JWTD_KEY must not break a
+// JWT.
+func checkVerifyKeyUsed(errw io.Writer, l *tokenLayer, keys tokenKeys, fromFlag bool) error {
 	if keys.verify == "" || l.hasJWS() {
+		return nil
+	}
+	if !fromFlag {
+		_, _ = fmt.Fprintln(errw, "Note: JWTD_VERIFY_KEY was set but no JWS signature was reached; it was not used.")
 		return nil
 	}
 	if l.jwe != nil && keys.decrypt == "" {
 		return fmt.Errorf("%w (pass --key to decrypt the JWE first)", errVerifyKeyUnused)
 	}
 	return errVerifyKeyUnused
+}
+
+// printVerificationNotes says on stderr, in every output mode, when a nested
+// JWS was checked only by the fallback rule: the decryption key was offered to
+// it because no verification key was given. Either the key could not be used
+// at all, so the signature went unverified although a key was passed, or it
+// was used and the signature did not verify — which is also what happens when
+// the issuer simply signed with a different key than the one that decrypts.
+// Neither is visible in --json or extraction output otherwise, and both have
+// the same fix.
+func printVerificationNotes(errw io.Writer, l *tokenLayer, keys tokenKeys) {
+	if keys.verify != "" {
+		return
+	}
+	for layer := l.nested; layer != nil; layer = layer.nested {
+		switch {
+		case layer.sigSkipped != "":
+			_, _ = fmt.Fprintf(errw, "Note: --key could not be used to verify the nested JWS (%s); its signature was not checked. Pass --verify-key with the issuer's key.\n", layer.sigSkipped)
+		case layer.sig != nil && !layer.sig.valid:
+			_, _ = fmt.Fprintln(errw, "Note: the nested JWS was checked with the decryption key (--key), which verifies it only if that same key signed it. If the issuer signed with its own key, pass --verify-key with the issuer's key.")
+		}
+	}
 }
 
 // selectionFromFlags reads --header, --payload, and --claim. Cobra already
