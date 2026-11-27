@@ -302,8 +302,11 @@
             <div>
               <h3>Decode JWTs</h3>
               <p>
-                View headers, claims, signatures, and readable timestamps
-                flagged when a token is expired or not yet valid.
+                View headers, claims, signatures, and readable timestamps in UTC
+                or <code>--local</code>/<code>--tz</code> (including
+                <code>auth_time</code> and <code>updated_at</code>), stripping
+                optional <code>Authorization: Bearer</code> prefixes and
+                surrounding quotes.
               </p>
             </div>
           </article>
@@ -311,7 +314,10 @@
             <span>02</span>
             <div>
               <h3>Verify signatures</h3>
-              <p>Check JWS signatures independently from claim validation.</p>
+              <p>
+                Check JWS signatures independently from claim validation, and
+                pin the expected header algorithm with <code>--alg</code>.
+              </p>
             </div>
           </article>
           <article>
@@ -319,8 +325,10 @@
             <div>
               <h3>Validate claims</h3>
               <p>
-                Enforce expiry and not-before, or require an audience or issuer,
-                exiting nonzero on failure.
+                Enforce expiry and not-before, or require an audience, issuer,
+                or subject (<code>--sub</code>) with <code>--leeway</code>,
+                <code>--require-exp</code>, and <code>--at</code>, exiting
+                nonzero on failure.
               </p>
             </div>
           </article>
@@ -358,7 +366,8 @@
               <h3>Script with JSON</h3>
               <p>
                 Emit one machine-readable object with <code>--json</code> for
-                piping into tools like <code>jq</code>.
+                piping into tools like <code>jq</code>, or pass
+                <code>-q</code>/<code>--quiet</code> for exit-code-only checks.
               </p>
             </div>
           </article>
@@ -829,8 +838,10 @@ scoop install jwtd</code></pre>
             <div class="usage-copy">
               <h3>Decode a JWT</h3>
               <p>
-                View the header, claims, and signature without a key. This
-                complete sample token is ready to copy and run.
+                View the header, claims, and signature without a key. Optional
+                <code>Authorization: Bearer</code> prefixes and surrounding
+                quotes are stripped automatically. This complete sample token is
+                ready to copy and run.
               </p>
             </div>
             <div class="command-block">
@@ -856,23 +867,45 @@ scoop install jwtd</code></pre>
               <h3>Verify a JWS signature</h3>
               <p>
                 Verify the cryptographic signature without evaluating claims
-                such as expiry. Invalid signatures exit nonzero.
+                such as expiry. Invalid signatures exit nonzero. Pass
+                <code>--alg</code> to require an exact algorithm header before
+                verification or decryption runs.
               </p>
             </div>
-            <div class="command-block">
-              <pre tabindex="0"><code id="verify-command">jwtd --key /path/to/public-key.pem eyJhbGciOiJSUzI1NiIs...</code></pre>
-              <div class="command-actions">
-                <button
-                  type="button"
-                  data-copy-target="verify-command"
-                  aria-label="Copy verify JWS signature command"
-                >
-                  Copy</button
-                ><span
-                  class="copy-feedback"
-                  data-copy-feedback
-                  aria-live="polite"
-                ></span>
+            <div class="usage-commands">
+              <div class="command-block">
+                <p>Verify with a public key</p>
+                <pre tabindex="0"><code id="verify-command">jwtd --key /path/to/public-key.pem eyJhbGciOiJSUzI1NiIs...</code></pre>
+                <div class="command-actions">
+                  <button
+                    type="button"
+                    data-copy-target="verify-command"
+                    aria-label="Copy verify JWS signature command"
+                  >
+                    Copy</button
+                  ><span
+                    class="copy-feedback"
+                    data-copy-feedback
+                    aria-live="polite"
+                  ></span>
+                </div>
+              </div>
+              <div class="command-block">
+                <p>Pin the expected algorithm</p>
+                <pre tabindex="0"><code id="verify-alg-command">jwtd --alg EdDSA --key /path/to/public-key.pem eyJhbGciOiJFZERTQSIs...</code></pre>
+                <div class="command-actions">
+                  <button
+                    type="button"
+                    data-copy-target="verify-alg-command"
+                    aria-label="Copy verify JWS with pinned algorithm command"
+                  >
+                    Copy</button
+                  ><span
+                    class="copy-feedback"
+                    data-copy-feedback
+                    aria-live="polite"
+                  ></span>
+                </div>
               </div>
             </div>
           </article>
@@ -883,9 +916,11 @@ scoop install jwtd</code></pre>
               <p>
                 Add <code>--verify-claims</code> to enforce <code>exp</code>
                 and <code>nbf</code>, exiting nonzero when the token is expired
-                or not yet valid. Pass <code>--aud</code> or <code>--iss</code>
-                to require an audience or issuer (either implies
-                <code>--verify-claims</code>).
+                or not yet valid. Pass <code>--aud</code>, <code>--iss</code>,
+                <code>--sub</code>, <code>--leeway</code>, or
+                <code>--require-exp</code> to require specific claims (any of
+                them implies <code>--verify-claims</code>), and <code>--at</code>
+                to evaluate timestamps at a specific instant.
               </p>
             </div>
             <div class="usage-commands">
@@ -914,6 +949,23 @@ scoop install jwtd</code></pre>
                     type="button"
                     data-copy-target="verify-claims-aud-command"
                     aria-label="Copy validate audience and issuer command"
+                  >
+                    Copy</button
+                  ><span
+                    class="copy-feedback"
+                    data-copy-feedback
+                    aria-live="polite"
+                  ></span>
+                </div>
+              </div>
+              <div class="command-block">
+                <p>Subject, leeway, required exp, and clock override</p>
+                <pre tabindex="0"><code id="verify-claims-at-command">jwtd --at 2026-07-25T10:00:00Z --leeway 30s --sub user_2048 --require-exp eyJhbGciOiJIUzI1NiIs...</code></pre>
+                <div class="command-actions">
+                  <button
+                    type="button"
+                    data-copy-target="verify-claims-at-command"
+                    aria-label="Copy validate claims with leeway and clock override command"
                   >
                     Copy</button
                   ><span
@@ -958,7 +1010,9 @@ scoop install jwtd</code></pre>
               <h3>Pipe a token from stdin</h3>
               <p>
                 Read the token from a pipe, so output from other tools flows
-                straight in. Wrapped or spaced tokens are accepted.
+                straight in. Wrapped lines, surrounding quotes, and
+                <code>Authorization: Bearer</code> prefixes are stripped
+                automatically.
               </p>
             </div>
             <div class="usage-commands">
@@ -1162,6 +1216,82 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               </div>
             </div>
           </article>
+          <article>
+            <div class="usage-number">10</div>
+            <div class="usage-copy">
+              <h3>Format timestamps in a timezone</h3>
+              <p>
+                Human-readable timestamps (<code>iat</code>, <code>exp</code>,
+                <code>nbf</code>, <code>auth_time</code>, and
+                <code>updated_at</code>) render in UTC by default. Pass
+                <code>--local</code> or <code>--tz</code> to format them in
+                another zone; <code>--json</code> keeps raw numeric values.
+              </p>
+            </div>
+            <div class="usage-commands">
+              <div class="command-block">
+                <p>Use local system timezone</p>
+                <pre tabindex="0"><code id="tz-local-command">jwtd --local eyJhbGciOiJIUzI1NiIs...</code></pre>
+                <div class="command-actions">
+                  <button
+                    type="button"
+                    data-copy-target="tz-local-command"
+                    aria-label="Copy local timezone command"
+                  >
+                    Copy</button
+                  ><span
+                    class="copy-feedback"
+                    data-copy-feedback
+                    aria-live="polite"
+                  ></span>
+                </div>
+              </div>
+              <div class="command-block">
+                <p>Use an explicit IANA timezone</p>
+                <pre tabindex="0"><code id="tz-iana-command">jwtd --tz America/New_York eyJhbGciOiJIUzI1NiIs...</code></pre>
+                <div class="command-actions">
+                  <button
+                    type="button"
+                    data-copy-target="tz-iana-command"
+                    aria-label="Copy explicit timezone command"
+                  >
+                    Copy</button
+                  ><span
+                    class="copy-feedback"
+                    data-copy-feedback
+                    aria-live="polite"
+                  ></span>
+                </div>
+              </div>
+            </div>
+          </article>
+          <article>
+            <div class="usage-number">11</div>
+            <div class="usage-copy">
+              <h3>Run quiet exit-code checks</h3>
+              <p>
+                Pass <code>-q</code> / <code>--quiet</code> to suppress
+                standard output when scripts or CI gates only need the exit
+                status.
+              </p>
+            </div>
+            <div class="command-block">
+              <pre tabindex="0"><code id="quiet-command">jwtd -q --key /path/to/public-key.pem --verify-claims eyJhbGciOiJSUzI1NiIs...</code></pre>
+              <div class="command-actions">
+                <button
+                  type="button"
+                  data-copy-target="quiet-command"
+                  aria-label="Copy quiet verification command"
+                >
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -1190,7 +1320,10 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
             <li><strong>X.509</strong><span>Certificate public keys</span></li>
             <li>
               <strong>JWK / JWK Set</strong
-              ><span>Single keys, or the set entry matching the token's kid</span>
+              ><span
+                >Single keys, or the set entry matching the token's kid
+                (disambiguated by use and alg)</span
+              >
             </li>
             <li>
               <strong>Base64</strong
@@ -1261,7 +1394,8 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
             Signature verification and JWE decryption cover the algorithms
             defined by the JOSE standards. Accepted signing algorithms are
             restricted to those matching the key type to rule out algorithm
-            confusion.
+            confusion, and <code>--alg</code> pins an exact JWT or JWE algorithm
+            to fail closed on mismatch.
           </p>
         </div>
         <div class="algorithm-groups">
@@ -1391,9 +1525,11 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               No. Signature verification reports only whether the cryptographic
               signature is valid. Claim checks such as expiry are kept separate,
               so an expired but authentic token still verifies. Pass
-              <code>--verify-claims</code> (or <code>--aud</code>/<code>--iss</code>)
-              to enforce <code>exp</code> and <code>nbf</code> alongside or
-              without a signature check; either failing exits nonzero.
+              <code>--verify-claims</code> (or <code>--aud</code>/<code>--iss</code>),
+              <code>--sub</code>, <code>--leeway</code>, or
+              <code>--require-exp</code> (optionally evaluated <code>--at</code>
+              a given instant) to enforce claims alongside or without a signature
+              check; either failing exits nonzero.
             </p>
           </details>
           <details>
@@ -1441,6 +1577,8 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               <code>protectedHeader</code> plus either the encrypted part sizes
               or, with a key, <code>decryptedPayload</code>; a nested token
               inside it is reported as its compact string rather than decoded.
+              For scripts that only need the exit status, pass <code>-q</code>
+              / <code>--quiet</code> to suppress stdout.
             </p>
           </details>
         </div>

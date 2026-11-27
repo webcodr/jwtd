@@ -213,6 +213,12 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"json claimsValid":       `<code>claimsValid</code> when claim validation is requested`,
 		"expiry faq flag hint":   `Pass <code>--verify-claims</code> (or <code>--aud</code>/<code>--iss</code>)`,
 		"hmac file example":      `jwtd --key hmac:/path/to/secret.key`,
+		"bearer prefix note":     `Authorization: Bearer`,
+		"alg pinning workflow":   `jwtd --alg EdDSA --key /path/to/public-key.pem`,
+		"extended claims":        `jwtd --at 2026-07-25T10:00:00Z --leeway 30s --sub user_2048 --require-exp`,
+		"timezone workflow":      `jwtd --tz America/New_York`,
+		"quiet workflow":         `jwtd -q --key /path/to/public-key.pem --verify-claims`,
+		"jwks disambiguation":    `disambiguated by use and alg`,
 	} {
 		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
 			t.Errorf("site/index.html is missing refined %s %q", label, required)
