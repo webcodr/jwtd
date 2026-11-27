@@ -69,6 +69,10 @@ func newRootCommand() *cobra.Command {
 	rootCmd.Flags().String("at", "", "evaluate timestamps and claim validity at this time (RFC3339 or Unix seconds)")
 	rootCmd.Flags().Bool("local", false, "display formatted timestamps in the local timezone instead of UTC")
 	rootCmd.Flags().String("tz", "", "display formatted timestamps in an IANA timezone (e.g. Europe/Berlin, America/New_York)")
+	rootCmd.Flags().Bool("header", false, "print only the token header (the protected header for a JWE)")
+	rootCmd.Flags().Bool("payload", false, "print only the payload (the decrypted plaintext for a JWE)")
+	rootCmd.Flags().String("claim", "", "print only the value of this top-level claim; strings are printed bare (nothing is printed if a requested check fails)")
+	rootCmd.MarkFlagsMutuallyExclusive("header", "payload", "claim")
 	return rootCmd
 }
 
@@ -101,6 +105,11 @@ func run(cmd *cobra.Command, args []string) error {
 	atStr, _ := cmd.Flags().GetString("at")
 	localTZ, _ := cmd.Flags().GetBool("local")
 	tzName, _ := cmd.Flags().GetString("tz")
+
+	sel, err := selectionFromFlags(cmd)
+	if err != nil {
+		return err
+	}
 
 	loc, err := resolveDisplayLocation(localTZ, tzName)
 	if err != nil {
@@ -167,6 +176,9 @@ func run(cmd *cobra.Command, args []string) error {
 		if err := checkExpectedAlg(alg, expectedAlg); err != nil {
 			return err
 		}
+		if sel.active() {
+			return extractJWE(w, jwe, header, keyStr, sel, jsonOut)
+		}
 		if jsonOut {
 			return decodeParsedJWEJSON(w, token, jwe, header, keyStr)
 		}
@@ -180,10 +192,33 @@ func run(cmd *cobra.Command, args []string) error {
 	if err := checkExpectedAlg(p.method.Alg(), expectedAlg); err != nil {
 		return err
 	}
+	if sel.active() {
+		return extractJWT(w, cmd.ErrOrStderr(), p, keyStr, checks, sel, jsonOut)
+	}
 	if jsonOut {
 		return decodeParsedJWTJSON(w, p, keyStr, checks)
 	}
 	return decodeParsedJWTHuman(w, p, keyStr, checks)
+}
+
+// selectionFromFlags reads --header, --payload, and --claim. Cobra already
+// rejects more than one of them; an empty --claim is rejected here, before the
+// token is read, like every other invalid flag.
+func selectionFromFlags(cmd *cobra.Command) (selection, error) {
+	if header, _ := cmd.Flags().GetBool("header"); header {
+		return selection{kind: selectHeader}, nil
+	}
+	if payload, _ := cmd.Flags().GetBool("payload"); payload {
+		return selection{kind: selectPayload}, nil
+	}
+	if cmd.Flags().Changed("claim") {
+		name, _ := cmd.Flags().GetString("claim")
+		if name == "" {
+			return selection{}, errors.New("--claim requires a claim name")
+		}
+		return selection{kind: selectClaim, claim: name}, nil
+	}
+	return selection{}, nil
 }
 
 func parseAtTime(s string) (time.Time, error) {

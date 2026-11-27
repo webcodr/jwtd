@@ -1890,3 +1890,95 @@ func TestRun_TimezoneAndClaimFlags(t *testing.T) {
 		assertOutputContains(t, out, "Claims: INVALID")
 	})
 }
+
+// runRootCommand executes the CLI with args and returns what it wrote to
+// stdout and stderr, so extraction tests can assert on each stream.
+func runRootCommand(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	rootCmd := newRootCommand()
+	var out, errOut bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	rootCmd.SetArgs(args)
+	err = rootCmd.Execute()
+	return out.String(), errOut.String(), err
+}
+
+func TestRun_ClaimExtraction(t *testing.T) {
+	token := makeJWT(`{"alg":"HS256"}`, `{"sub":"u1"}`, "sig")
+	stdout, _, err := runRootCommand(t, "--claim", "sub", token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stdout != "u1\n" {
+		t.Errorf("stdout = %q, want %q", stdout, "u1\n")
+	}
+}
+
+func TestRun_SelectorsMutuallyExclusive(t *testing.T) {
+	token := makeJWT(`{"alg":"HS256"}`, `{"sub":"u1"}`, "sig")
+	_, _, err := runRootCommand(t, "--header", "--payload", token)
+	if err == nil || !strings.Contains(err.Error(), "none of the others can be") {
+		t.Fatalf("err = %v, want a mutually-exclusive flags error", err)
+	}
+}
+
+func TestRun_EmptyClaimRejectedBeforeToken(t *testing.T) {
+	_, _, err := runRootCommand(t, "--claim", "")
+	if err == nil || !strings.Contains(err.Error(), "--claim requires a claim name") {
+		t.Fatalf("err = %v, want the empty --claim to be rejected", err)
+	}
+	if errors.Is(err, errNoToken) {
+		t.Errorf("empty --claim must be rejected before the token is read")
+	}
+}
+
+func TestRun_ClaimExtractionWithholdsOnBadSignature(t *testing.T) {
+	token := signJWTWithHMAC(t, []byte("signing-secret-a"), jwt.MapClaims{"sub": "u1"})
+	stdout, stderr, err := runRootCommand(t, "--key", "raw:different-secret-b", "--claim", "sub", token)
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("err = %v, want errInvalidSignature", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stripANSI(stderr), "Signature: INVALID") {
+		t.Errorf("stderr = %q, want the failing signature verdict", stderr)
+	}
+}
+
+func TestRun_JWEPayloadUsesEnvKey(t *testing.T) {
+	key := generateRSAKey(t)
+	t.Setenv("JWTD_KEY", writeKeyFile(t, key))
+	token := encryptJWE(t, key, []byte(`{"sub":"env-extract"}`))
+
+	stdout, _, err := runRootCommand(t, "--json", "--payload", token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stdout != "{\"sub\":\"env-extract\"}\n" {
+		t.Errorf("stdout = %q, want the decrypted payload", stdout)
+	}
+}
+
+func TestRun_QuietWithSelector(t *testing.T) {
+	token := makeJWT(`{"alg":"HS256"}`, `{"sub":"u1"}`, "sig")
+	stdout, _, err := runRootCommand(t, "-q", "--claim", "sub", token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty under -q", stdout)
+	}
+}
+
+func TestRun_AlgPinAppliesToExtraction(t *testing.T) {
+	token := makeJWT(`{"alg":"HS256"}`, `{"sub":"u1"}`, "sig")
+	stdout, _, err := runRootCommand(t, "--alg", "EdDSA", "--claim", "sub", token)
+	if err == nil || !strings.Contains(err.Error(), "does not match expected --alg") {
+		t.Fatalf("err = %v, want an --alg mismatch", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+}
