@@ -219,6 +219,8 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"timezone workflow":      `jwtd --tz America/New_York`,
 		"quiet workflow":         `jwtd -q --key /path/to/public-key.pem --verify-claims`,
 		"jwks disambiguation":    `disambiguated by use and alg`,
+		"claim extraction":       `jwtd --key /path/to/public-key.pem --claim sub`,
+		"extraction withholding": `If a requested check fails, nothing is printed to stdout`,
 	} {
 		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
 			t.Errorf("site/index.html is missing refined %s %q", label, required)
