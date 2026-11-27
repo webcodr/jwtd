@@ -55,7 +55,10 @@ func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) err
 	if err != nil {
 		return err
 	}
+	return decodeParsedJWTJSON(w, p, keyStr, checks)
+}
 
+func decodeParsedJWTJSON(w io.Writer, p *parsedJWT, keyStr string, checks claimChecks) error {
 	out := jwtJSON{
 		Header:    p.header,
 		Payload:   map[string]any(p.claims),
@@ -91,15 +94,14 @@ func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) err
 // decodeJWEJSON writes a JWE as a single JSON object, decrypting the payload
 // when a key is supplied.
 func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
-	jwe, err := jose.ParseEncrypted(tokenStr, allKeyAlgorithms, allContentEncryptions)
-	if err != nil {
-		return fmt.Errorf("parsing JWE: %w", err)
-	}
-
-	header, err := jweProtectedHeaderMap(tokenStr)
+	jwe, header, err := parseJWE(tokenStr)
 	if err != nil {
 		return err
 	}
+	return decodeParsedJWEJSON(w, tokenStr, jwe, header, keyStr)
+}
+
+func decodeParsedJWEJSON(w io.Writer, tokenStr string, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string) error {
 	out := jweJSON{ProtectedHeader: header}
 
 	if keyStr == "" {
@@ -118,7 +120,8 @@ func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
 	if err != nil {
 		return err
 	}
-	key, err := loadKeyForKID(keyStr, kid)
+	alg, _ := header["alg"].(string)
+	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "enc", alg: alg})
 	if err != nil {
 		return fmt.Errorf("loading decryption key: %w", err)
 	}

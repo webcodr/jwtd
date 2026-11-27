@@ -378,7 +378,7 @@ func verifySignature(w io.Writer, tokenStr, keyStr string) error {
 	if err != nil {
 		return fmt.Errorf("signature verification: %w", err)
 	}
-	key, err := loadKeyForKID(keyStr, kid)
+	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
 	if err != nil {
 		return fmt.Errorf("signature verification: error loading key: %w", err)
 	}
@@ -398,10 +398,14 @@ func verifyClaims(w io.Writer, tokenStr string, c claimChecks) error {
 
 // loadKey resolves a key argument without a kid, the shape most key tests
 // exercise. Production code always has a token header at this point and so
-// always knows the kid (possibly ""), which is why this wrapper lives with the
+// always knows the kid/use/alg, which is why these wrappers live with the
 // test helpers rather than in keys.go.
 func loadKey(keyStr string) (any, error) {
-	return loadKeyForKID(keyStr, "")
+	return loadKeyForToken(keyStr, keySelector{})
+}
+
+func loadKeyForKID(keyStr, kid string) (any, error) {
+	return loadKeyForToken(keyStr, keySelector{kid: kid})
 }
 
 // --- JWS signature verification -----------------------------------------------

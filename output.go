@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata"
 	"unicode/utf8"
 
 	"github.com/fatih/color"
@@ -20,7 +21,7 @@ import (
 // is rewritten for display.
 func isTimestampClaim(key string) bool {
 	switch key {
-	case "iat", "exp", "nbf":
+	case "iat", "exp", "nbf", "auth_time", "updated_at":
 		return true
 	}
 	return false
@@ -29,6 +30,10 @@ func isTimestampClaim(key string) bool {
 // timeNow returns the current time. It is a variable so tests can pin it and
 // make the expired / not-yet-valid annotations deterministic.
 var timeNow = time.Now
+
+// displayLocation controls the timezone used when formatting timestamp claims
+// for human output. Defaults to UTC; --local and --tz override it for a run.
+var displayLocation = time.UTC
 
 // The project color scheme. Every colored token in jwtd's output comes from one
 // of these, so a color is described in exactly one place.
@@ -394,7 +399,11 @@ func formatTimestamps(data map[string]any) {
 		if !ok {
 			continue
 		}
-		formatted := t.Format(time.RFC3339Nano) + " (" + text
+		displayT := t.In(displayLocation)
+		if displayT.Year() < 0 || displayT.Year() > 9999 {
+			displayT = t
+		}
+		formatted := displayT.Format(time.RFC3339Nano) + " (" + text
 		if status := timestampStatus(key, t); status != "" {
 			formatted += ", " + status
 		}

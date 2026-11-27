@@ -9,16 +9,18 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 - JWS signature verification with `--key` flag
 - Supports RSA, ECDSA, Ed25519, and HMAC signature algorithms
 - Key loading from PEM/DER keys, X.509 certificates, JWK/JWK Sets, or base64-encoded input
-- JWK Set key selection by the token's `kid` header (falls back to the first key when the token has none)
+- JWK Set key selection by the token's `kid` header, disambiguated by `use` (`sig`/`enc`) and `alg` (falls back to the first key when the token has no `kid`)
 - Supports both private and public keys (private keys are auto-converted for verification)
 - Invalid signatures produce a nonzero exit status when `--key`/`JWTD_KEY` is used
-- Opt-in claim validation with `--verify-claims` (exp/nbf) plus `--aud`/`--iss` assertions, exiting nonzero when a check fails — independent of the signature check
+- Opt-in claim validation with `--verify-claims` (`exp`/`nbf`) plus `--aud`, `--iss`, `--sub`, `--leeway`, `--require-exp`, and `--at`, exiting nonzero when a check fails — independent of the signature check
+- Algorithm pinning with `--alg` to require an exact JWS/JWE `alg` header
+- Quiet mode (`-q`/`--quiet`) to suppress stdout and check status via exit code alone
 - Nested token detection: JWT-inside-JWE and JWE-inside-JWE are decoded recursively
 - `JWTD_KEY` environment variable for default key configuration
 - Syntax-highlighted JSON output with a consistent color scheme
 - Machine-readable output with `--json` for scripting and piping into tools like `jq`
-- Automatic conversion of `iat`, `exp`, and `nbf` timestamps to human-readable RFC3339 dates, annotated with the time remaining or elapsed (`expires in 14m`, `expired 2h ago`, `not yet valid, in 5m`)
-- Accepts tokens as arguments, from stdin pipes, or via an interactive prompt
+- Automatic conversion of `iat`, `exp`, `nbf`, `auth_time`, and `updated_at` timestamps to human-readable RFC3339 dates (UTC by default, or `--local`/`--tz`), with `exp`/`nbf` annotated with the time remaining or elapsed (`expires in 14m`, `expired 2h ago`, `not yet valid, in 5m`)
+- Accepts tokens as arguments, from stdin pipes, or via an interactive prompt, stripping optional `Authorization: Bearer ` prefixes and surrounding quotes
 - Colors auto-disable when output is not a TTY, or are controlled explicitly with `--color`
 - Shell completions (bash, zsh, fish) shipped in the Homebrew formula and the `.deb`/`.rpm` packages
 
@@ -159,10 +161,11 @@ Every `.tar.gz` archive also ships a [Syft](https://github.com/anchore/syft) SPD
 
 ### Decode a JWT
 
-Pass a token as an argument:
+Pass a token as an argument (an optional `Authorization: Bearer ` prefix and surrounding quotes are stripped automatically):
 
 ```sh
 jwtd eyJhbGciOiJIUzI1NiIs...
+jwtd "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
 ```
 
 Pipe a token from stdin:
@@ -201,9 +204,10 @@ Use the same `--key` flag to verify JWS signatures:
 
 ```sh
 jwtd --key /path/to/public-key.pem eyJhbGciOiJSUzI1NiIs...
+jwtd --alg EdDSA --key /path/to/public-key.pem eyJhbGciOiJFZERTQSIs...
 ```
 
-An invalid signature prints `Signature: INVALID` and exits with a nonzero status. Claim validity, including expiry, is not part of this cryptographic signature check.
+An invalid signature prints `Signature: INVALID` and exits with a nonzero status. Claim validity, including expiry, is not part of this cryptographic signature check. Pass `--alg` to also require an exact `alg` header (for either JWT or JWE) and fail before verification/decryption if the token uses a different algorithm.
 
 ### Validate claims
 
@@ -213,13 +217,29 @@ By default, claim validity never affects the exit code — expiry is shown only 
 jwtd --verify-claims eyJhbGciOiJIUzI1NiIs...
 ```
 
-Add `--aud` and/or `--iss` to also require a specific audience or issuer; either flag implies claim validation, so the temporal checks run too:
+Add `--aud`, `--iss`, `--sub`, `--leeway`, and/or `--require-exp` to enforce additional constraints; each flag implies claim validation, so the temporal checks run too:
 
 ```sh
-jwtd --aud my-api --iss https://issuer.example eyJhbGciOiJIUzI1NiIs...
+jwtd --aud my-api --iss https://issuer.example --sub user-123 --leeway 30s --require-exp eyJhbGciOiJIUzI1NiIs...
 ```
 
-The result is printed as a `Claims: VALID` / `Claims: INVALID` section (with the reason), and reported as `claimsValid` under `--json`. Claim validation is independent of the signature: it runs with or without `--key`, and when both are used the command exits nonzero if either check fails. A token with no `exp` is not treated as expired. The clock matches the displayed `expired` / `not yet valid` annotations, with no leeway. Claim validation applies to JWTs only; it is skipped (with a note) for JWEs.
+Use `--at` (RFC3339 or Unix seconds) to evaluate timestamps and claim validity at a specific instant, and `-q` / `--quiet` to suppress stdout when only the exit code is needed:
+
+```sh
+jwtd --at 2025-01-15T12:00:00Z --verify-claims eyJhbGciOiJIUzI1NiIs...
+jwtd -q --key /path/to/public-key.pem --verify-claims eyJhbGciOiJIUzI1NiIs...
+```
+
+The result is printed as a `Claims: VALID` / `Claims: INVALID` section (with the reason), and reported as `claimsValid` under `--json`. Claim validation is independent of the signature: it runs with or without `--key`, and when both are used the command exits nonzero if either check fails. Without `--require-exp`, a token with no `exp` is not treated as expired. The clock matches the displayed `expired` / `not yet valid` annotations, with no leeway unless `--leeway` is given. Claim validation applies to JWTs only; it is skipped (with a note) for JWEs.
+
+### Timestamp timezones
+
+Human-readable timestamps (`iat`, `exp`, `nbf`, `auth_time`, `updated_at`) render in UTC by default. Pass `--local` for the system's local timezone or `--tz <IANA-zone>` for a specific zone (`--json` always keeps raw numeric timestamps):
+
+```sh
+jwtd --local eyJhbGciOiJIUzI1NiIs...
+jwtd --tz America/New_York eyJhbGciOiJIUzI1NiIs...
+```
 
 ### Key formats
 
@@ -227,7 +247,7 @@ The `--key` flag accepts:
 
 - **PEM files**: RSA, EC, or Ed25519 keys (private or public), and X.509 certificates
 - **DER files**: PKCS#1, PKCS#8, SEC 1, or PKIX encoded keys, and X.509 certificates
-- **JWK files**: Single JSON Web Key or JWK Set (the entry matching the token's `kid` is used; the first key when the token has no `kid`)
+- **JWK files**: Single JSON Web Key or JWK Set (the entry matching the token's `kid` is used, disambiguated by `use` and `alg`; the first matching key when the token has no `kid`)
 - **Base64 strings**: Base64 or base64url encoded key material (PEM, DER, certificate, or JWK)
 - **Symmetric key files**: `hmac:<file>` uses the file's bytes as a symmetric key
 - **Literal secrets**: `raw:<secret>` uses the text after the prefix as a symmetric key verbatim

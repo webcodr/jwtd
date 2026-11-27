@@ -1567,3 +1567,326 @@ func TestParseUnverifiedJWT_DecodesSegmentsOnce(t *testing.T) {
 		t.Error("segments do not reassemble into the original token")
 	}
 }
+
+func TestReadToken_StripsBearerPrefixAndQuotes(t *testing.T) {
+	tok := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sig"
+
+	validCases := []struct {
+		name  string
+		input string
+	}{
+		{"Bearer space", "Bearer " + tok},
+		{"lowercase bearer", "bearer " + tok},
+		{"uppercase BEARER tab", "BEARER\t" + tok},
+		{"Bearer newline", "Bearer\n" + tok},
+		{"Authorization Bearer", "Authorization: Bearer " + tok},
+		{"lowercase authorization no space after colon", "authorization:bearer " + tok},
+		{"Authorization spaces around colon", "Authorization : Bearer " + tok},
+		{"double quoted token", `"` + tok + `"`},
+		{"single quoted token", `'` + tok + `'`},
+		{"double quoted Bearer token", `"Bearer ` + tok + `"`},
+		{"Authorization with quoted Bearer", `Authorization: "Bearer ` + tok + `"`},
+		{"Bearer with quoted token", `Bearer "` + tok + `"`},
+		{"wrapped multiline Authorization Bearer", "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.\neyJzdWIiOiIxMjMifQ.\nsig\n"},
+	}
+
+	for _, tt := range validCases {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := readToken([]string{tt.input})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tok {
+				t.Errorf("got %q, want %q", got, tok)
+			}
+		})
+	}
+
+	t.Run("empty or prefix-only returns errNoToken", func(t *testing.T) {
+		for _, input := range []string{`""`, `''`, `Authorization:`, `Authorization:   `, `Authorization: Bearer`, `Authorization: "Bearer"`} {
+			if got, err := readToken([]string{input}); !errors.Is(err, errNoToken) {
+				t.Errorf("readToken(%q) = (%q, %v), want errNoToken", input, got, err)
+			}
+		}
+	})
+
+	t.Run("unmatched quotes preserved", func(t *testing.T) {
+		got, err := readToken([]string{`"` + tok})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != `"`+tok {
+			t.Errorf("got %q, want unmatched quote preserved", got)
+		}
+	})
+
+	t.Run("word starting with Bearer not stripped", func(t *testing.T) {
+		got, err := readToken([]string{"BearerToken.payload.sig"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "BearerToken.payload.sig" {
+			t.Errorf("got %q, want BearerToken.payload.sig", got)
+		}
+	})
+}
+
+func TestVerifySignature_JWKSetDisambiguatesByUseAndAlg(t *testing.T) {
+	encKey := generateDistinctRSAKey(t)
+	sigKey := generateRSAKey(t)
+	jwksPath := writeJWKSetFile(t, "jwks.json",
+		jose.JSONWebKey{Key: &encKey.PublicKey, KeyID: "shared-kid", Use: "enc", Algorithm: "RSA-OAEP-256"},
+		jose.JSONWebKey{Key: &sigKey.PublicKey, KeyID: "shared-kid", Use: "sig", Algorithm: "RS256"},
+	)
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": "jws-disambiguated"})
+	token.Header["kid"] = "shared-kid"
+	signed, err := token.SignedString(sigKey)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := verifySignature(&buf, signed, jwksPath); err != nil {
+		t.Fatalf("expected valid signature via use/alg disambiguation, got %v", err)
+	}
+	assertOutputContains(t, buf.String(), "Signature: VALID")
+}
+
+func execCLI(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	cmd := newRootCommand()
+	var outBuf, errBuf bytes.Buffer
+	cmd.SetOut(&outBuf)
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs(args)
+	err = cmd.Execute()
+	return stripANSI(outBuf.String()), stripANSI(errBuf.String()), err
+}
+
+func TestRun_AlgPinning(t *testing.T) {
+	rsaKey := generateRSAKey(t)
+	rsaKeyPath := writeKeyFile(t, rsaKey)
+	jwtToken := signJWT(t, rsaKey, jwt.MapClaims{"sub": "alg-test"})
+	jweToken := encryptJWE(t, rsaKey, []byte(`{"sub":"jwe-alg"}`))
+
+	t.Run("JWT matching alg succeeds", func(t *testing.T) {
+		out, _, err := execCLI(t, "--alg", "RS256", "--key", rsaKeyPath, jwtToken)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertOutputContains(t, out, "Signature: VALID")
+	})
+
+	t.Run("JWT mismatched alg fails before output", func(t *testing.T) {
+		for _, extra := range [][]string{{}, {"--key", rsaKeyPath}, {"--json"}, {"--json", "--key", rsaKeyPath}} {
+			args := append([]string{"--alg", "EdDSA"}, extra...)
+			args = append(args, jwtToken)
+			out, _, err := execCLI(t, args...)
+			if err == nil || !strings.Contains(err.Error(), `does not match expected --alg "EdDSA"`) {
+				t.Fatalf("args %v: expected alg mismatch error, got %v", args, err)
+			}
+			if out != "" {
+				t.Errorf("args %v: expected empty stdout on alg mismatch, got %q", args, out)
+			}
+		}
+	})
+
+	t.Run("JWE matching alg succeeds", func(t *testing.T) {
+		out, _, err := execCLI(t, "--alg", "RSA-OAEP-256", "--key", rsaKeyPath, jweToken)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertOutputContains(t, out, "jwe-alg")
+	})
+
+	t.Run("JWE mismatched alg fails before decrypting or printing", func(t *testing.T) {
+		for _, extra := range [][]string{{}, {"--key", rsaKeyPath}, {"--json"}, {"--json", "--key", rsaKeyPath}} {
+			args := append([]string{"--alg", "RSA-OAEP"}, extra...)
+			args = append(args, jweToken)
+			out, _, err := execCLI(t, args...)
+			if err == nil || !strings.Contains(err.Error(), `does not match expected --alg "RSA-OAEP"`) {
+				t.Fatalf("args %v: expected alg mismatch error, got %v", args, err)
+			}
+			if out != "" {
+				t.Errorf("args %v: expected empty stdout on alg mismatch, got %q", args, out)
+			}
+		}
+	})
+
+	t.Run("outer JWE alg match allows differently-alg nested JWT", func(t *testing.T) {
+		secret := []byte("nested-hmac-secret-32-bytes-long")
+		inner := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "inner"})
+		outer := encryptJWE(t, rsaKey, []byte(inner))
+
+		out, _, err := execCLI(t, "--alg", "RSA-OAEP-256", "--key", rsaKeyPath, outer)
+		if !errors.Is(err, errInvalidSignature) {
+			t.Fatalf("expected nested errInvalidSignature, got %v", err)
+		}
+		assertOutputContains(t, out, "nested JWT", "inner")
+	})
+}
+
+func TestRun_QuietMode(t *testing.T) {
+	secret := []byte("quiet-mode-secret-32-bytes-long!")
+	pinTime(t, 1000)
+	liveToken := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "u1", "exp": float64(2000)})
+	expiredToken := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "u1", "exp": float64(500)})
+
+	t.Run("valid JWT produces no stdout", func(t *testing.T) {
+		out, _, err := execCLI(t, "-q", "--key", "raw:"+string(secret), "--verify-claims", liveToken)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if out != "" {
+			t.Errorf("expected empty stdout in quiet mode, got %q", out)
+		}
+	})
+
+	t.Run("valid JWE produces no stdout", func(t *testing.T) {
+		key := generateRSAKey(t)
+		jweToken := encryptJWE(t, key, []byte(`{"sub":"u1"}`))
+		out, _, err := execCLI(t, "--quiet", "--key", writeKeyFile(t, key), jweToken)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if out != "" {
+			t.Errorf("expected empty stdout in quiet mode, got %q", out)
+		}
+	})
+
+	t.Run("invalid signature returns sentinel with empty stdout", func(t *testing.T) {
+		for _, extra := range [][]string{{}, {"--json"}} {
+			args := append([]string{"-q", "--key", "raw:wrong"}, extra...)
+			args = append(args, liveToken)
+			out, _, err := execCLI(t, args...)
+			if !errors.Is(err, errInvalidSignature) {
+				t.Fatalf("args %v: expected errInvalidSignature, got %v", args, err)
+			}
+			if out != "" {
+				t.Errorf("args %v: expected empty stdout in quiet mode, got %q", args, out)
+			}
+		}
+	})
+
+	t.Run("invalid claims returns sentinel with empty stdout", func(t *testing.T) {
+		for _, extra := range [][]string{{}, {"--json"}} {
+			args := append([]string{"-q", "--verify-claims"}, extra...)
+			args = append(args, expiredToken)
+			out, _, err := execCLI(t, args...)
+			if !errors.Is(err, errInvalidClaims) {
+				t.Fatalf("args %v: expected errInvalidClaims, got %v", args, err)
+			}
+			if out != "" {
+				t.Errorf("args %v: expected empty stdout in quiet mode, got %q", args, out)
+			}
+		}
+	})
+}
+
+func TestRun_AtFlag(t *testing.T) {
+	token := makeJWT(`{"alg":"HS256"}`, `{"sub":"u1","exp":2000}`, "sig")
+
+	t.Run("RFC3339 adjusts annotations and claim verdict", func(t *testing.T) {
+		out, _, err := execCLI(t, "--at", "1970-01-01T00:16:40Z", "--verify-claims", token)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertOutputContains(t, out, "expires in 16m", "Claims: VALID")
+	})
+
+	t.Run("Unix seconds in past-expiry evaluates invalid", func(t *testing.T) {
+		out, _, err := execCLI(t, "--at", "2600", "--verify-claims", token)
+		if !errors.Is(err, errInvalidClaims) {
+			t.Fatalf("expected errInvalidClaims, got %v", err)
+		}
+		assertOutputContains(t, out, "expired 10m ago", "Claims: INVALID")
+	})
+
+	t.Run("--at alone does not imply claim enforcement", func(t *testing.T) {
+		out, _, err := execCLI(t, "--at", "2600", token)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertOutputContains(t, out, "expired 10m ago")
+		if strings.Contains(out, "Claims:") {
+			t.Errorf("Claims section should not appear without claim flags:\n%s", out)
+		}
+	})
+
+	t.Run("invalid and out-of-range --at values error", func(t *testing.T) {
+		for _, bad := range []string{"not-a-time", "253402300800", "-62167219201"} {
+			if _, _, err := execCLI(t, "--at", bad, token); err == nil {
+				t.Errorf("expected error for --at %q", bad)
+			}
+		}
+	})
+}
+
+func TestRun_TimezoneAndClaimFlags(t *testing.T) {
+	token := makeJWT(`{"alg":"HS256"}`, `{"sub":"alice","iat":1516239022,"auth_time":1516239000,"exp":1516239622}`, "sig")
+
+	t.Run("--tz formats timestamps in requested zone", func(t *testing.T) {
+		out, _, err := execCLI(t, "--tz", "America/New_York", "--at", "1516239022", token)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertOutputContains(t, out,
+			"2018-01-17T20:30:22-05:00 (1516239022)",
+			"2018-01-17T20:30:00-05:00 (1516239000)",
+			"2018-01-17T20:40:22-05:00 (1516239622, expires in 10m)",
+		)
+	})
+
+	t.Run("--json ignores --tz and keeps raw timestamps", func(t *testing.T) {
+		out, _, err := execCLI(t, "--json", "--tz", "America/New_York", token)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if strings.Contains(out, "-05:00") || !strings.Contains(out, `"iat": 1516239022`) {
+			t.Errorf("expected raw numeric timestamps in --json output, got:\n%s", out)
+		}
+	})
+
+	t.Run("--local uses time.Local", func(t *testing.T) {
+		out, _, err := execCLI(t, "--local", token)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := time.Unix(1516239022, 0).In(time.Local).Format(time.RFC3339Nano) + " (1516239022)"
+		assertOutputContains(t, out, want)
+	})
+
+	t.Run("--local and --tz together error", func(t *testing.T) {
+		if _, _, err := execCLI(t, "--local", "--tz", "UTC", token); err == nil {
+			t.Fatal("expected error when both --local and --tz are set")
+		}
+	})
+
+	t.Run("invalid --tz errors", func(t *testing.T) {
+		if _, _, err := execCLI(t, "--tz", "Mars/Olympus_Mons", token); err == nil {
+			t.Fatal("expected error for invalid --tz")
+		}
+	})
+
+	t.Run("negative --leeway errors", func(t *testing.T) {
+		if _, _, err := execCLI(t, "--leeway", "-5s", token); err == nil {
+			t.Fatal("expected error for negative --leeway")
+		}
+	})
+
+	t.Run("--sub, --leeway, and --require-exp wire through CLI", func(t *testing.T) {
+		out, _, err := execCLI(t, "--at", "1516239640", "--leeway", "30s", "--sub", "alice", "--require-exp", token)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertOutputContains(t, out, "Claims: VALID")
+
+		noExp := makeJWT(`{"alg":"HS256"}`, `{"sub":"alice"}`, "sig")
+		out, _, err = execCLI(t, "--require-exp", noExp)
+		if !errors.Is(err, errInvalidClaims) {
+			t.Fatalf("expected errInvalidClaims for missing exp, got %v", err)
+		}
+		assertOutputContains(t, out, "Claims: INVALID")
+	})
+}

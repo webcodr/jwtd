@@ -721,3 +721,64 @@ func TestFormatTimestamps_IntegerAndFractionalAgree(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatTimestamps_OIDCClaims(t *testing.T) {
+	pinTime(t, 1600000000)
+	data := map[string]any{
+		"auth_time":  json.Number("1516239022"),
+		"updated_at": json.Number("1716239022"),
+		"other":      "not-a-timestamp",
+	}
+
+	formatTimestamps(data)
+
+	if want := "2018-01-18T01:30:22Z (1516239022)"; data["auth_time"] != want {
+		t.Errorf("auth_time = %v, want %q", data["auth_time"], want)
+	}
+	if want := "2024-05-20T21:03:42Z (1716239022)"; data["updated_at"] != want {
+		t.Errorf("updated_at = %v, want %q", data["updated_at"], want)
+	}
+	// Non-numeric OIDC timestamp claims stay untouched.
+	nonNum := map[string]any{"auth_time": "yesterday"}
+	formatTimestamps(nonNum)
+	if nonNum["auth_time"] != "yesterday" {
+		t.Errorf("non-numeric auth_time modified: %v", nonNum["auth_time"])
+	}
+}
+
+func TestFormatTimestamps_CustomDisplayLocation(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("loading America/New_York: %v", err)
+	}
+	prev := displayLocation
+	displayLocation = ny
+	t.Cleanup(func() { displayLocation = prev })
+
+	pinTime(t, 1516239022)
+	data := map[string]any{
+		"iat": json.Number("1516239022"),
+		"exp": json.Number("1516239622"),
+		// Year 9999 Dec 31 23:59:59 UTC; NY is -5h (still 9999), whereas a
+		// positive offset like +02:00 pushes it into year 10000.
+		"updated_at": json.Number("253402300799"),
+	}
+
+	formatTimestamps(data)
+
+	if want := "2018-01-17T20:30:22-05:00 (1516239022)"; data["iat"] != want {
+		t.Errorf("iat = %v, want %q", data["iat"], want)
+	}
+	if want := "2018-01-17T20:40:22-05:00 (1516239622, expires in 10m)"; data["exp"] != want {
+		t.Errorf("exp = %v, want %q", data["exp"], want)
+	}
+
+	// Positive fixed zone pushes 253402300799 into year 10000, so it must fall
+	// back to UTC rather than emitting a 5-digit year that breaks RFC3339.
+	displayLocation = time.FixedZone("UTC+2", 2*3600)
+	boundary := map[string]any{"updated_at": json.Number("253402300799")}
+	formatTimestamps(boundary)
+	if want := "9999-12-31T23:59:59Z (253402300799)"; boundary["updated_at"] != want {
+		t.Errorf("boundary fallback = %v, want %q", boundary["updated_at"], want)
+	}
+}

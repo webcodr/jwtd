@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -17,16 +18,19 @@ var errInvalidClaims = errors.New("invalid claims")
 // zero value requests nothing, so the default behavior stays decode-only and
 // the exit code keeps reflecting the signature alone.
 type claimChecks struct {
-	verify   bool   // --verify-claims: enforce the temporal claims (exp, nbf)
-	audience string // --aud: require this audience in the aud claim
-	issuer   string // --iss: require this issuer in the iss claim
+	verify     bool          // --verify-claims: enforce the temporal claims (exp, nbf)
+	audience   string        // --aud: require this audience in the aud claim
+	issuer     string        // --iss: require this issuer in the iss claim
+	subject    string        // --sub: require this subject in the sub claim
+	leeway     time.Duration // --leeway: clock-skew tolerance for exp/nbf
+	requireExp bool          // --require-exp: require the exp claim to be present
 }
 
 // requested reports whether any claim validation was asked for. An expected
-// audience or issuer implies validation, so those flags work without also
-// passing --verify-claims.
+// audience, issuer, subject, leeway, or required exp implies validation, so
+// those flags work without also passing --verify-claims.
 func (c claimChecks) requested() bool {
-	return c.verify || c.audience != "" || c.issuer != ""
+	return c.verify || c.audience != "" || c.issuer != "" || c.subject != "" || c.leeway > 0 || c.requireExp
 }
 
 // validateClaimsSet runs the requested RFC 7519 claim validations against the
@@ -35,10 +39,11 @@ func (c claimChecks) requested() bool {
 // human-readable reason.
 //
 // Validation always covers the temporal claims (exp, nbf) that are present; an
-// expected audience or issuer is additionally required to be present and to
-// match. The clock is the shared timeNow, so the verdict agrees with the
-// displayed expired / not-yet-valid annotations and is deterministic under
-// test. This is purely a claims check and performs no signature verification.
+// expected audience, issuer, subject, or required exp is additionally required
+// to be present and to match. The clock is the shared timeNow, so the verdict
+// agrees with the displayed expired / not-yet-valid annotations and is
+// deterministic under test. This is purely a claims check and performs no
+// signature verification.
 func validateClaimsSet(claims jwt.MapClaims, c claimChecks) (bool, error) {
 	opts := []jwt.ParserOption{jwt.WithTimeFunc(timeNow)}
 	if c.audience != "" {
@@ -46,6 +51,15 @@ func validateClaimsSet(claims jwt.MapClaims, c claimChecks) (bool, error) {
 	}
 	if c.issuer != "" {
 		opts = append(opts, jwt.WithIssuer(c.issuer))
+	}
+	if c.subject != "" {
+		opts = append(opts, jwt.WithSubject(c.subject))
+	}
+	if c.leeway > 0 {
+		opts = append(opts, jwt.WithLeeway(c.leeway))
+	}
+	if c.requireExp {
+		opts = append(opts, jwt.WithExpirationRequired())
 	}
 	// The validator has to be shielded from timestamps it cannot convert: see
 	// unrepresentableTimeClaim, which would otherwise silently invert the
