@@ -652,3 +652,52 @@ func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, 
 	valid, reason = verifyLoadedKeySignature(p, key)
 	return valid, reason, nil
 }
+
+// One-key human-output wrappers over openJWT/openJWE and the renderers, for
+// the tests written against the single --key API. Production code opens the
+// token in run() with both keys.
+
+// decodeJWTHuman prints the decoded JWT and, when claim validation was
+// requested, a Claims section after it. Both the signature check and the claim
+// check run so their sections are shown together; the command exits nonzero if
+// either fails, with the signature verdict taking precedence for the returned
+// sentinel (both are suppressed by the top-level error printer).
+func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return err
+	}
+	return decodeParsedJWTHuman(w, p, keyStr, checks)
+}
+
+func decodeParsedJWTHuman(w io.Writer, p *parsedJWT, keyStr string, checks claimChecks) error {
+	l, err := openJWT(p, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return decodeLayerHuman(w, l, checks)
+}
+
+// printParsedJWT renders an already-parsed token, so callers that also need the
+// claims (claim validation) or the header (signature verification) parse once
+// and share the result instead of decoding the same segments again.
+func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
+	// Opening resolves and applies the key before anything is written, so a
+	// bad key argument fails with an error alone instead of three decoded
+	// sections followed by one.
+	l, err := openJWT(p, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return renderLayerHuman(w, newFormatter(), l)
+}
+
+func decodeParsedJWEHuman(w io.Writer, tokenStr string, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string) error {
+	// Opening decrypts before anything is printed, so an unusable key or a
+	// failed decryption is reported alone instead of after a partial section.
+	l, err := openJWE(tokenStr, jwe, header, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return renderLayerHuman(w, newFormatter(), l)
+}

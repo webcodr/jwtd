@@ -81,16 +81,6 @@ func parseJWE(tokenStr string) (*jose.JSONWebEncryption, map[string]any, error) 
 	return jwe, header, nil
 }
 
-func decodeParsedJWEHuman(w io.Writer, tokenStr string, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string) error {
-	// Opening decrypts before anything is printed, so an unusable key or a
-	// failed decryption is reported alone instead of after a partial section.
-	l, err := openJWE(tokenStr, jwe, header, tokenKeys{decrypt: keyStr}, false)
-	if err != nil {
-		return err
-	}
-	return renderLayerHuman(w, newFormatter(), l)
-}
-
 // jweProtectedHeaderMap decodes every field in the compact JWE protected header
 // for display. go-jose remains authoritative for parsing and cryptography.
 func jweProtectedHeaderMap(token string) (map[string]any, error) {
