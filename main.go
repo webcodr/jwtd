@@ -55,6 +55,7 @@ func newRootCommand() *cobra.Command {
 	}
 
 	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification: a PEM/DER/JWK file or inline base64, hmac:<file> for a symmetric secret file, or raw:<secret> for a literal one (inline values are visible to other local users in the process list, so prefer a file or JWTD_KEY)")
+	rootCmd.Flags().String("verify-key", "", "key for JWS signature verification, top level or nested inside a JWE; defaults to --key (same formats as --key; prefer a file or JWTD_VERIFY_KEY)")
 	rootCmd.Flags().Bool("json", false, "emit machine-readable JSON instead of colorized sections")
 	rootCmd.Flags().String("color", "auto", "colorize output: auto (color only on a TTY), always, or never")
 	rootCmd.Flags().BoolP("quiet", "q", false, "suppress standard output and only report status via exit code")
@@ -140,14 +141,11 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	keyStr, _ := cmd.Flags().GetString("key")
-	fromFlag := keyStr != ""
-	if keyStr == "" {
-		keyStr = os.Getenv("JWTD_KEY")
+	keys := tokenKeys{
+		decrypt: resolveKeyArg(cmd, "key", "JWTD_KEY"),
+		verify:  resolveKeyArg(cmd, "verify-key", "JWTD_VERIFY_KEY"),
 	}
-	if keyStr != "" {
-		printKeyInterpretation(cmd.ErrOrStderr(), keyStr, fromFlag)
-	}
+	verifyKeyStr, _ := keys.verification()
 
 	checks := claimChecks{
 		verify:     verifyClaimsFlag,
@@ -172,9 +170,6 @@ func run(cmd *cobra.Command, args []string) error {
 		if sel.active() && checks.requested() {
 			return errors.New("claim validation (--verify-claims/--aud/--iss/--sub/--leeway/--require-exp) is not supported with --header/--payload/--claim on a JWE yet")
 		}
-		if checks.requested() {
-			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Note: claim validation (--verify-claims/--aud/--iss/--sub/--leeway/--require-exp) applies to JWTs only and is skipped for JWE.")
-		}
 		jwe, header, err := parseJWE(token)
 		if err != nil {
 			return err
@@ -183,13 +178,20 @@ func run(cmd *cobra.Command, args []string) error {
 		if err := checkExpectedAlg(alg, expectedAlg); err != nil {
 			return err
 		}
+		l, err := openJWE(token, jwe, header, keys, false)
+		if err != nil {
+			return err
+		}
+		if err := checkVerifyKeyUsed(l, keys); err != nil {
+			return err
+		}
 		if sel.active() {
-			return extractJWE(w, jwe, header, keyStr, sel, jsonOut)
+			return extractJWE(w, jwe, header, keys.decrypt, sel, jsonOut)
 		}
 		if jsonOut {
-			return decodeParsedJWEJSON(w, token, jwe, header, keyStr)
+			return decodeParsedJWEJSON(w, token, jwe, header, keys.decrypt)
 		}
-		return decodeParsedJWEHuman(w, token, jwe, header, keyStr)
+		return decodeLayerHuman(w, l, checks)
 	}
 
 	p, err := parseUnverifiedJWT(token)
@@ -199,13 +201,46 @@ func run(cmd *cobra.Command, args []string) error {
 	if err := checkExpectedAlg(p.method.Alg(), expectedAlg); err != nil {
 		return err
 	}
+	l, err := openJWT(p, keys, false)
+	if err != nil {
+		return err
+	}
 	if sel.active() {
-		return extractJWT(w, cmd.ErrOrStderr(), p, keyStr, checks, sel, jsonOut)
+		return extractJWT(w, cmd.ErrOrStderr(), p, verifyKeyStr, checks, sel, jsonOut)
 	}
 	if jsonOut {
-		return decodeParsedJWTJSON(w, p, keyStr, checks)
+		return decodeParsedJWTJSON(w, p, verifyKeyStr, checks)
 	}
-	return decodeParsedJWTHuman(w, p, keyStr, checks)
+	return decodeLayerHuman(w, l, checks)
+}
+
+// resolveKeyArg reads a key flag, falling back to its environment variable, and
+// narrates on stderr how a value that is not a key file was read.
+func resolveKeyArg(cmd *cobra.Command, flag, env string) string {
+	keyStr, _ := cmd.Flags().GetString(flag)
+	fromFlag := keyStr != ""
+	origin := "--" + flag
+	if !fromFlag {
+		keyStr = os.Getenv(env)
+		origin = env
+	}
+	if keyStr != "" {
+		printKeyInterpretation(cmd.ErrOrStderr(), keyStr, origin, fromFlag)
+	}
+	return keyStr
+}
+
+// checkVerifyKeyUsed fails when a verification key was given but the opened
+// token holds no JWS for it: a signature check the user asked for that never
+// ran must not pass silently. It runs before any output.
+func checkVerifyKeyUsed(l *tokenLayer, keys tokenKeys) error {
+	if keys.verify == "" || l.hasJWS() {
+		return nil
+	}
+	if l.jwe != nil && keys.decrypt == "" {
+		return fmt.Errorf("%w (pass --key to decrypt the JWE first)", errVerifyKeyUnused)
+	}
+	return errVerifyKeyUnused
 }
 
 // selectionFromFlags reads --header, --payload, and --claim. Cobra already
@@ -284,7 +319,20 @@ func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) er
 }
 
 func decodeParsedJWTHuman(w io.Writer, p *parsedJWT, keyStr string, checks claimChecks) error {
-	derr := printParsedJWT(w, p, keyStr)
+	l, err := openJWT(p, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return decodeLayerHuman(w, l, checks)
+}
+
+// decodeLayerHuman renders an opened token and, when claim validation was
+// requested, a Claims section after everything else. The claims checked are the
+// innermost claims set (see claimsTarget), so a JWE wrapping a JWS is validated
+// against the inner token's claims. Claims that cannot be reached are an
+// INVALID verdict: a requested check that cannot run must not pass.
+func decodeLayerHuman(w io.Writer, l *tokenLayer, checks claimChecks) error {
+	derr := renderLayerHuman(w, newFormatter(), l)
 	if derr != nil && !errors.Is(derr, errInvalidSignature) {
 		return derr
 	}
@@ -294,9 +342,17 @@ func decodeParsedJWTHuman(w io.Writer, p *parsedJWT, keyStr string, checks claim
 		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
-		cerr = printClaimsVerdict(w, p.claims, checks)
-		if cerr != nil && !errors.Is(cerr, errInvalidClaims) {
-			return cerr
+		claims, reason := l.claimsTarget()
+		if reason != "" {
+			if err := printVerdict(w, "Claims", false, reason); err != nil {
+				return err
+			}
+			cerr = fmt.Errorf("%w: %s", errInvalidClaims, reason)
+		} else {
+			cerr = printClaimsVerdict(w, claims, checks)
+			if cerr != nil && !errors.Is(cerr, errInvalidClaims) {
+				return cerr
+			}
 		}
 	}
 
@@ -335,11 +391,7 @@ func applyColorMode(mode string, jsonOut bool) error {
 // read it, so that is flagged for flag values.
 //
 // Writes are best effort: a failure here must not disturb decoding.
-func printKeyInterpretation(w io.Writer, keyStr string, fromFlag bool) {
-	origin := "JWTD_KEY"
-	if fromFlag {
-		origin = "--key"
-	}
+func printKeyInterpretation(w io.Writer, keyStr, origin string, fromFlag bool) {
 
 	var note string
 	switch classifyKeyArg(keyStr) {
