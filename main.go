@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -467,71 +466,18 @@ func readInteractive() (token string, err error) {
 	return token, nil
 }
 
-// decodeAndPrint parses the JWT and prints header, payload, and signature.
-// If keyStr is provided, the signature is verified against the given key.
-func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
-	p, err := parseUnverifiedJWT(tokenStr)
-	if err != nil {
-		return err
-	}
-	return printParsedJWT(w, p, keyStr)
-}
-
 // printParsedJWT renders an already-parsed token, so callers that also need the
 // claims (claim validation) or the header (signature verification) parse once
 // and share the result instead of decoding the same segments again.
 func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
-	// The key is resolved before anything is written, so a bad key argument
-	// fails with an error alone instead of three decoded sections followed by
-	// one. The JWE and --json paths resolve their key up front for the same
-	// reason.
-	var key any
-	if keyStr != "" {
-		kid, err := headerKID(p.header)
-		if err != nil {
-			return fmt.Errorf("signature verification: %w", err)
-		}
-		loaded, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
-		if err != nil {
-			return fmt.Errorf("signature verification: error loading key: %w", err)
-		}
-		key = loaded
-	}
-
-	f := newFormatter()
-
-	if err := printSection(w, f, "Header", p.header); err != nil {
+	// Opening resolves and applies the key before anything is written, so a
+	// bad key argument fails with an error alone instead of three decoded
+	// sections followed by one.
+	l, err := openJWT(p, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-	// formatTimestamps rewrites claim values into display strings, so it runs
-	// on a copy: p.claims stays the authoritative parse for validation.
-	display := maps.Clone(p.claims)
-	formatTimestamps(display)
-	// Converted to the plain map type: jwt.MapClaims is a named type, which the
-	// formatter's fast path does not match.
-	if err := printSection(w, f, "Payload", map[string]any(display)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-	if err := printSignature(w, p.parts[2]); err != nil {
-		return err
-	}
-
-	if keyStr != "" {
-		if _, err := fmt.Fprintln(w); err != nil {
-			return err
-		}
-		if err := printSignatureVerdict(w, p, key); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return renderLayerHuman(w, newFormatter(), l)
 }
 
 // parsedJWT is one strict decode of a compact JWT: its three segments, the
@@ -629,23 +575,6 @@ func splitCompactJWT(tokenStr string) ([]string, bool) {
 		return nil, false
 	}
 	return []string{header, claims, signature}, true
-}
-
-// printSignatureVerdict renders the signature verdict for an already-parsed
-// token and an already-loaded key, and returns the errInvalidSignature sentinel
-// on failure so the CLI exits nonzero. It takes the loaded key rather than the
-// key argument so its caller can fail on an unusable key before printing
-// anything.
-func printSignatureVerdict(w io.Writer, p *parsedJWT, key any) error {
-	valid, reason := verifyLoadedKeySignature(p, key)
-
-	if !valid {
-		if werr := printVerdict(w, "Signature", false, reason.Error()); werr != nil {
-			return werr
-		}
-		return fmt.Errorf("%w: %v", errInvalidSignature, reason)
-	}
-	return printVerdict(w, "Signature", true, "")
 }
 
 // verifyJWTSignature performs the cryptographic signature check and reports the

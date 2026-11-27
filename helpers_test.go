@@ -565,3 +565,45 @@ func signJWTWithKID(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.Ma
 	}
 	return signed
 }
+
+// The wrappers below have no production caller since the token is opened into
+// layers (layers.go); they are kept for the tests that start from a compact
+// string or a loaded key.
+
+// decodeAndPrint parses the JWT and prints header, payload, and signature.
+// If keyStr is provided, the signature is verified against the given key.
+func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return err
+	}
+	return printParsedJWT(w, p, keyStr)
+}
+
+// printSignatureVerdict renders the signature verdict for an already-parsed
+// token and an already-loaded key, and returns the errInvalidSignature sentinel
+// on failure so the CLI exits nonzero. It takes the loaded key rather than the
+// key argument so its caller can fail on an unusable key before printing
+// anything.
+func printSignatureVerdict(w io.Writer, p *parsedJWT, key any) error {
+	valid, reason := verifyLoadedKeySignature(p, key)
+
+	if !valid {
+		if werr := printVerdict(w, "Signature", false, reason.Error()); werr != nil {
+			return werr
+		}
+		return fmt.Errorf("%w: %v", errInvalidSignature, reason)
+	}
+	return printVerdict(w, "Signature", true, "")
+}
+
+// decodeAndPrintJWE parses a JWE token and prints its contents.
+// If keyStr is provided, the token is decrypted and the plaintext payload is displayed.
+// Otherwise, only the protected header and encrypted part metadata are shown.
+func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
+	jwe, header, err := parseJWE(tokenStr)
+	if err != nil {
+		return err
+	}
+	return decodeParsedJWEHuman(w, tokenStr, jwe, header, keyStr)
+}

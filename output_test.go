@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestEscapeTerminalText(t *testing.T) {
@@ -780,5 +782,26 @@ func TestFormatTimestamps_CustomDisplayLocation(t *testing.T) {
 	formatTimestamps(boundary)
 	if want := "9999-12-31T23:59:59Z (253402300799)"; boundary["updated_at"] != want {
 		t.Errorf("boundary fallback = %v, want %q", boundary["updated_at"], want)
+	}
+}
+
+func TestDecodeAndPrintJWE_SeparateVerifyKey(t *testing.T) {
+	recipient := generateRSAKey(t)
+	issuer := generateDistinctRSAKey(t)
+	outer := encryptJWE(t, recipient, []byte(signJWT(t, issuer, jwt.MapClaims{"sub": "alice"})))
+
+	l, err := openToken(outer, tokenKeys{decrypt: writeKeyFile(t, recipient), verify: writeRSAPublicKeyFile(t, &issuer.PublicKey)})
+	if err != nil {
+		t.Fatalf("openToken: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := renderLayerHuman(&buf, newFormatter(), l); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := stripANSI(buf.String())
+	for _, want := range []string{"Decrypted Payload (nested JWT)", "alice", "Signature: VALID"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
 	}
 }

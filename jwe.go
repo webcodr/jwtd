@@ -81,51 +81,14 @@ func parseJWE(tokenStr string) (*jose.JSONWebEncryption, map[string]any, error) 
 	return jwe, header, nil
 }
 
-// decodeAndPrintJWE parses a JWE token and prints its contents.
-// If keyStr is provided, the token is decrypted and the plaintext payload is displayed.
-// Otherwise, only the protected header and encrypted part metadata are shown.
-func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
-	jwe, header, err := parseJWE(tokenStr)
-	if err != nil {
-		return err
-	}
-	return decodeParsedJWEHuman(w, tokenStr, jwe, header, keyStr)
-}
-
 func decodeParsedJWEHuman(w io.Writer, tokenStr string, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string) error {
-	// The key is resolved before anything is printed, so an unusable key
-	// fails with the error alone instead of a partial section ahead of it.
-	var key any
-	if keyStr != "" {
-		kid, kerr := headerKID(header)
-		if kerr != nil {
-			return kerr
-		}
-		alg, _ := header["alg"].(string)
-		loaded, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "enc", alg: alg})
-		if err != nil {
-			return fmt.Errorf("loading decryption key: %w", err)
-		}
-		key = loaded
-	}
-
-	f := newFormatter()
-	if err := printSection(w, f, "Protected Header", header); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-
-	if keyStr == "" {
-		return printEncryptedParts(w, tokenStr)
-	}
-
-	plaintext, err := jwe.Decrypt(key)
+	// Opening decrypts before anything is printed, so an unusable key or a
+	// failed decryption is reported alone instead of after a partial section.
+	l, err := openJWE(tokenStr, jwe, header, tokenKeys{decrypt: keyStr}, false)
 	if err != nil {
-		return fmt.Errorf("decrypting JWE: %w", err)
+		return err
 	}
-	return printDecryptedPayload(w, f, plaintext, keyStr)
+	return renderLayerHuman(w, newFormatter(), l)
 }
 
 // jweProtectedHeaderMap decodes every field in the compact JWE protected header
