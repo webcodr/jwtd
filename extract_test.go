@@ -22,12 +22,20 @@ func disableColor(t *testing.T) {
 
 func runExtractJWT(t *testing.T, token, keyStr string, checks claimChecks, sel selection, jsonOut bool) (stdout, stderr string, err error) {
 	t.Helper()
-	p, perr := parseUnverifiedJWT(token)
-	if perr != nil {
-		t.Fatalf("parsing token: %v", perr)
+	return runExtractLayer(t, token, tokenKeys{decrypt: keyStr}, checks, sel, jsonOut)
+}
+
+// runExtractLayer opens a token and extracts from it. An error from opening
+// (an unusable key, a failed decryption) is returned like an extraction error,
+// since the CLI reports both the same way and prints nothing either way.
+func runExtractLayer(t *testing.T, token string, keys tokenKeys, checks claimChecks, sel selection, jsonOut bool) (stdout, stderr string, err error) {
+	t.Helper()
+	l, err := openToken(token, keys)
+	if err != nil {
+		return "", "", err
 	}
 	var out, errOut bytes.Buffer
-	err = extractJWT(&out, &errOut, p, keyStr, checks, sel, jsonOut)
+	err = extractLayer(&out, &errOut, l, checks, sel, jsonOut)
 	return out.String(), errOut.String(), err
 }
 
@@ -209,8 +217,11 @@ func TestExtractJWE(t *testing.T) {
 			}
 		}},
 		{name: "claim", plaintext: `{"sub":"j1"}`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, want: "j1\n"},
-		{name: "claim on non-object payload", plaintext: `[1,2]`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "decrypted payload is not a JSON object"},
-		{name: "claim on nested token", plaintext: nestedJWT, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "nested token is not supported"},
+		{name: "claim on non-object payload", plaintext: `[1,2]`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "the decrypted payload is not a JSON claims set"},
+		// With only --key, the decryption key is offered to the inner JWS as the
+		// fallback; an RSA key cannot verify HS256, so the verdict is INVALID and
+		// the value is withheld. TestExtractLayer_ClaimFromNestedJWS passes both keys.
+		{name: "nested token with only --key is withheld on the fallback verdict", plaintext: nestedJWT, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "invalid signature"},
 		{name: "missing claim", plaintext: `{"sub":"j1"}`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "nope"}, wantErr: `claim "nope" not present`},
 		// Two dots in total make a claims set token-shaped by delimiter count;
 		// it must still be read as the JSON object it is.
@@ -221,12 +232,8 @@ func TestExtractJWE(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			token := encryptJWE(t, key, []byte(tt.plaintext))
-			jwe, header, err := parseJWE(token)
-			if err != nil {
-				t.Fatalf("parsing JWE: %v", err)
-			}
-			var out bytes.Buffer
-			err = extractJWE(&out, jwe, header, tt.keyStr, tt.sel, tt.jsonOut)
+			stdout, _, err := runExtractLayer(t, token, tokenKeys{decrypt: tt.keyStr}, claimChecks{}, tt.sel, tt.jsonOut)
+			out := bytes.NewBufferString(stdout)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
@@ -265,5 +272,59 @@ func TestExtractJWT_EscapesNonStringClaimValue(t *testing.T) {
 	}
 	if !json.Valid([]byte(stdout)) {
 		t.Errorf("escaped claim output is no longer valid JSON: %q", stdout)
+	}
+}
+
+func TestExtractLayer_NestedBadSignatureWithholds(t *testing.T) {
+	disableColor(t)
+	token, recipientPath, _ := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	thirdKey := writeRSAPublicKeyFile(t, &generateDistinctRSAKey(t).PublicKey)
+
+	stdout, stderr, err := runExtractLayer(t, token, tokenKeys{decrypt: recipientPath, verify: thirdKey}, claimChecks{}, selection{kind: selectClaim, claim: "sub"}, false)
+	if !errors.Is(err, errInvalidSignature) {
+		t.Fatalf("err = %v, want errInvalidSignature from the inner token", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stripANSI(stderr), "Signature: INVALID") {
+		t.Errorf("stderr = %q, want the failing inner verdict", stderr)
+	}
+}
+
+func TestExtractLayer_PayloadIsInnermost(t *testing.T) {
+	token, recipientPath, issuerPub := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	stdout, _, err := runExtractLayer(t, token, tokenKeys{decrypt: recipientPath, verify: issuerPub}, claimChecks{}, selection{kind: selectPayload}, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stdout != "{\"sub\":\"alice\"}\n" {
+		t.Errorf("stdout = %q, want the inner claims", stdout)
+	}
+}
+
+func TestExtractLayer_ClaimsUnreachableWithholds(t *testing.T) {
+	disableColor(t)
+	token := encryptJWE(t, generateRSAKey(t), []byte(`{"sub":"x"}`))
+	stdout, stderr, err := runExtractLayer(t, token, tokenKeys{}, claimChecks{verify: true}, selection{kind: selectHeader}, false)
+	if !errors.Is(err, errInvalidClaims) {
+		t.Fatalf("err = %v, want errInvalidClaims", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stripANSI(stderr), "pass --key to decrypt it") {
+		t.Errorf("stderr = %q, want the unreachable-claims reason", stderr)
+	}
+}
+
+func TestExtractLayer_ClaimFromNestedJWS(t *testing.T) {
+	token, recipientPath, issuerPub := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	stdout, stderr, err := runExtractLayer(t, token, tokenKeys{decrypt: recipientPath, verify: issuerPub}, claimChecks{}, selection{kind: selectClaim, claim: "sub"}, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stdout != "alice\n" || stderr != "" {
+		t.Errorf("stdout = %q, stderr = %q, want the inner claim and no verdict", stdout, stderr)
 	}
 }

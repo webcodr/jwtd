@@ -1983,16 +1983,187 @@ func TestRun_AlgPinAppliesToExtraction(t *testing.T) {
 	}
 }
 
-func TestRun_JWEExtractionRefusesClaimFlags(t *testing.T) {
+func TestRun_JWEExtractionValidatesClaims(t *testing.T) {
 	key := generateRSAKey(t)
 	keyPath := writeKeyFile(t, key)
-	token := encryptJWE(t, key, []byte(`{"sub":"x","aud":"other","exp":1}`))
+	token := encryptJWE(t, key, []byte(`{"sub":"x","aud":"other"}`))
 
-	stdout, _, err := runRootCommand(t, "--key", keyPath, "--aud", "mine", "--claim", "sub", token)
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("err = %v, want claim flags on a JWE extraction to be refused", err)
+	stdout, stderr, err := runRootCommand(t, "--key", keyPath, "--aud", "mine", "--claim", "sub", token)
+	if !errors.Is(err, errInvalidClaims) {
+		t.Fatalf("err = %v, want errInvalidClaims", err)
 	}
 	if stdout != "" {
-		t.Errorf("stdout = %q, want empty: a claim check that cannot run must not pass silently", stdout)
+		t.Errorf("stdout = %q, want empty: a value whose claims failed must be withheld", stdout)
+	}
+	if !strings.Contains(stripANSI(stderr), "Claims: INVALID") {
+		t.Errorf("stderr = %q, want the failing claims verdict", stderr)
+	}
+}
+
+// signedThenEncrypted returns an RS256 JWS signed by an issuer key and
+// encrypted to a recipient key, plus the recipient private key file and the
+// issuer public key file: the shape of an encrypted OIDC ID token.
+func signedThenEncrypted(t *testing.T, claims jwt.MapClaims) (token, recipientPath, issuerPubPath string) {
+	t.Helper()
+	recipient := generateRSAKey(t)
+	issuer := generateDistinctRSAKey(t)
+	token = encryptJWE(t, recipient, []byte(signJWT(t, issuer, claims)))
+	return token, writeKeyFile(t, recipient), writeRSAPublicKeyFile(t, &issuer.PublicKey)
+}
+
+func TestRun_VerifyKeyNestedJWS(t *testing.T) {
+	token, recipientPath, issuerPub := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	stdout, _, err := runRootCommand(t, "--key", recipientPath, "--verify-key", issuerPub, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stripANSI(stdout), "Signature: VALID") {
+		t.Errorf("stdout missing the inner verdict:\n%s", stdout)
+	}
+}
+
+func TestRun_VerifyKeyFromEnv(t *testing.T) {
+	secret := []byte("env-verify-secret")
+	token := signJWTWithHMAC(t, secret, jwt.MapClaims{"sub": "u1"})
+	t.Setenv("JWTD_VERIFY_KEY", symmetricKeyArg(t, secret))
+	// A global decryption key must not get in the way of a plain JWT.
+	t.Setenv("JWTD_KEY", symmetricKeyArg(t, []byte("unrelated-secret")))
+
+	stdout, _, err := runRootCommand(t, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stripANSI(stdout), "Signature: VALID") {
+		t.Errorf("stdout missing a valid verdict:\n%s", stdout)
+	}
+}
+
+func TestRun_VerifyKeyUnused(t *testing.T) {
+	token, _, issuerPub := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	stdout, _, err := runRootCommand(t, "--verify-key", issuerPub, token)
+	want := "--verify-key was given but no JWS signature was reached (pass --key to decrypt the JWE first)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+}
+
+func TestRun_VerifyKeyUnusedOnEncryptedClaimsSet(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	token := encryptJWE(t, key, []byte(`{"sub":"x"}`))
+	_, _, err := runRootCommand(t, "--key", keyPath, "--verify-key", keyPath, token)
+	if err == nil || err.Error() != "--verify-key was given but no JWS signature was reached" {
+		t.Fatalf("err = %v, want the unused verify key error without the --key hint", err)
+	}
+}
+
+func TestRun_ClaimsOnNestedJWS(t *testing.T) {
+	pinTime(t, 2000000000)
+	token, recipientPath, issuerPub := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice", "exp": 1700000000})
+	stdout, _, err := runRootCommand(t, "--key", recipientPath, "--verify-key", issuerPub, "--verify-claims", token)
+	if !errors.Is(err, errInvalidClaims) {
+		t.Fatalf("err = %v, want errInvalidClaims", err)
+	}
+	if !strings.Contains(stripANSI(stdout), "Claims: INVALID") {
+		t.Errorf("stdout missing the claims verdict:\n%s", stdout)
+	}
+}
+
+func TestRun_ClaimsOnJWEWithoutKey(t *testing.T) {
+	token := encryptJWE(t, generateRSAKey(t), []byte(`{"sub":"x"}`))
+	stdout, stderr, err := runRootCommand(t, "--verify-claims", token)
+	if !errors.Is(err, errInvalidClaims) {
+		t.Fatalf("err = %v, want errInvalidClaims: a claim check that cannot run must not pass", err)
+	}
+	plain := stripANSI(stdout)
+	if !strings.Contains(plain, "Claims: INVALID") || !strings.Contains(plain, "pass --key to decrypt it") {
+		t.Errorf("stdout missing the unreachable-claims verdict:\n%s", stdout)
+	}
+	if strings.Contains(stderr, "skipped for JWE") {
+		t.Errorf("the skipped-for-JWE note must be gone, stderr:\n%s", stderr)
+	}
+}
+
+func TestRun_ClaimsOnEncryptedClaimsSet(t *testing.T) {
+	key := generateRSAKey(t)
+	token := encryptJWE(t, key, []byte(`{"sub":"x","aud":"a"}`))
+	stdout, _, err := runRootCommand(t, "--key", writeKeyFile(t, key), "--aud", "a", token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stripANSI(stdout), "Claims: VALID") {
+		t.Errorf("stdout missing a valid claims verdict:\n%s", stdout)
+	}
+}
+
+func TestRun_VerifyKeyInterpretationNote(t *testing.T) {
+	token := signJWTWithHMAC(t, []byte("note-secret"), jwt.MapClaims{"sub": "u1"})
+	_, stderr, err := runRootCommand(t, "--verify-key", "raw:note-secret", token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stderr, "--verify-key used as a literal symmetric secret") {
+		t.Errorf("stderr missing the --verify-key interpretation note:\n%s", stderr)
+	}
+}
+
+func TestRun_FallbackInvalidNestedSignatureHintsVerifyKey(t *testing.T) {
+	token, recipientPath, _ := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	for _, mode := range [][]string{{}, {"--json"}, {"--header"}} {
+		args := append(append([]string{"--key", recipientPath}, mode...), token)
+		_, stderr, err := runRootCommand(t, args...)
+		if !errors.Is(err, errInvalidSignature) {
+			t.Fatalf("%v: err = %v, want errInvalidSignature", mode, err)
+		}
+		if !strings.Contains(stderr, "pass --verify-key") {
+			t.Errorf("%v: stderr = %q, want a hint that the fallback key was used and --verify-key is the fix", mode, stderr)
+		}
+	}
+}
+
+func TestRun_FallbackSkippedNestedSignatureIsNoted(t *testing.T) {
+	recipient := generateRSAKey(t)
+	issuer := generateDistinctRSAKey(t)
+	decryptSet := writeJWKSetFile(t, "recipient.jwks", jose.JSONWebKey{Key: recipient, KeyID: "rec1"})
+	token := encryptJWE(t, recipient, []byte(signJWTWithKID(t, issuer, "nope", jwt.MapClaims{"sub": "alice"})))
+
+	for _, mode := range [][]string{{}, {"--json"}, {"--claim", "sub"}} {
+		args := append(append([]string{"--key", decryptSet}, mode...), token)
+		_, stderr, err := runRootCommand(t, args...)
+		if err != nil {
+			t.Fatalf("%v: unexpected error: %v", mode, err)
+		}
+		if !strings.Contains(stderr, "could not be used to verify the nested JWS") {
+			t.Errorf("%v: stderr = %q, want a note that the nested signature was not verified", mode, stderr)
+		}
+	}
+}
+
+func TestRun_VerifyKeyEnvUnusedIsANote(t *testing.T) {
+	token, _, issuerPub := signedThenEncrypted(t, jwt.MapClaims{"sub": "alice"})
+	t.Setenv("JWTD_VERIFY_KEY", issuerPub)
+
+	stdout, stderr, err := runRootCommand(t, token)
+	if err != nil {
+		t.Fatalf("a global JWTD_VERIFY_KEY must not break JWE inspection: %v", err)
+	}
+	if !strings.Contains(stripANSI(stdout), "Protected Header") {
+		t.Errorf("stdout = %q, want the JWE header", stdout)
+	}
+	if !strings.Contains(stderr, "JWTD_VERIFY_KEY was set but no JWS signature was reached") {
+		t.Errorf("stderr = %q, want a note naming JWTD_VERIFY_KEY", stderr)
+	}
+}
+
+func TestRun_EmptyVerifyKeyRejected(t *testing.T) {
+	_, _, err := runRootCommand(t, "--verify-key", "")
+	if err == nil || !strings.Contains(err.Error(), "--verify-key requires a key") {
+		t.Fatalf("err = %v, want an empty --verify-key to be rejected", err)
+	}
+	if errors.Is(err, errNoToken) {
+		t.Errorf("an empty --verify-key must be rejected before the token is read")
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -56,6 +55,7 @@ func newRootCommand() *cobra.Command {
 	}
 
 	rootCmd.Flags().StringP("key", "k", "", "key for JWE decryption or JWS signature verification: a PEM/DER/JWK file or inline base64, hmac:<file> for a symmetric secret file, or raw:<secret> for a literal one (inline values are visible to other local users in the process list, so prefer a file or JWTD_KEY)")
+	rootCmd.Flags().String("verify-key", "", "key for JWS signature verification, top level or nested inside a JWE; defaults to --key (same formats as --key; prefer a file or JWTD_VERIFY_KEY)")
 	rootCmd.Flags().Bool("json", false, "emit machine-readable JSON instead of colorized sections")
 	rootCmd.Flags().String("color", "auto", "colorize output: auto (color only on a TTY), always, or never")
 	rootCmd.Flags().BoolP("quiet", "q", false, "suppress standard output and only report status via exit code")
@@ -110,6 +110,11 @@ func run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// An empty --verify-key (typically an unset shell variable) would fall back
+	// to --key silently, which is the one thing this flag exists to prevent.
+	if v, _ := cmd.Flags().GetString("verify-key"); cmd.Flags().Changed("verify-key") && v == "" {
+		return errors.New("--verify-key requires a key")
+	}
 
 	loc, err := resolveDisplayLocation(localTZ, tzName)
 	if err != nil {
@@ -141,14 +146,9 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	keyStr, _ := cmd.Flags().GetString("key")
-	fromFlag := keyStr != ""
-	if keyStr == "" {
-		keyStr = os.Getenv("JWTD_KEY")
-	}
-	if keyStr != "" {
-		printKeyInterpretation(cmd.ErrOrStderr(), keyStr, fromFlag)
-	}
+	decryptKey, _ := resolveKeyArg(cmd, "key", "JWTD_KEY")
+	verifyKey, verifyFromFlag := resolveKeyArg(cmd, "verify-key", "JWTD_VERIFY_KEY")
+	keys := tokenKeys{decrypt: decryptKey, verify: verifyKey}
 
 	checks := claimChecks{
 		verify:     verifyClaimsFlag,
@@ -165,17 +165,6 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	if isJWE(token) {
-		// Extraction promises that every requested check ran before a value is
-		// printed. Claim validation does not run on a JWE yet, so a selector
-		// with claim flags is refused rather than printing a value whose
-		// claims were never checked; the stderr note below would not reach a
-		// $(...) capture.
-		if sel.active() && checks.requested() {
-			return errors.New("claim validation (--verify-claims/--aud/--iss/--sub/--leeway/--require-exp) is not supported with --header/--payload/--claim on a JWE yet")
-		}
-		if checks.requested() {
-			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Note: claim validation (--verify-claims/--aud/--iss/--sub/--leeway/--require-exp) applies to JWTs only and is skipped for JWE.")
-		}
 		jwe, header, err := parseJWE(token)
 		if err != nil {
 			return err
@@ -184,13 +173,21 @@ func run(cmd *cobra.Command, args []string) error {
 		if err := checkExpectedAlg(alg, expectedAlg); err != nil {
 			return err
 		}
+		l, err := openJWE(token, jwe, header, keys, false)
+		if err != nil {
+			return err
+		}
+		if err := checkVerifyKeyUsed(cmd.ErrOrStderr(), l, keys, verifyFromFlag); err != nil {
+			return err
+		}
+		printVerificationNotes(cmd.ErrOrStderr(), l, keys)
 		if sel.active() {
-			return extractJWE(w, jwe, header, keyStr, sel, jsonOut)
+			return extractLayer(w, cmd.ErrOrStderr(), l, checks, sel, jsonOut)
 		}
 		if jsonOut {
-			return decodeParsedJWEJSON(w, token, jwe, header, keyStr)
+			return decodeLayerJSON(w, l, checks)
 		}
-		return decodeParsedJWEHuman(w, token, jwe, header, keyStr)
+		return decodeLayerHuman(w, l, checks)
 	}
 
 	p, err := parseUnverifiedJWT(token)
@@ -200,13 +197,78 @@ func run(cmd *cobra.Command, args []string) error {
 	if err := checkExpectedAlg(p.method.Alg(), expectedAlg); err != nil {
 		return err
 	}
+	l, err := openJWT(p, keys, false)
+	if err != nil {
+		return err
+	}
 	if sel.active() {
-		return extractJWT(w, cmd.ErrOrStderr(), p, keyStr, checks, sel, jsonOut)
+		return extractLayer(w, cmd.ErrOrStderr(), l, checks, sel, jsonOut)
 	}
 	if jsonOut {
-		return decodeParsedJWTJSON(w, p, keyStr, checks)
+		return decodeLayerJSON(w, l, checks)
 	}
-	return decodeParsedJWTHuman(w, p, keyStr, checks)
+	return decodeLayerHuman(w, l, checks)
+}
+
+// resolveKeyArg reads a key flag, falling back to its environment variable, and
+// narrates on stderr how a value that is not a key file was read. It reports
+// whether the value came from the flag.
+func resolveKeyArg(cmd *cobra.Command, flag, env string) (string, bool) {
+	keyStr, _ := cmd.Flags().GetString(flag)
+	fromFlag := keyStr != ""
+	origin := "--" + flag
+	if !fromFlag {
+		keyStr = os.Getenv(env)
+		origin = env
+	}
+	if keyStr != "" {
+		printKeyInterpretation(cmd.ErrOrStderr(), keyStr, origin, fromFlag)
+	}
+	return keyStr, fromFlag
+}
+
+// checkVerifyKeyUsed fails when --verify-key was given but the opened token
+// holds no JWS for it: a signature check the user asked for on this command
+// line that never ran must not pass silently. It runs before any output.
+//
+// JWTD_VERIFY_KEY is standing configuration rather than a request about this
+// token, so the same situation is only a note there: a global verification key
+// must not break inspecting a JWE, just as a global JWTD_KEY must not break a
+// JWT.
+func checkVerifyKeyUsed(errw io.Writer, l *tokenLayer, keys tokenKeys, fromFlag bool) error {
+	if keys.verify == "" || l.hasJWS() {
+		return nil
+	}
+	if !fromFlag {
+		_, _ = fmt.Fprintln(errw, "Note: JWTD_VERIFY_KEY was set but no JWS signature was reached; it was not used.")
+		return nil
+	}
+	if l.jwe != nil && keys.decrypt == "" {
+		return fmt.Errorf("%w (pass --key to decrypt the JWE first)", errVerifyKeyUnused)
+	}
+	return errVerifyKeyUnused
+}
+
+// printVerificationNotes says on stderr, in every output mode, when a nested
+// JWS was checked only by the fallback rule: the decryption key was offered to
+// it because no verification key was given. Either the key could not be used
+// at all, so the signature went unverified although a key was passed, or it
+// was used and the signature did not verify — which is also what happens when
+// the issuer simply signed with a different key than the one that decrypts.
+// Neither is visible in --json or extraction output otherwise, and both have
+// the same fix.
+func printVerificationNotes(errw io.Writer, l *tokenLayer, keys tokenKeys) {
+	if keys.verify != "" {
+		return
+	}
+	for layer := l.nested; layer != nil; layer = layer.nested {
+		switch {
+		case layer.sigSkipped != "":
+			_, _ = fmt.Fprintf(errw, "Note: --key could not be used to verify the nested JWS (%s); its signature was not checked. Pass --verify-key with the issuer's key.\n", layer.sigSkipped)
+		case layer.sig != nil && !layer.sig.valid:
+			_, _ = fmt.Fprintln(errw, "Note: the nested JWS was checked with the decryption key (--key), which verifies it only if that same key signed it. If the issuer signed with its own key, pass --verify-key with the issuer's key.")
+		}
+	}
 }
 
 // selectionFromFlags reads --header, --payload, and --claim. Cobra already
@@ -271,21 +333,13 @@ func checkExpectedAlg(actual, expected string) error {
 	return nil
 }
 
-// decodeJWTHuman prints the decoded JWT and, when claim validation was
-// requested, a Claims section after it. Both the signature check and the claim
-// check run so their sections are shown together; the command exits nonzero if
-// either fails, with the signature verdict taking precedence for the returned
-// sentinel (both are suppressed by the top-level error printer).
-func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
-	p, err := parseUnverifiedJWT(tokenStr)
-	if err != nil {
-		return err
-	}
-	return decodeParsedJWTHuman(w, p, keyStr, checks)
-}
-
-func decodeParsedJWTHuman(w io.Writer, p *parsedJWT, keyStr string, checks claimChecks) error {
-	derr := printParsedJWT(w, p, keyStr)
+// decodeLayerHuman renders an opened token and, when claim validation was
+// requested, a Claims section after everything else. The claims checked are the
+// innermost claims set (see claimsTarget), so a JWE wrapping a JWS is validated
+// against the inner token's claims. Claims that cannot be reached are an
+// INVALID verdict: a requested check that cannot run must not pass.
+func decodeLayerHuman(w io.Writer, l *tokenLayer, checks claimChecks) error {
+	derr := renderLayerHuman(w, newFormatter(), l)
 	if derr != nil && !errors.Is(derr, errInvalidSignature) {
 		return derr
 	}
@@ -295,9 +349,17 @@ func decodeParsedJWTHuman(w io.Writer, p *parsedJWT, keyStr string, checks claim
 		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
-		cerr = printClaimsVerdict(w, p.claims, checks)
-		if cerr != nil && !errors.Is(cerr, errInvalidClaims) {
-			return cerr
+		claims, reason := l.claimsTarget()
+		if reason != "" {
+			if err := printVerdict(w, "Claims", false, reason); err != nil {
+				return err
+			}
+			cerr = fmt.Errorf("%w: %s", errInvalidClaims, reason)
+		} else {
+			cerr = printClaimsVerdict(w, claims, checks)
+			if cerr != nil && !errors.Is(cerr, errInvalidClaims) {
+				return cerr
+			}
 		}
 	}
 
@@ -336,11 +398,7 @@ func applyColorMode(mode string, jsonOut bool) error {
 // read it, so that is flagged for flag values.
 //
 // Writes are best effort: a failure here must not disturb decoding.
-func printKeyInterpretation(w io.Writer, keyStr string, fromFlag bool) {
-	origin := "JWTD_KEY"
-	if fromFlag {
-		origin = "--key"
-	}
+func printKeyInterpretation(w io.Writer, keyStr, origin string, fromFlag bool) {
 
 	var note string
 	switch classifyKeyArg(keyStr) {
@@ -467,73 +525,6 @@ func readInteractive() (token string, err error) {
 	return token, nil
 }
 
-// decodeAndPrint parses the JWT and prints header, payload, and signature.
-// If keyStr is provided, the signature is verified against the given key.
-func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
-	p, err := parseUnverifiedJWT(tokenStr)
-	if err != nil {
-		return err
-	}
-	return printParsedJWT(w, p, keyStr)
-}
-
-// printParsedJWT renders an already-parsed token, so callers that also need the
-// claims (claim validation) or the header (signature verification) parse once
-// and share the result instead of decoding the same segments again.
-func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
-	// The key is resolved before anything is written, so a bad key argument
-	// fails with an error alone instead of three decoded sections followed by
-	// one. The JWE and --json paths resolve their key up front for the same
-	// reason.
-	var key any
-	if keyStr != "" {
-		kid, err := headerKID(p.header)
-		if err != nil {
-			return fmt.Errorf("signature verification: %w", err)
-		}
-		loaded, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
-		if err != nil {
-			return fmt.Errorf("signature verification: error loading key: %w", err)
-		}
-		key = loaded
-	}
-
-	f := newFormatter()
-
-	if err := printSection(w, f, "Header", p.header); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-	// formatTimestamps rewrites claim values into display strings, so it runs
-	// on a copy: p.claims stays the authoritative parse for validation.
-	display := maps.Clone(p.claims)
-	formatTimestamps(display)
-	// Converted to the plain map type: jwt.MapClaims is a named type, which the
-	// formatter's fast path does not match.
-	if err := printSection(w, f, "Payload", map[string]any(display)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-	if err := printSignature(w, p.parts[2]); err != nil {
-		return err
-	}
-
-	if keyStr != "" {
-		if _, err := fmt.Fprintln(w); err != nil {
-			return err
-		}
-		if err := printSignatureVerdict(w, p, key); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // parsedJWT is one strict decode of a compact JWT: its three segments, the
 // display-decoded header and claims, and the signing method and decoded
 // signature bytes the verification step needs. It is threaded through the
@@ -629,42 +620,6 @@ func splitCompactJWT(tokenStr string) ([]string, bool) {
 		return nil, false
 	}
 	return []string{header, claims, signature}, true
-}
-
-// printSignatureVerdict renders the signature verdict for an already-parsed
-// token and an already-loaded key, and returns the errInvalidSignature sentinel
-// on failure so the CLI exits nonzero. It takes the loaded key rather than the
-// key argument so its caller can fail on an unusable key before printing
-// anything.
-func printSignatureVerdict(w io.Writer, p *parsedJWT, key any) error {
-	valid, reason := verifyLoadedKeySignature(p, key)
-
-	if !valid {
-		if werr := printVerdict(w, "Signature", false, reason.Error()); werr != nil {
-			return werr
-		}
-		return fmt.Errorf("%w: %v", errInvalidSignature, reason)
-	}
-	return printVerdict(w, "Signature", true, "")
-}
-
-// verifyJWTSignature performs the cryptographic signature check and reports the
-// outcome without printing anything, so both the human and --json paths share
-// one verification. It returns valid=true on success; valid=false with a
-// non-nil reason for a genuinely invalid signature; and a non-nil err only for
-// hard failures (unparseable token, unusable key) that are not a verdict on the
-// signature itself.
-func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, err error) {
-	kid, err := headerKID(p.header)
-	if err != nil {
-		return false, nil, err
-	}
-	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
-	if err != nil {
-		return false, nil, fmt.Errorf("error loading key: %w", err)
-	}
-	valid, reason = verifyLoadedKeySignature(p, key)
-	return valid, reason, nil
 }
 
 // verifyLoadedKeySignature is the verification core, taking a key that has

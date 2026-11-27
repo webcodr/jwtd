@@ -552,3 +552,152 @@ func decodeJWTJSONMap(t *testing.T, token, key string) (map[string]any, error) {
 	}
 	return out, err
 }
+
+// signJWTWithKID signs an RS256 JWT whose header names kid, for the tests that
+// need a JWK Set lookup to miss.
+func signJWTWithKID(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+	return signed
+}
+
+// The wrappers below have no production caller since the token is opened into
+// layers (layers.go); they are kept for the tests that start from a compact
+// string or a loaded key.
+
+// decodeAndPrint parses the JWT and prints header, payload, and signature.
+// If keyStr is provided, the signature is verified against the given key.
+func decodeAndPrint(w io.Writer, tokenStr, keyStr string) error {
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return err
+	}
+	return printParsedJWT(w, p, keyStr)
+}
+
+// printSignatureVerdict renders the signature verdict for an already-parsed
+// token and an already-loaded key, and returns the errInvalidSignature sentinel
+// on failure so the CLI exits nonzero. It takes the loaded key rather than the
+// key argument so its caller can fail on an unusable key before printing
+// anything.
+func printSignatureVerdict(w io.Writer, p *parsedJWT, key any) error {
+	valid, reason := verifyLoadedKeySignature(p, key)
+
+	if !valid {
+		if werr := printVerdict(w, "Signature", false, reason.Error()); werr != nil {
+			return werr
+		}
+		return fmt.Errorf("%w: %v", errInvalidSignature, reason)
+	}
+	return printVerdict(w, "Signature", true, "")
+}
+
+// decodeAndPrintJWE parses a JWE token and prints its contents.
+// If keyStr is provided, the token is decrypted and the plaintext payload is displayed.
+// Otherwise, only the protected header and encrypted part metadata are shown.
+func decodeAndPrintJWE(w io.Writer, tokenStr, keyStr string) error {
+	jwe, header, err := parseJWE(tokenStr)
+	if err != nil {
+		return err
+	}
+	return decodeParsedJWEHuman(w, tokenStr, jwe, header, keyStr)
+}
+
+// decodeJWTJSON and decodeJWEJSON open a compact token with a single key and
+// write it as JSON, for the tests written against the one-key API.
+func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return err
+	}
+	l, err := openJWT(p, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return decodeLayerJSON(w, l, checks)
+}
+
+func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
+	jwe, header, err := parseJWE(tokenStr)
+	if err != nil {
+		return err
+	}
+	l, err := openJWE(tokenStr, jwe, header, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return decodeLayerJSON(w, l, claimChecks{})
+}
+
+// verifyJWTSignature performs the cryptographic signature check and reports the
+// outcome without printing anything, so both the human and --json paths share
+// one verification. It returns valid=true on success; valid=false with a
+// non-nil reason for a genuinely invalid signature; and a non-nil err only for
+// hard failures (unparseable token, unusable key) that are not a verdict on the
+// signature itself.
+func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, err error) {
+	kid, err := headerKID(p.header)
+	if err != nil {
+		return false, nil, err
+	}
+	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
+	if err != nil {
+		return false, nil, fmt.Errorf("error loading key: %w", err)
+	}
+	valid, reason = verifyLoadedKeySignature(p, key)
+	return valid, reason, nil
+}
+
+// One-key human-output wrappers over openJWT/openJWE and the renderers, for
+// the tests written against the single --key API. Production code opens the
+// token in run() with both keys.
+
+// decodeJWTHuman prints the decoded JWT and, when claim validation was
+// requested, a Claims section after it. Both the signature check and the claim
+// check run so their sections are shown together; the command exits nonzero if
+// either fails, with the signature verdict taking precedence for the returned
+// sentinel (both are suppressed by the top-level error printer).
+func decodeJWTHuman(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
+	p, err := parseUnverifiedJWT(tokenStr)
+	if err != nil {
+		return err
+	}
+	return decodeParsedJWTHuman(w, p, keyStr, checks)
+}
+
+func decodeParsedJWTHuman(w io.Writer, p *parsedJWT, keyStr string, checks claimChecks) error {
+	l, err := openJWT(p, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return decodeLayerHuman(w, l, checks)
+}
+
+// printParsedJWT renders an already-parsed token, so callers that also need the
+// claims (claim validation) or the header (signature verification) parse once
+// and share the result instead of decoding the same segments again.
+func printParsedJWT(w io.Writer, p *parsedJWT, keyStr string) error {
+	// Opening resolves and applies the key before anything is written, so a
+	// bad key argument fails with an error alone instead of three decoded
+	// sections followed by one.
+	l, err := openJWT(p, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return renderLayerHuman(w, newFormatter(), l)
+}
+
+func decodeParsedJWEHuman(w io.Writer, tokenStr string, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string) error {
+	// Opening decrypts before anything is printed, so an unusable key or a
+	// failed decryption is reported alone instead of after a partial section.
+	l, err := openJWE(tokenStr, jwe, header, tokenKeys{decrypt: keyStr}, false)
+	if err != nil {
+		return err
+	}
+	return renderLayerHuman(w, newFormatter(), l)
+}

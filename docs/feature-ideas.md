@@ -81,6 +81,10 @@ currently requires downloading the provider's JWKS manually first. An explicit
 
 ### 7. Separate decryption and verification keys for nested tokens (JWE → JWS)
 
+> Status: implemented (`layers.go`, `--verify-key`/`JWTD_VERIFY_KEY`). Claim
+> validation and extraction read the innermost claims set; `--json` gains
+> `nested`.
+
 `jwe.go`, `output.go` (`printDecryptedPayload`, `renderNested`), `main.go`
 
 Currently `printDecryptedPayload` forwards the outer `--key` to any nested

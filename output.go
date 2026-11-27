@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"strconv"
 	"strings"
@@ -168,44 +169,98 @@ func newFormatter() *jsonFormatter {
 	}
 }
 
-// printDecryptedPayload formats and prints the decrypted JWE plaintext.
-// If the plaintext is valid JSON, it is pretty-printed. If the plaintext
-// is itself a JWT or JWE, it is decoded and printed recursively with the same
-// key, so --key applies all the way down instead of stopping at the outer
-// token.
-func printDecryptedPayload(w io.Writer, f *jsonFormatter, plaintext []byte, keyStr string) error {
-	// The shape checks run on the bytes, so a payload that is not a nested
-	// token — the common case, and the one that can be large — is never copied
-	// into a string just to be measured.
-
-	// Check if the decrypted payload is a nested JWE. The nested output is
-	// buffered so nothing is printed if decoding fails and the payload falls
-	// through to the JSON/raw handling below.
-	if isJWEBytes(plaintext) {
-		if nested, verdict, ok := renderNested(keyStr, func(w io.Writer, key string) error {
-			return decodeAndPrintJWE(w, string(plaintext), key)
-		}); ok {
-			if err := printNestedPayload(w, "Decrypted Payload (nested JWE)", nested); err != nil {
-				return err
-			}
-			return verdict
-		}
+// renderLayerHuman prints an opened token as colored sections. Every key was
+// applied when the token was opened (see layers.go), so this only renders: a
+// JWS as Header, Payload, Signature, and its verdict when a check ran; a JWE as
+// its Protected Header followed by the encrypted part sizes, the nested token
+// it decrypted to, or the decrypted JSON or text. An invalid signature at any
+// depth is returned as errInvalidSignature after its sections are printed, so
+// the exit code reflects the innermost check.
+func renderLayerHuman(w io.Writer, f *jsonFormatter, l *tokenLayer) error {
+	if l.jws != nil {
+		return renderJWSHuman(w, f, l)
 	}
 
-	// Check if the decrypted payload is a nested JWT.
-	if isJWTBytes(plaintext) {
-		if nested, verdict, ok := renderNested(keyStr, func(w io.Writer, key string) error {
-			return decodeAndPrint(w, string(plaintext), key)
-		}); ok {
-			if err := printNestedPayload(w, "Decrypted Payload (nested JWT)", nested); err != nil {
-				return err
-			}
-			return verdict
-		}
+	if err := printSection(w, f, "Protected Header", l.header); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if !l.decrypted {
+		return printEncryptedParts(w, l.jweToken)
+	}
+	if l.nested != nil {
+		return renderNestedHuman(w, f, l.nested)
+	}
+	return printPlaintext(w, f, l.plaintext)
+}
+
+func renderJWSHuman(w io.Writer, f *jsonFormatter, l *tokenLayer) error {
+	p := l.jws
+	if err := printSection(w, f, "Header", p.header); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	// formatTimestamps rewrites claim values into display strings, so it runs
+	// on a copy: p.claims stays the authoritative parse for validation.
+	display := maps.Clone(p.claims)
+	formatTimestamps(display)
+	// Converted to the plain map type: jwt.MapClaims is a named type, which the
+	// formatter's fast path does not match.
+	if err := printSection(w, f, "Payload", map[string]any(display)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if err := printSignature(w, p.parts[2]); err != nil {
+		return err
 	}
 
-	// Pretty-print JSON objects and arrays. The payload is decoded once and
-	// dispatched on the decoded value, rather than re-parsing per shape.
+	if l.sig == nil {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if err := printVerdict(w, "Signature", l.sig.valid, l.sig.reason); err != nil {
+		return err
+	}
+	if !l.sig.valid {
+		return fmt.Errorf("%w: %s", errInvalidSignature, l.sig.reason)
+	}
+	return nil
+}
+
+// renderNestedHuman prints a token a JWE decrypted to under its own label. It
+// is buffered so a write error cannot leave a label without its sections. An
+// invalid signature inside is a verdict: the sections are printed and the
+// sentinel only drives the exit code.
+func renderNestedHuman(w io.Writer, f *jsonFormatter, nested *tokenLayer) error {
+	var buf bytes.Buffer
+	verdictErr := renderLayerHuman(&buf, f, nested)
+	if verdictErr != nil && !errors.Is(verdictErr, errInvalidSignature) {
+		return verdictErr
+	}
+	label := "Decrypted Payload (nested JWT)"
+	if nested.jwe != nil {
+		label = "Decrypted Payload (nested JWE)"
+	}
+	if err := printNestedPayload(w, label, buf.Bytes()); err != nil {
+		return err
+	}
+	return verdictErr
+}
+
+// printPlaintext prints a decrypted payload that is not a token: JSON objects
+// and arrays pretty-printed (objects with readable timestamps), anything else
+// as escaped text.
+func printPlaintext(w io.Writer, f *jsonFormatter, plaintext []byte) error {
+	// The payload is decoded once and dispatched on the decoded value, rather
+	// than re-parsing per shape.
 	var value any
 	if err := decodeJSON(plaintext, &value); err == nil {
 		switch v := value.(type) {
@@ -217,46 +272,11 @@ func printDecryptedPayload(w io.Writer, f *jsonFormatter, plaintext []byte, keyS
 		}
 	}
 
-	// Fall back to raw text output.
 	if err := labelStyle.fprintln(w, "Decrypted Payload"); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(w, escapeTerminalText(plaintext))
 	return err
-}
-
-// renderNested decodes a nested token into a buffer, reporting the rendered
-// output, the verdict error it should propagate, and whether the decode
-// succeeded at all.
-//
-// The outer key is offered to the nested token first, so a JWE wrapping another
-// token to the same key decrypts all the way down and a nested JWS gets a real
-// Signature verdict — whose errInvalidSignature is handed back so the exit code
-// reflects the innermost check. A key the nested token cannot use (a different
-// key type, or one that fails to load for it) is not fatal: the decode is
-// retried keyless, which is exactly what the nested output was before the key
-// was threaded through. A nested token that does not decode at all reports
-// false, and the payload falls back to the JSON/raw handling.
-func renderNested(keyStr string, decode func(io.Writer, string) error) ([]byte, error, bool) {
-	var nested bytes.Buffer
-	err := decode(&nested, keyStr)
-	if err == nil {
-		return nested.Bytes(), nil, true
-	}
-	// An invalid signature is a verdict, not a decode failure: the section was
-	// printed, and the sentinel only drives the exit code.
-	if errors.Is(err, errInvalidSignature) {
-		return nested.Bytes(), err, true
-	}
-	if keyStr == "" {
-		return nil, nil, false
-	}
-
-	nested.Reset()
-	if err := decode(&nested, ""); err != nil {
-		return nil, nil, false
-	}
-	return nested.Bytes(), nil, true
 }
 
 func escapeTerminalText(text []byte) string {

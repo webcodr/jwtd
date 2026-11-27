@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-
-	"github.com/go-jose/go-jose/v4"
 )
 
 // jwtJSON is the machine-readable form of a decoded JWT. Numbers are preserved
@@ -31,10 +29,18 @@ type jwtJSON struct {
 // encrypted nor decryptedPayload. A non-nil pointer is always emitted, so a
 // null plaintext renders as "decryptedPayload": null and the field is absent
 // only when no key was given.
+//
+// Nested is the token the plaintext decrypted to, in the same jwtJSON/jweJSON
+// shape, so a consumer reads a signed-then-encrypted token's inner signature
+// verdict and claims without decoding it again. DecryptedPayload keeps the
+// compact string alongside it for consumers written before Nested existed.
+// ClaimsValid is set on the top-level object only.
 type jweJSON struct {
 	ProtectedHeader  map[string]any `json:"protectedHeader"`
 	Encrypted        *jweEncrypted  `json:"encrypted,omitempty"`
 	DecryptedPayload *any           `json:"decryptedPayload,omitempty"`
+	Nested           any            `json:"nested,omitempty"`
+	ClaimsValid      *bool          `json:"claimsValid,omitempty"`
 }
 
 type jweEncrypted struct {
@@ -44,68 +50,71 @@ type jweEncrypted struct {
 	AuthTagBytes      int `json:"authTagBytes"`
 }
 
-// decodeJWTJSON writes a JWT as a single JSON object. When a key is supplied the
-// signature is verified and reported in signatureValid; when claim validation is
-// requested the verdict is reported in claimsValid. A failing check still emits
-// the JSON and then returns a sentinel (errInvalidSignature or errInvalidClaims)
-// so the exit code matches the human path; the signature verdict takes
-// precedence when both fail, though either way the exit is nonzero.
-func decodeJWTJSON(w io.Writer, tokenStr, keyStr string, checks claimChecks) error {
-	p, err := parseUnverifiedJWT(tokenStr)
-	if err != nil {
-		return err
-	}
-	return decodeParsedJWTJSON(w, p, keyStr, checks)
-}
-
-func decodeParsedJWTJSON(w io.Writer, p *parsedJWT, keyStr string, checks claimChecks) error {
-	out := jwtJSON{
-		Header:    p.header,
-		Payload:   map[string]any(p.claims),
-		Signature: p.parts[2],
-	}
+// decodeLayerJSON writes an opened token as a single JSON object. Every key was
+// applied when the token was opened, so this only encodes: signatureValid on
+// each JWS layer that was verified, nested for a JWE whose plaintext is a token,
+// and claimsValid on the top-level object when claim validation was requested.
+// The claims validated are the innermost claims set; claims that cannot be
+// reached make claimsValid false.
+//
+// A failing check still emits the JSON and then returns a sentinel
+// (errInvalidSignature or errInvalidClaims) so the exit code matches the human
+// path; an invalid signature at any depth takes precedence.
+func decodeLayerJSON(w io.Writer, l *tokenLayer, checks claimChecks) error {
+	top := layerJSON(l)
 
 	var invalid error
-	if keyStr != "" {
-		valid, reason, verr := verifyJWTSignature(p, keyStr)
-		if verr != nil {
-			return fmt.Errorf("signature verification: %w", verr)
-		}
-		out.SignatureValid = &valid
-		if !valid {
-			invalid = fmt.Errorf("%w: %v", errInvalidSignature, reason)
-		}
+	if f := l.signatureFailure(); f != nil {
+		invalid = fmt.Errorf("%w: %s", errInvalidSignature, f.reason)
 	}
 
 	if checks.requested() {
-		valid, reason := validateClaimsSet(p.claims, checks)
-		out.ClaimsValid = &valid
+		valid, reason := false, ""
+		if claims, unreachable := l.claimsTarget(); unreachable != "" {
+			reason = unreachable
+		} else {
+			var verr error
+			valid, verr = validateClaimsSet(claims, checks)
+			if !valid {
+				reason = claimReason(verr)
+			}
+		}
+		switch out := top.(type) {
+		case *jwtJSON:
+			out.ClaimsValid = &valid
+		case *jweJSON:
+			out.ClaimsValid = &valid
+		}
 		if !valid && invalid == nil {
-			invalid = fmt.Errorf("%w: %s", errInvalidClaims, claimReason(reason))
+			invalid = fmt.Errorf("%w: %s", errInvalidClaims, reason)
 		}
 	}
 
-	if err := writeJSON(w, out); err != nil {
+	if err := writeJSON(w, top); err != nil {
 		return err
 	}
 	return invalid
 }
 
-// decodeJWEJSON writes a JWE as a single JSON object, decrypting the payload
-// when a key is supplied.
-func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
-	jwe, header, err := parseJWE(tokenStr)
-	if err != nil {
-		return err
+// layerJSON encodes one layer and, recursively, the token it decrypted to. It
+// returns a *jwtJSON or a *jweJSON.
+func layerJSON(l *tokenLayer) any {
+	if p := l.jws; p != nil {
+		out := &jwtJSON{
+			Header:    p.header,
+			Payload:   map[string]any(p.claims),
+			Signature: p.parts[2],
+		}
+		if l.sig != nil {
+			valid := l.sig.valid
+			out.SignatureValid = &valid
+		}
+		return out
 	}
-	return decodeParsedJWEJSON(w, tokenStr, jwe, header, keyStr)
-}
 
-func decodeParsedJWEJSON(w io.Writer, tokenStr string, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string) error {
-	out := jweJSON{ProtectedHeader: header}
-
-	if keyStr == "" {
-		if parts, ok := jweEncryptedParts(tokenStr); ok {
+	out := &jweJSON{ProtectedHeader: l.header}
+	if !l.decrypted {
+		if parts, ok := jweEncryptedParts(l.jweToken); ok {
 			out.Encrypted = &jweEncrypted{
 				EncryptedKeyBytes: base64URLLen(parts[1]),
 				IVBytes:           base64URLLen(parts[2]),
@@ -113,26 +122,14 @@ func decodeParsedJWEJSON(w io.Writer, tokenStr string, jwe *jose.JSONWebEncrypti
 				AuthTagBytes:      base64URLLen(parts[4]),
 			}
 		}
-		return writeJSON(w, out)
+		return out
 	}
-
-	kid, err := headerKID(header)
-	if err != nil {
-		return err
-	}
-	alg, _ := header["alg"].(string)
-	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "enc", alg: alg})
-	if err != nil {
-		return fmt.Errorf("loading decryption key: %w", err)
-	}
-	plaintext, err := jwe.Decrypt(key)
-	if err != nil {
-		return fmt.Errorf("decrypting JWE: %w", err)
-	}
-
-	payload := jsonPayloadValue(plaintext)
+	payload := jsonPayloadValue(l.plaintext)
 	out.DecryptedPayload = &payload
-	return writeJSON(w, out)
+	if l.nested != nil {
+		out.Nested = layerJSON(l.nested)
+	}
+	return out
 }
 
 // jsonPayloadValue decodes a decrypted payload as JSON when possible so it nests
