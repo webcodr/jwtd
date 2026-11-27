@@ -222,6 +222,11 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"claim extraction":       `jwtd --key /path/to/public-key.pem --claim sub`,
 		"extraction withholding": `If a requested check fails, nothing is printed to stdout`,
 		"verify key workflow":    `jwtd --key /path/to/private-key.pem --verify-key /path/to/issuer-public-key.pem`,
+		"extraction capability":  `<h3>Extract a single value</h3>`,
+		"nested claims usage":    `For a JWE, the claims checked are the innermost claims set`,
+		"verify key env":         `<code>JWTD_VERIFY_KEY</code> does the same for <code>--verify-key</code>`,
+		"encrypted id token faq": `<summary><h3>How do I check an encrypted OIDC ID token?</h3></summary>`,
+		"single claim faq":       `<summary><h3>Can I print just one claim?</h3></summary>`,
 	} {
 		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
 			t.Errorf("site/index.html is missing refined %s %q", label, required)

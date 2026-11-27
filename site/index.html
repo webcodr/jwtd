@@ -329,7 +329,8 @@
                 Enforce expiry and not-before, or require an audience, issuer,
                 or subject (<code>--sub</code>) with <code>--leeway</code>,
                 <code>--require-exp</code>, and <code>--at</code>, exiting
-                nonzero on failure.
+                nonzero on failure, including for the claims inside an
+                encrypted token.
               </p>
             </div>
           </article>
@@ -371,6 +372,18 @@
                 Emit one machine-readable object with <code>--json</code> for
                 piping into tools like <code>jq</code>, or pass
                 <code>-q</code>/<code>--quiet</code> for exit-code-only checks.
+              </p>
+            </div>
+          </article>
+          <article>
+            <span>08</span>
+            <div>
+              <h3>Extract a single value</h3>
+              <p>
+                Print just the header, the payload, or one claim with
+                <code>--header</code>, <code>--payload</code>, or
+                <code>--claim</code>. Nothing reaches stdout if a requested
+                check fails.
               </p>
             </div>
           </article>
@@ -924,7 +937,10 @@ scoop install jwtd</code></pre>
                 specific claims, <code>--leeway</code> to tolerate clock skew,
                 and <code>--at</code> to evaluate timestamps at a specific
                 instant. Any of the claim flags, or a non-zero leeway, implies
-                <code>--verify-claims</code>.
+                <code>--verify-claims</code>. For a JWE, the claims checked are
+                the innermost claims set: a nested token's claims, or a
+                decrypted JSON payload. Claims that cannot be reached fail the
+                check.
               </p>
             </div>
             <div class="usage-commands">
@@ -1097,7 +1113,8 @@ scoop install jwtd</code></pre>
               <p>
                 Set <code>JWTD_KEY</code> instead of passing <code>--key</code>.
                 It accepts the same formats and is overridden by an explicit
-                flag.
+                flag. <code>JWTD_VERIFY_KEY</code> does the same for
+                <code>--verify-key</code>.
               </p>
             </div>
             <div class="usage-commands">
@@ -1367,8 +1384,9 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
           <p class="eyebrow">Key formats</p>
           <h2 id="key-formats-title">Use the key format you have.</h2>
           <p>
-            The <code>--key</code> flag and <code>JWTD_KEY</code> environment
-            variable use the same format detection.
+            The <code>--key</code> and <code>--verify-key</code> flags and the
+            <code>JWTD_KEY</code> and <code>JWTD_VERIFY_KEY</code> environment
+            variables all use the same format detection.
           </p>
         </div>
         <div class="key-layout">
@@ -1601,7 +1619,7 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
             <p>
               No. Decoding a JWT and inspecting a JWE protected header need no
               key. A key is only required to verify a JWS signature or decrypt a
-              JWE payload.
+              JWE payload, and so to check the claims inside a JWE.
             </p>
           </details>
           <details>
@@ -1626,6 +1644,32 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               ECDSA keys with
               <code>ssh-keygen -e -m PKCS8 -f &lt;key&gt;</code>, then pass the
               result.
+            </p>
+          </details>
+          <details>
+            <summary><h3>How do I check an encrypted OIDC ID token?</h3></summary>
+            <p>
+              An encrypted ID token is signed by the issuer and then encrypted
+              to you, so it takes two keys. Pass your private key with
+              <code>--key</code> to decrypt it and the issuer's public key with
+              <code>--verify-key</code> to verify the inner signature. Claim
+              flags then check the inner token's claims. With only
+              <code>--key</code>, the decryption key is also tried on the inner
+              signature, which reports it invalid when the issuer signed with
+              its own key, and a note says to pass <code>--verify-key</code>.
+            </p>
+          </details>
+          <details>
+            <summary><h3>Can I print just one claim?</h3></summary>
+            <p>
+              Yes. <code>--claim sub</code> prints the value of
+              <code>sub</code> alone, bare for a string and as compact JSON
+              otherwise, so <code>sub=$(jwtd --claim sub "$TOKEN")</code> works
+              without <code>jq</code>. <code>--header</code> and
+              <code>--payload</code> print a whole section. Every check you ask
+              for still runs, and if one fails nothing is printed to stdout:
+              the verdict goes to stderr and the exit status is nonzero. For a
+              token nested inside a JWE, these read the innermost token.
             </p>
           </details>
           <details>
