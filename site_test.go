@@ -190,7 +190,7 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"Open Graph title":       `<meta property="og:title" content="jwtd - JWT, JWS, and JWE inspection">`,
 		"Open Graph summary":     `<meta property="og:description" content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.">`,
 		"hero eyebrow":           `<p class="eyebrow">A command-line tool for JWT, JWS, and JWE</p>`,
-		"hero heading":           `<h1 id="hero-title">Inspect tokens<br><span>from the terminal.</span></h1>`,
+		"hero heading":           `<h1 id="hero-title">Read and verify tokens <span>on your own machine.</span></h1>`,
 		"primary action":         `<a class="button" href="#install">Install jwtd</a>`,
 		"secondary action":       `<a class="text-link" href="#usage">View usage</a>`,
 		"overview heading":       `<h2 id="capabilities-title">Focused tools for token inspection.</h2>`,
