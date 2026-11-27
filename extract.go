@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,11 +94,15 @@ func extractJWT(w, errw io.Writer, p *parsedJWT, keyStr string, checks claimChec
 
 // extractJWE prints only the selected part of an already-parsed JWE. The
 // protected header needs no key; the payload and a claim need the plaintext, so
-// they fail without one rather than printing nothing. A JWE carries no
-// signature or claim verdict of its own, so there is nothing to withhold here
-// beyond decryption itself failing.
+// they fail without one rather than printing nothing.
+//
+// When a key is given it is always used, even for --header: the protected
+// header is the AEAD's additional authenticated data, so decryption is the
+// JWE's integrity check, and a wrong key must fail here exactly as it does
+// without a selector. Withholding a value that failed a check covers this check
+// too.
 func extractJWE(w io.Writer, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string, sel selection, jsonOut bool) error {
-	if sel.kind == selectHeader {
+	if sel.kind == selectHeader && keyStr == "" {
 		return writeSelected(w, header, sel, jsonOut)
 	}
 	if keyStr == "" {
@@ -122,23 +127,34 @@ func extractJWE(w io.Writer, jwe *jose.JSONWebEncryption, header map[string]any,
 		return fmt.Errorf("decrypting JWE: %w", err)
 	}
 
-	if sel.kind == selectPayload {
+	switch sel.kind {
+	case selectHeader:
+		return writeSelected(w, header, sel, jsonOut)
+	case selectPayload:
 		var value any
 		if err := decodeJSON(plaintext, &value); err == nil {
 			return writeSelected(w, value, sel, jsonOut)
+		}
+		// A text plaintext is still JSON under --json, as jsonPayloadValue
+		// reports it, so a --json consumer never receives raw text.
+		if jsonOut {
+			return writeCompactJSON(w, string(plaintext))
 		}
 		_, err := fmt.Fprintln(w, escapeTerminalText(plaintext))
 		return err
 	}
 
-	// Claims of a token nested inside the JWE are feature #7's territory: the
-	// nested token may need a different key, and its claims may need
-	// validating, neither of which extraction does yet.
-	if isJWEBytes(plaintext) || isJWTBytes(plaintext) {
-		return errors.New("--claim on a nested token is not supported yet")
-	}
+	// The JSON decode is tried first. The shape checks only count dots, so a
+	// claims set with two or four of them in total (a URL iss, a domain, an
+	// email) is token-shaped by count while being the JSON object it is.
 	var claims map[string]any
 	if err := decodeJSON(plaintext, &claims); err != nil || claims == nil {
+		// Claims of a token nested inside the JWE are feature #7's territory:
+		// the nested token may need a different key, and its claims may need
+		// validating, neither of which extraction does yet.
+		if isJWEBytes(plaintext) || isJWTBytes(plaintext) {
+			return errors.New("--claim on a nested token is not supported yet")
+		}
 		return errors.New("decrypted payload is not a JSON object")
 	}
 	value, ok := claims[sel.claim]
@@ -161,7 +177,15 @@ func writeSelected(w io.Writer, v any, sel selection, jsonOut bool) error {
 			_, err := fmt.Fprintln(w, escapeTerminalText([]byte(s)))
 			return err
 		}
-		return writeCompactJSON(w, v)
+		// encoding/json leaves C1 controls, DEL, and bidi overrides as raw
+		// bytes inside strings. Rewriting them as \u escapes keeps the same JSON
+		// value while keeping them off the terminal, as --payload does.
+		var buf bytes.Buffer
+		if err := writeCompactJSON(&buf, v); err != nil {
+			return err
+		}
+		_, err := io.WriteString(w, escapeFormattedJSONControls(buf.Bytes()))
+		return err
 	}
 	pretty, err := newFormatter().Marshal(v)
 	if err != nil {

@@ -182,6 +182,7 @@ func TestExtractJWE(t *testing.T) {
 	key := generateRSAKey(t)
 	keyPath := writeKeyFile(t, key)
 	nestedJWT := signJWTWithHMAC(t, []byte("nested-secret"), jwt.MapClaims{"sub": "inner"})
+	otherKeyPath := writeKeyFile(t, generateDistinctRSAKey(t))
 
 	tests := []struct {
 		name      string
@@ -211,6 +212,11 @@ func TestExtractJWE(t *testing.T) {
 		{name: "claim on non-object payload", plaintext: `[1,2]`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "decrypted payload is not a JSON object"},
 		{name: "claim on nested token", plaintext: nestedJWT, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "nested token is not supported"},
 		{name: "missing claim", plaintext: `{"sub":"j1"}`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "nope"}, wantErr: `claim "nope" not present`},
+		// Two dots in total make a claims set token-shaped by delimiter count;
+		// it must still be read as the JSON object it is.
+		{name: "claim beside a dotted iss", plaintext: `{"iss":"https://auth.example.com","sub":"alice"}`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, want: "alice\n"},
+		{name: "header with a wrong key fails closed", plaintext: `{"sub":"j1"}`, keyStr: otherKeyPath, sel: selection{kind: selectHeader}, wantErr: "decrypting JWE"},
+		{name: "text payload under json is a JSON string", plaintext: "line1\nline2", keyStr: keyPath, sel: selection{kind: selectPayload}, jsonOut: true, want: "\"line1\\nline2\"\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,5 +247,23 @@ func TestExtractJWE(t *testing.T) {
 				t.Errorf("stdout = %q, want %q", out.String(), tt.want)
 			}
 		})
+	}
+}
+
+func TestExtractJWT_EscapesNonStringClaimValue(t *testing.T) {
+	// encoding/json leaves C1 controls, DEL, and bidi overrides as raw bytes,
+	// so a non-string claim needs the same terminal escaping a string gets.
+	token := makeJWT(`{"alg":"HS256"}`, "{\"r\":[\"a\u202eb\u009bc\u007f\"]}", "sig")
+	stdout, _, err := runExtractJWT(t, token, "", claimChecks{}, selection{kind: selectClaim, claim: "r"}, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, r := range []rune{0x202e, 0x9b, 0x7f} {
+		if strings.ContainsRune(stdout, r) {
+			t.Errorf("claim output carries raw %U: %q", r, stdout)
+		}
+	}
+	if !json.Valid([]byte(stdout)) {
+		t.Errorf("escaped claim output is no longer valid JSON: %q", stdout)
 	}
 }

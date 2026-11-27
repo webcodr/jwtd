@@ -1982,3 +1982,17 @@ func TestRun_AlgPinAppliesToExtraction(t *testing.T) {
 		t.Errorf("stdout = %q, want empty", stdout)
 	}
 }
+
+func TestRun_JWEExtractionRefusesClaimFlags(t *testing.T) {
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	token := encryptJWE(t, key, []byte(`{"sub":"x","aud":"other","exp":1}`))
+
+	stdout, _, err := runRootCommand(t, "--key", keyPath, "--aud", "mine", "--claim", "sub", token)
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("err = %v, want claim flags on a JWE extraction to be refused", err)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty: a claim check that cannot run must not pass silently", stdout)
+	}
+}

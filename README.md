@@ -290,7 +290,7 @@ jwtd --payload eyJhbGciOiJIUzI1NiIs...
 
 A string claim prints bare (like `jq -r`, escaped for the terminal) and any other value as compact JSON. `--header` and `--payload` print formatted JSON. Under `--json` every value is JSON-encoded on one line. Timestamps stay as their raw numeric values. `--claim` takes a top-level claim name literally, so a name containing dots (such as a URI) is not read as a path. A missing claim is an error.
 
-Every requested check still runs: `--key`, the claim flags, and `--alg`. **If a check fails, nothing is printed to stdout.** The failing verdict goes to stderr and the exit status is nonzero, so a script that captures the output never receives a value that failed a check it asked for. For a JWE, `--header` needs no key, while `--payload` and `--claim` need `--key` to decrypt. `--claim` on a token nested inside a JWE is not supported yet.
+Every requested check still runs: `--key`, the claim flags, and `--alg`. **If a check fails, nothing is printed to stdout.** The failing verdict goes to stderr and the exit status is nonzero, so a script that captures the output never receives a value that failed a check it asked for. For a JWE, `--header` needs no key, while `--payload` and `--claim` need `--key` to decrypt. A key that is given is always used, so a wrong key fails `--header` too instead of printing a header it could not authenticate. Claim validation flags with a JWE selector, and `--claim` on a token nested inside a JWE, are refused as not supported yet.
 
 ### Color
 

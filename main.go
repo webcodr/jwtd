@@ -165,6 +165,14 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	if isJWE(token) {
+		// Extraction promises that every requested check ran before a value is
+		// printed. Claim validation does not run on a JWE yet, so a selector
+		// with claim flags is refused rather than printing a value whose
+		// claims were never checked; the stderr note below would not reach a
+		// $(...) capture.
+		if sel.active() && checks.requested() {
+			return errors.New("claim validation (--verify-claims/--aud/--iss/--sub/--leeway/--require-exp) is not supported with --header/--payload/--claim on a JWE yet")
+		}
 		if checks.requested() {
 			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Note: claim validation (--verify-claims/--aud/--iss/--sub/--leeway/--require-exp) applies to JWTs only and is skipped for JWE.")
 		}
