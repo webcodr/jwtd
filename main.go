@@ -70,7 +70,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.Flags().Bool("local", false, "display formatted timestamps in the local timezone instead of UTC")
 	rootCmd.Flags().String("tz", "", "display formatted timestamps in an IANA timezone (e.g. Europe/Berlin, America/New_York)")
 	rootCmd.Flags().Bool("header", false, "print only the token header (the protected header for a JWE)")
-	rootCmd.Flags().Bool("payload", false, "print only the payload (the decrypted plaintext for a JWE)")
+	rootCmd.Flags().Bool("payload", false, "print only the payload (for a JWE, the innermost one: a nested token's claims or the decrypted plaintext)")
 	rootCmd.Flags().String("claim", "", "print only the value of this top-level claim; strings are printed bare (nothing is printed if a requested check fails)")
 	rootCmd.MarkFlagsMutuallyExclusive("header", "payload", "claim")
 	return rootCmd
