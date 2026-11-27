@@ -552,3 +552,16 @@ func decodeJWTJSONMap(t *testing.T, token, key string) (map[string]any, error) {
 	}
 	return out, err
 }
+
+// signJWTWithKID signs an RS256 JWT whose header names kid, for the tests that
+// need a JWK Set lookup to miss.
+func signJWTWithKID(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("signing JWT: %v", err)
+	}
+	return signed
+}
