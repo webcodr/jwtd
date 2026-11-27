@@ -7,6 +7,7 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 - Decode any JWT and display its header, payload, and signature
 - Decode and decrypt JWE tokens with automatic format detection
 - JWS signature verification with `--key` flag
+- Signed-then-encrypted tokens (such as encrypted OIDC ID tokens): decrypt with `--key` and verify the inner signature with `--verify-key`
 - Supports RSA, ECDSA, Ed25519, and HMAC signature algorithms
 - Key loading from PEM/DER keys, X.509 certificates, JWK/JWK Sets, or base64-encoded input
 - JWK Set key selection by the token's `kid` header, disambiguated by `use` (`sig`/`enc`) and `alg` (falls back to the first key when the token has no `kid`)
@@ -199,6 +200,16 @@ jwtd --key /path/to/private-key.pem eyJhbGciOiJSU0EtT0FF...
 jwtd -k /path/to/key.jwk eyJhbGciOiJSU0EtT0FF...
 ```
 
+### Verify a signed-then-encrypted token
+
+A token that is signed by an issuer and then encrypted to you (an encrypted OIDC ID token, for example) needs two keys: your private key to decrypt it, and the issuer's public key to verify the inner signature. Pass the second one with `--verify-key` (or `JWTD_VERIFY_KEY`):
+
+```sh
+jwtd --key /path/to/private-key.pem --verify-key /path/to/issuer-public-key.pem eyJhbGciOiJSU0EtT0FF...
+```
+
+`--key` decrypts every JWE layer, and `--verify-key` verifies every JWS layer, at the top level or nested. Without `--verify-key`, `--key` is offered for verification too, which is right when one key serves every layer. With two different keys of the same type (an RSA recipient key and an RSA issuer key, say), offering the recipient key to the inner signature reports `Signature: INVALID`, so pass `--verify-key`. A `--verify-key` is never skipped: if it cannot be used on a nested signature, that is an error, and if the token holds no signature at all, the command fails instead of passing a check that never ran.
+
 ### Verify a JWT signature
 
 Use the same `--key` flag to verify JWS signatures:
@@ -231,7 +242,7 @@ jwtd --at 2025-01-15T12:00:00Z --verify-claims eyJhbGciOiJIUzI1NiIs...
 jwtd -q --key /path/to/public-key.pem --verify-claims eyJhbGciOiJIUzI1NiIs...
 ```
 
-The result is printed as a `Claims: VALID` / `Claims: INVALID` section (with the reason), and reported as `claimsValid` under `--json`. Claim validation is independent of the signature: it runs with or without `--key`, and when both are used the command exits nonzero if either check fails. Without `--require-exp`, a token with no `exp` is not treated as expired. The clock matches the displayed `expired` / `not yet valid` annotations, with no leeway unless `--leeway` is given. Claim validation applies to JWTs only; it is skipped (with a note) for JWEs.
+The result is printed as a `Claims: VALID` / `Claims: INVALID` section (with the reason), and reported as `claimsValid` under `--json`. Claim validation is independent of the signature: it runs with or without `--key`, and when both are used the command exits nonzero if either check fails. Without `--require-exp`, a token with no `exp` is not treated as expired. The clock matches the displayed `expired` / `not yet valid` annotations, with no leeway unless `--leeway` is given. For a JWE, the claims validated are the innermost claims set: the claims of a token nested inside it, or a decrypted plaintext that is a JSON object. If the claims cannot be reached — no `--key` to decrypt the JWE, a nested JWE that cannot be decrypted, or a plaintext that is not a JSON object — the result is `Claims: INVALID` with the reason, because a check that cannot run must not pass.
 
 ### Timestamp timezones
 
@@ -277,7 +288,7 @@ jwtd --json eyJhbGciOiJIUzI1NiIs...
 jwtd --json --key key.pem eyJhbGciOiJSUzI1NiIs... | jq .signatureValid
 ```
 
-A JWT is emitted as `{ "header", "payload", "signature" }`, plus `"signatureValid"` when a key is provided and `"claimsValid"` when claim validation is requested. Timestamps stay as their raw numeric claim values (no RFC3339 conversion) so consumers can do their own date math, and numbers are preserved exactly. A JWE is emitted as `{ "protectedHeader", ... }` with either the encrypted part sizes (no key) or the decrypted payload (with a key). An invalid signature still prints the JSON and then exits nonzero.
+A JWT is emitted as `{ "header", "payload", "signature" }`, plus `"signatureValid"` when a key is provided and `"claimsValid"` when claim validation is requested. Timestamps stay as their raw numeric claim values (no RFC3339 conversion) so consumers can do their own date math, and numbers are preserved exactly. A JWE is emitted as `{ "protectedHeader", ... }` with either the encrypted part sizes (no key) or the decrypted payload (with a key). When the decrypted payload is itself a token, `"nested"` holds it in the same shape (with `"signatureValid"` when it was verified), and `"decryptedPayload"` keeps the compact string. `"claimsValid"` always sits on the top-level object. An invalid signature at any depth still prints the JSON and then exits nonzero.
 
 ### Extract a section or claim
 
@@ -290,7 +301,7 @@ jwtd --payload eyJhbGciOiJIUzI1NiIs...
 
 A string claim prints bare (like `jq -r`, escaped for the terminal) and any other value as compact JSON. `--header` and `--payload` print formatted JSON. Under `--json` every value is JSON-encoded on one line. Timestamps stay as their raw numeric values. `--claim` takes a top-level claim name literally, so a name containing dots (such as a URI) is not read as a path. A missing claim is an error.
 
-Every requested check still runs: `--key`, the claim flags, and `--alg`. **If a check fails, nothing is printed to stdout.** The failing verdict goes to stderr and the exit status is nonzero, so a script that captures the output never receives a value that failed a check it asked for. For a JWE, `--header` needs no key, while `--payload` and `--claim` need `--key` to decrypt. A key that is given is always used, so a wrong key fails `--header` too instead of printing a header it could not authenticate. Claim validation flags with a JWE selector, and `--claim` on a token nested inside a JWE, are refused as not supported yet.
+Every requested check still runs: `--key`, the claim flags, and `--alg`. **If a check fails, nothing is printed to stdout.** The failing verdict goes to stderr and the exit status is nonzero, so a script that captures the output never receives a value that failed a check it asked for. For a JWE, `--header` needs no key, while `--payload` and `--claim` need `--key` to decrypt. A key that is given is always used, so a wrong key fails `--header` too instead of printing a header it could not authenticate. For a token nested inside a JWE, `--payload` and `--claim` read the innermost token, and an invalid signature at any depth withholds the value.
 
 ### Color
 

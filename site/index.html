@@ -348,7 +348,9 @@
             <div>
               <h3>Inspect nested tokens</h3>
               <p>
-                Follow JWT and JWE payloads through nested token structures.
+                Follow JWT and JWE payloads through nested token structures,
+                decrypting with <code>--key</code> and verifying inner
+                signatures with <code>--verify-key</code>.
               </p>
             </div>
           </article>
@@ -1324,6 +1326,35 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               </div>
             </div>
           </article>
+          <article>
+            <div class="usage-number">13</div>
+            <div class="usage-copy">
+              <h3>Verify a signed-then-encrypted token</h3>
+              <p>
+                An encrypted OIDC ID token needs two keys: decrypt with your
+                private key via <code>--key</code>, and verify the issuer's
+                inner signature with <code>--verify-key</code> (or
+                <code>JWTD_VERIFY_KEY</code>). Claim checks apply to the inner
+                token's claims, and a check that cannot run fails.
+              </p>
+            </div>
+            <div class="command-block">
+              <pre tabindex="0"><code id="verify-key-command">jwtd --key /path/to/private-key.pem --verify-key /path/to/issuer-public-key.pem eyJhbGciOiJSU0EtT0FF...</code></pre>
+              <div class="command-actions">
+                <button
+                  type="button"
+                  data-copy-target="verify-key-command"
+                  aria-label="Copy signed-then-encrypted verification command"
+                >
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -1609,7 +1640,8 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               still print the JSON and exit nonzero. A JWE emits
               <code>protectedHeader</code> plus either the encrypted part sizes
               or, with a key, <code>decryptedPayload</code>; a nested token
-              inside it is reported as its compact string rather than decoded.
+              inside it is also decoded into <code>nested</code>, with its own
+              <code>signatureValid</code>.
               For scripts that only need the exit status, pass <code>-q</code>
               / <code>--quiet</code> to suppress stdout.
             </p>
