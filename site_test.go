@@ -70,11 +70,14 @@ func TestWebsiteContentContract(t *testing.T) {
 		"local stylesheet":  `href="/styles.css"`,
 		"local script":      `src="/script.js"`,
 		"local favicon":     `href="/favicon.svg"`,
+		"favicon fallback":  `href="/favicon.ico"`,
+		"apple touch icon":  `href="/apple-touch-icon.png"`,
 		"structured data":   `<script type="application/ld+json">`,
 		"Open Graph image":  `<meta property="og:image" content="https://jwtd.sh/og.png">`,
 		"Twitter card":      `<meta name="twitter:card" content="summary_large_image">`,
 		"FAQ accordion":     `<summary><h3>Does jwtd send my token anywhere?</h3></summary>`,
-		"release version":   `<p class="panel-kicker">Latest release: <a href="https://github.com/webcodr/jwtd/releases/latest">VERSION</a></p>`,
+		"release version":   `<p class="panel-kicker">Latest release: <a href="https://github.com/webcodr/jwtd/releases/latest">__VERSION__</a></p>`,
+		"specimen tabs":     `data-specimen-tabs`,
 		"install controls":  `data-install-tabs`,
 		"install methods":   `data-install-method="macos"`,
 		"install panels":    `data-install-panel="macos"`,
@@ -131,9 +134,30 @@ func TestWebsiteContentContract(t *testing.T) {
 		}
 	}
 
-	for _, asset := range []string{"styles.css", "script.js", "favicon.svg", "robots.txt", "sitemap.xml", "og.png"} {
+	for _, asset := range []string{"styles.css", "script.js", "favicon.svg", "favicon.ico", "apple-touch-icon.png", "robots.txt", "sitemap.xml", "og.png"} {
 		if _, err := os.Stat(filepath.Join("site", asset)); err != nil {
 			t.Errorf("local asset site/%s must exist: %v", asset, err)
+		}
+	}
+
+	// Test files must stay outside site/, which is deployed verbatim to GitHub Pages.
+	matches, err := filepath.Glob(filepath.Join("site", "*.test.js"))
+	if err != nil {
+		t.Fatalf("checking site/ for test files: %v", err)
+	}
+	if len(matches) > 0 {
+		t.Errorf("test files must not live under site/ (deployed verbatim): %v", matches)
+	}
+
+	// Every copy button must carry an accessible name distinguishing which command it copies.
+	copyButtonRe := regexp.MustCompile(`<button\b[^>]*data-copy-target="[^"]+"[^>]*>`)
+	copyButtons := copyButtonRe.FindAllString(normalizedIndex, -1)
+	if len(copyButtons) == 0 {
+		t.Error("site/index.html must contain copy buttons")
+	}
+	for _, btn := range copyButtons {
+		if !strings.Contains(btn, `aria-label="Copy `) {
+			t.Errorf("copy button must carry a descriptive aria-label, got %s", btn)
 		}
 	}
 }
@@ -166,7 +190,7 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"Open Graph title":       `<meta property="og:title" content="jwtd - JWT, JWS, and JWE inspection">`,
 		"Open Graph summary":     `<meta property="og:description" content="Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.">`,
 		"hero eyebrow":           `<p class="eyebrow">A command-line tool for JWT, JWS, and JWE</p>`,
-		"hero heading":           `<h1 id="hero-title">Inspect tokens<br><span>from the terminal.</span></h1>`,
+		"hero heading":           `<h1 id="hero-title">Read and verify tokens <span>on your own machine.</span></h1>`,
 		"primary action":         `<a class="button" href="#install">Install jwtd</a>`,
 		"secondary action":       `<a class="text-link" href="#usage">View usage</a>`,
 		"overview heading":       `<h2 id="capabilities-title">Focused tools for token inspection.</h2>`,
@@ -186,6 +210,9 @@ func TestWebsiteCopyContract(t *testing.T) {
 		"kid key format":         `Single keys, or the set entry matching the token's kid`,
 		"completions note":       `packages install shell completions for bash, zsh, and fish.`,
 		"json faq":               `<summary><h3>Can I get machine-readable output?</h3></summary>`,
+		"json claimsValid":       `<code>claimsValid</code> when claim validation is requested`,
+		"expiry faq flag hint":   `Pass <code>--verify-claims</code> (or <code>--aud</code>/<code>--iss</code>)`,
+		"hmac file example":      `jwtd --key hmac:/path/to/secret.key`,
 	} {
 		if !strings.Contains(normalizedIndex, normalizeMarkup(required)) {
 			t.Errorf("site/index.html is missing refined %s %q", label, required)
@@ -440,14 +467,14 @@ func TestWebsitePagesWorkflowContract(t *testing.T) {
 	for _, step := range build.Steps {
 		bakeScript += step.Run
 	}
-	if !strings.Contains(bakeScript, "gh release view") || !strings.Contains(bakeScript, "VERSION") {
+	if !strings.Contains(bakeScript, "gh release view") || !strings.Contains(bakeScript, "__VERSION__") {
 		t.Errorf("Pages build job must bake the latest release version into the site, got %q", bakeScript)
 	}
-	if !strings.Contains(bakeScript, "git log -1 --format=%cs") || !strings.Contains(bakeScript, "LASTMOD") {
+	if !strings.Contains(bakeScript, "git log -1 --format=%cs") || !strings.Contains(bakeScript, "__LASTMOD__") {
 		t.Errorf("Pages build job must bake the deployed commit date into the sitemap, got %q", bakeScript)
 	}
-	if sitemap := readWebsiteFile(t, "site", "sitemap.xml"); !strings.Contains(sitemap, "<lastmod>LASTMOD</lastmod>") {
-		t.Error("site/sitemap.xml must carry the LASTMOD placeholder the Pages build fills in")
+	if sitemap := readWebsiteFile(t, "site", "sitemap.xml"); !strings.Contains(sitemap, "<lastmod>__LASTMOD__</lastmod>") {
+		t.Error("site/sitemap.xml must carry the __LASTMOD__ placeholder the Pages build fills in")
 	}
 
 	var deploymentID string
@@ -467,7 +494,7 @@ func TestWebsiteToolingContract(t *testing.T) {
 		"pinned Node setup":       "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
 		"Node version":            "node-version: 26.13.1",
 		"JavaScript syntax check": "node --check site/script.js",
-		"JavaScript unit tests":   "node --test site/script.test.js",
+		"JavaScript unit tests":   "node --test script.test.js",
 	} {
 		if !strings.Contains(testWorkflow, required) {
 			t.Errorf("test workflow is missing %s marker %q", label, required)
