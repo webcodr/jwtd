@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+
+	"github.com/go-jose/go-jose/v4"
 )
 
 // selectionKind names the one part of a token --header, --payload, or --claim
@@ -86,6 +89,63 @@ func extractJWT(w, errw io.Writer, p *parsedJWT, keyStr string, checks claimChec
 		}
 		return writeSelected(w, value, sel, jsonOut)
 	}
+}
+
+// extractJWE prints only the selected part of an already-parsed JWE. The
+// protected header needs no key; the payload and a claim need the plaintext, so
+// they fail without one rather than printing nothing. A JWE carries no
+// signature or claim verdict of its own, so there is nothing to withhold here
+// beyond decryption itself failing.
+func extractJWE(w io.Writer, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string, sel selection, jsonOut bool) error {
+	if sel.kind == selectHeader {
+		return writeSelected(w, header, sel, jsonOut)
+	}
+	if keyStr == "" {
+		flag := "payload"
+		if sel.kind == selectClaim {
+			flag = "claim"
+		}
+		return fmt.Errorf("--%s requires --key to decrypt the JWE", flag)
+	}
+
+	kid, err := headerKID(header)
+	if err != nil {
+		return err
+	}
+	alg, _ := header["alg"].(string)
+	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "enc", alg: alg})
+	if err != nil {
+		return fmt.Errorf("loading decryption key: %w", err)
+	}
+	plaintext, err := jwe.Decrypt(key)
+	if err != nil {
+		return fmt.Errorf("decrypting JWE: %w", err)
+	}
+
+	if sel.kind == selectPayload {
+		var value any
+		if err := decodeJSON(plaintext, &value); err == nil {
+			return writeSelected(w, value, sel, jsonOut)
+		}
+		_, err := fmt.Fprintln(w, escapeTerminalText(plaintext))
+		return err
+	}
+
+	// Claims of a token nested inside the JWE are feature #7's territory: the
+	// nested token may need a different key, and its claims may need
+	// validating, neither of which extraction does yet.
+	if isJWEBytes(plaintext) || isJWTBytes(plaintext) {
+		return errors.New("--claim on a nested token is not supported yet")
+	}
+	var claims map[string]any
+	if err := decodeJSON(plaintext, &claims); err != nil || claims == nil {
+		return errors.New("decrypted payload is not a JSON object")
+	}
+	value, ok := claims[sel.claim]
+	if !ok {
+		return fmt.Errorf("claim %q not present", sel.claim)
+	}
+	return writeSelected(w, value, sel, jsonOut)
 }
 
 // writeSelected renders an extracted value. A header or payload is formatted

@@ -176,3 +176,70 @@ func TestExtractJWT_ValidChecksPrintNothingToStderr(t *testing.T) {
 		t.Errorf("stderr = %q, want empty when every check passes", stderr)
 	}
 }
+
+func TestExtractJWE(t *testing.T) {
+	disableColor(t)
+	key := generateRSAKey(t)
+	keyPath := writeKeyFile(t, key)
+	nestedJWT := signJWTWithHMAC(t, []byte("nested-secret"), jwt.MapClaims{"sub": "inner"})
+
+	tests := []struct {
+		name      string
+		plaintext string
+		keyStr    string
+		sel       selection
+		jsonOut   bool
+		want      string // exact stdout, when wantErr is empty
+		wantErr   string // substring of the error
+		check     func(t *testing.T, stdout string)
+	}{
+		{name: "header needs no key", plaintext: `{"sub":"j1"}`, sel: selection{kind: selectHeader}, jsonOut: true, check: func(t *testing.T, stdout string) {
+			var header map[string]any
+			if err := json.Unmarshal([]byte(stdout), &header); err != nil || header["alg"] == nil {
+				t.Errorf("header output = %q, want a JSON object with alg", stdout)
+			}
+		}},
+		{name: "payload without key", plaintext: `{"sub":"j1"}`, sel: selection{kind: selectPayload}, wantErr: "requires --key to decrypt"},
+		{name: "claim without key", plaintext: `{"sub":"j1"}`, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "requires --key to decrypt"},
+		{name: "json payload", plaintext: `{"sub":"j1"}`, keyStr: keyPath, sel: selection{kind: selectPayload}, jsonOut: true, want: "{\"sub\":\"j1\"}\n"},
+		{name: "text payload is escaped", plaintext: "hello\x1b", keyStr: keyPath, sel: selection{kind: selectPayload}, check: func(t *testing.T, stdout string) {
+			if strings.ContainsRune(stdout, 0x1b) || !strings.Contains(stdout, "hello") {
+				t.Errorf("text payload output = %q, want escaped text containing hello", stdout)
+			}
+		}},
+		{name: "claim", plaintext: `{"sub":"j1"}`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, want: "j1\n"},
+		{name: "claim on non-object payload", plaintext: `[1,2]`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "decrypted payload is not a JSON object"},
+		{name: "claim on nested token", plaintext: nestedJWT, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "sub"}, wantErr: "nested token is not supported"},
+		{name: "missing claim", plaintext: `{"sub":"j1"}`, keyStr: keyPath, sel: selection{kind: selectClaim, claim: "nope"}, wantErr: `claim "nope" not present`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := encryptJWE(t, key, []byte(tt.plaintext))
+			jwe, header, err := parseJWE(token)
+			if err != nil {
+				t.Fatalf("parsing JWE: %v", err)
+			}
+			var out bytes.Buffer
+			err = extractJWE(&out, jwe, header, tt.keyStr, tt.sel, tt.jsonOut)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
+				}
+				if out.Len() != 0 {
+					t.Errorf("stdout = %q, want empty on error", out.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.check != nil {
+				tt.check(t, out.String())
+				return
+			}
+			if out.String() != tt.want {
+				t.Errorf("stdout = %q, want %q", out.String(), tt.want)
+			}
+		})
+	}
+}
