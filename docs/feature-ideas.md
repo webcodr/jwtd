@@ -8,7 +8,7 @@ wins to larger additions and deliberate scope expansions.
 
 ## High-impact daily-driver ergonomics (low effort)
 
-> Status: items 1–5 are implemented.
+> Status: items 1–5 are implemented (5.8.0).
 
 ### 1. Strip `Authorization: Bearer ` prefix and surrounding quotes
 
@@ -104,6 +104,9 @@ ECDSA, and Ed25519 public keys natively lets users verify directly against
 intact.
 
 ### 9. Section and claim extraction (`--header`, `--payload`, `--claim`)
+
+> Status: implemented (`extract.go`). A failing requested check withholds the
+> value from stdout. `--claim` on a token nested inside a JWE waits for #7.
 
 `main.go`, `jsonout.go`
 

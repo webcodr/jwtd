@@ -1294,6 +1294,36 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               </div>
             </div>
           </article>
+          <article>
+            <div class="usage-number">12</div>
+            <div class="usage-copy">
+              <h3>Extract a header, payload, or claim</h3>
+              <p>
+                Print one part of the token with <code>--header</code>,
+                <code>--payload</code>, or <code>--claim &lt;name&gt;</code>, so a
+                shell variable can capture it without <code>jq</code>. Strings
+                print bare and timestamps stay raw. If a requested check fails,
+                nothing is printed to stdout: the verdict goes to stderr and
+                the exit status is nonzero.
+              </p>
+            </div>
+            <div class="command-block">
+              <pre tabindex="0"><code id="extract-claim-command">jwtd --key /path/to/public-key.pem --claim sub eyJhbGciOiJSUzI1NiIs...</code></pre>
+              <div class="command-actions">
+                <button
+                  type="button"
+                  data-copy-target="extract-claim-command"
+                  aria-label="Copy claim extraction command"
+                >
+                  Copy</button
+                ><span
+                  class="copy-feedback"
+                  data-copy-feedback
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 

@@ -15,6 +15,7 @@ A CLI tool that decodes and pretty-prints JSON Web Tokens (JWTs) and JSON Web En
 - Opt-in claim validation with `--verify-claims` (`exp`/`nbf`) plus `--aud`, `--iss`, `--sub`, `--leeway`, `--require-exp`, and `--at`, exiting nonzero when a check fails — independent of the signature check
 - Algorithm pinning with `--alg` to require an exact JWS/JWE `alg` header
 - Quiet mode (`-q`/`--quiet`) to suppress stdout and check status via exit code alone
+- Section and claim extraction with `--header`, `--payload`, and `--claim <name>` for shell pipelines, printing nothing to stdout when a requested check fails
 - Nested token detection: JWT-inside-JWE and JWE-inside-JWE are decoded recursively
 - `JWTD_KEY` environment variable for default key configuration
 - Syntax-highlighted JSON output with a consistent color scheme
@@ -277,6 +278,19 @@ jwtd --json --key key.pem eyJhbGciOiJSUzI1NiIs... | jq .signatureValid
 ```
 
 A JWT is emitted as `{ "header", "payload", "signature" }`, plus `"signatureValid"` when a key is provided and `"claimsValid"` when claim validation is requested. Timestamps stay as their raw numeric claim values (no RFC3339 conversion) so consumers can do their own date math, and numbers are preserved exactly. A JWE is emitted as `{ "protectedHeader", ... }` with either the encrypted part sizes (no key) or the decrypted payload (with a key). An invalid signature still prints the JSON and then exits nonzero.
+
+### Extract a section or claim
+
+Use `--header`, `--payload`, or `--claim <name>` to print only that part of the token, for example to capture a claim in a shell variable without `jq`:
+
+```sh
+sub=$(jwtd --key /path/to/public-key.pem --claim sub eyJhbGciOiJSUzI1NiIs...)
+jwtd --payload eyJhbGciOiJIUzI1NiIs...
+```
+
+A string claim prints bare (like `jq -r`, escaped for the terminal) and any other value as compact JSON. `--header` and `--payload` print formatted JSON. Under `--json` every value is JSON-encoded on one line. Timestamps stay as their raw numeric values. `--claim` takes a top-level claim name literally, so a name containing dots (such as a URI) is not read as a path. A missing claim is an error.
+
+Every requested check still runs: `--key`, the claim flags, and `--alg`. **If a check fails, nothing is printed to stdout.** The failing verdict goes to stderr and the exit status is nonzero, so a script that captures the output never receives a value that failed a check it asked for. For a JWE, `--header` needs no key, while `--payload` and `--claim` need `--key` to decrypt. `--claim` on a token nested inside a JWE is not supported yet.
 
 ### Color
 
