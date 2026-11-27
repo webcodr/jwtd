@@ -304,9 +304,10 @@
               <p>
                 View headers, claims, signatures, and readable timestamps in UTC
                 or <code>--local</code>/<code>--tz</code> (including
-                <code>auth_time</code> and <code>updated_at</code>), stripping
-                optional <code>Authorization: Bearer</code> prefixes and
-                surrounding quotes.
+                <code>auth_time</code> and <code>updated_at</code>), flagged
+                when a token is expired or not yet valid. Optional
+                <code>Authorization: Bearer</code> prefixes and surrounding
+                quotes are stripped.
               </p>
             </div>
           </article>
@@ -917,10 +918,11 @@ scoop install jwtd</code></pre>
                 Add <code>--verify-claims</code> to enforce <code>exp</code>
                 and <code>nbf</code>, exiting nonzero when the token is expired
                 or not yet valid. Pass <code>--aud</code>, <code>--iss</code>,
-                <code>--sub</code>, <code>--leeway</code>, or
-                <code>--require-exp</code> to require specific claims (any of
-                them implies <code>--verify-claims</code>), and <code>--at</code>
-                to evaluate timestamps at a specific instant.
+                <code>--sub</code>, or <code>--require-exp</code> to require
+                specific claims, <code>--leeway</code> to tolerate clock skew,
+                and <code>--at</code> to evaluate timestamps at a specific
+                instant. Any of the claim flags, or a non-zero leeway, implies
+                <code>--verify-claims</code>.
               </p>
             </div>
             <div class="usage-commands">
@@ -1394,8 +1396,9 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
             Signature verification and JWE decryption cover the algorithms
             defined by the JOSE standards. Accepted signing algorithms are
             restricted to those matching the key type to rule out algorithm
-            confusion, and <code>--alg</code> pins an exact JWT or JWE algorithm
-            to fail closed on mismatch.
+            confusion, and <code>--alg</code> pins the exact <code>alg</code>
+            header (for a JWE, the key-management algorithm, not
+            <code>enc</code>) to fail closed on mismatch.
           </p>
         </div>
         <div class="algorithm-groups">
@@ -1525,11 +1528,11 @@ jwtd eyJhbGciOiJSUzI1NiIs...</code></pre>
               No. Signature verification reports only whether the cryptographic
               signature is valid. Claim checks such as expiry are kept separate,
               so an expired but authentic token still verifies. Pass
-              <code>--verify-claims</code> (or <code>--aud</code>/<code>--iss</code>),
-              <code>--sub</code>, <code>--leeway</code>, or
-              <code>--require-exp</code> (optionally evaluated <code>--at</code>
-              a given instant) to enforce claims alongside or without a signature
-              check; either failing exits nonzero.
+              <code>--verify-claims</code>, or any of <code>--aud</code>,
+              <code>--iss</code>, <code>--sub</code>, <code>--require-exp</code>,
+              or a non-zero <code>--leeway</code>, to enforce claims alongside or
+              without a signature check, optionally evaluated <code>--at</code> a
+              given instant; either failing exits nonzero.
             </p>
           </details>
           <details>
