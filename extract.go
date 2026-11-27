@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/go-jose/go-jose/v4"
 )
 
 // selectionKind names the one part of a token --header, --payload, or --claim
@@ -33,40 +31,39 @@ func (s selection) active() bool {
 	return s.kind != selectNone
 }
 
-// extractJWT prints only the selected part of an already-parsed JWT.
+// extractLayer prints only the selected part of an opened token.
 //
-// Every requested check runs first, using the same signature and claim code as
-// the normal output. If any check fails, nothing is written to w: the failing
-// verdicts go to errw and the matching sentinel is returned, the signature
-// verdict taking precedence. Extraction exists for `$(...)` capture in scripts,
-// and a script that forgets `set -e` must still never receive a value that
-// failed a check it asked for. The verdicts are printed here, not left to the
-// top-level printer, because that printer deliberately silences the sentinels
-// (the human output prints its own verdict).
-func extractJWT(w, errw io.Writer, p *parsedJWT, keyStr string, checks claimChecks, sel selection, jsonOut bool) error {
+// Every requested check has run by now: signatures at every depth while the
+// token was opened, and the claims here, over the innermost claims set. If any
+// check failed, nothing is written to w: the failing verdicts go to errw and
+// the matching sentinel is returned, an invalid signature taking precedence.
+// Extraction exists for `$(...)` capture in scripts, and a script that forgets
+// `set -e` must still never receive a value that failed a check it asked for.
+// The verdicts are printed here, not left to the top-level printer, because
+// that printer deliberately silences the sentinels (the human output prints
+// its own verdict).
+func extractLayer(w, errw io.Writer, l *tokenLayer, checks claimChecks, sel selection, jsonOut bool) error {
 	var invalid error
-	if keyStr != "" {
-		valid, reason, err := verifyJWTSignature(p, keyStr)
-		if err != nil {
-			return fmt.Errorf("signature verification: %w", err)
+	if f := l.signatureFailure(); f != nil {
+		if err := printVerdict(errw, "Signature", false, f.reason); err != nil {
+			return err
 		}
-		if !valid {
-			if err := printVerdict(errw, "Signature", false, reason.Error()); err != nil {
-				return err
-			}
-			invalid = fmt.Errorf("%w: %v", errInvalidSignature, reason)
-		}
+		invalid = fmt.Errorf("%w: %s", errInvalidSignature, f.reason)
 	}
 
 	if checks.requested() {
-		valid, reason := validateClaimsSet(p.claims, checks)
-		if !valid {
-			text := claimReason(reason)
-			if err := printVerdict(errw, "Claims", false, text); err != nil {
+		claims, reason := l.claimsTarget()
+		if reason == "" {
+			if valid, verr := validateClaimsSet(claims, checks); !valid {
+				reason = claimReason(verr)
+			}
+		}
+		if reason != "" {
+			if err := printVerdict(errw, "Claims", false, reason); err != nil {
 				return err
 			}
 			if invalid == nil {
-				invalid = fmt.Errorf("%w: %s", errInvalidClaims, text)
+				invalid = fmt.Errorf("%w: %s", errInvalidClaims, reason)
 			}
 		}
 	}
@@ -77,14 +74,24 @@ func extractJWT(w, errw io.Writer, p *parsedJWT, keyStr string, checks claimChec
 
 	switch sel.kind {
 	case selectHeader:
-		return writeSelected(w, p.header, sel, jsonOut)
+		// The outermost header. On a JWE a given key was already used while
+		// opening, so a wrong key failed there instead of printing a header it
+		// could not authenticate (the header is the AEAD's associated data).
+		if l.jws != nil {
+			return writeSelected(w, l.jws.header, sel, jsonOut)
+		}
+		return writeSelected(w, l.header, sel, jsonOut)
 	case selectPayload:
-		// Converted to the plain map type for the formatter's fast path, as in
-		// printParsedJWT. The raw parse is used, never the formatTimestamps
-		// display copy, so the output stays valid JSON.
-		return writeSelected(w, map[string]any(p.claims), sel, jsonOut)
+		return writeInnermostPayload(w, l, sel, jsonOut)
 	default:
-		value, ok := p.claims[sel.claim]
+		if l.jwe != nil && !l.decrypted {
+			return errors.New("--claim requires --key to decrypt the JWE")
+		}
+		claims, reason := l.claimsTarget()
+		if reason != "" {
+			return errors.New(reason)
+		}
+		value, ok := claims[sel.claim]
 		if !ok {
 			return fmt.Errorf("claim %q not present", sel.claim)
 		}
@@ -92,76 +99,34 @@ func extractJWT(w, errw io.Writer, p *parsedJWT, keyStr string, checks claimChec
 	}
 }
 
-// extractJWE prints only the selected part of an already-parsed JWE. The
-// protected header needs no key; the payload and a claim need the plaintext, so
-// they fail without one rather than printing nothing.
-//
-// When a key is given it is always used, even for --header: the protected
-// header is the AEAD's additional authenticated data, so decryption is the
-// JWE's integrity check, and a wrong key must fail here exactly as it does
-// without a selector. Withholding a value that failed a check covers this check
-// too.
-func extractJWE(w io.Writer, jwe *jose.JSONWebEncryption, header map[string]any, keyStr string, sel selection, jsonOut bool) error {
-	if sel.kind == selectHeader && keyStr == "" {
-		return writeSelected(w, header, sel, jsonOut)
+// writeInnermostPayload prints the payload of the deepest layer: a JWS's claims,
+// or a decrypted JWE's JSON value or text. "Payload" means the claims for a JWT,
+// so it does for a JWT wrapped in a JWE too.
+func writeInnermostPayload(w io.Writer, l *tokenLayer, sel selection, jsonOut bool) error {
+	in := l.innermost()
+	if in.jws != nil {
+		// Converted to the plain map type for the formatter's fast path, as in
+		// renderJWSHuman. The raw parse is used, never the formatTimestamps
+		// display copy, so the output stays valid JSON.
+		return writeSelected(w, map[string]any(in.jws.claims), sel, jsonOut)
 	}
-	if keyStr == "" {
-		flag := "payload"
-		if sel.kind == selectClaim {
-			flag = "claim"
+	if !in.decrypted {
+		if in == l {
+			return errors.New("--payload requires --key to decrypt the JWE")
 		}
-		return fmt.Errorf("--%s requires --key to decrypt the JWE", flag)
+		return errors.New(reasonNestedUndecrypted)
 	}
-
-	kid, err := headerKID(header)
-	if err != nil {
-		return err
+	var value any
+	if err := decodeJSON(in.plaintext, &value); err == nil {
+		return writeSelected(w, value, sel, jsonOut)
 	}
-	alg, _ := header["alg"].(string)
-	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "enc", alg: alg})
-	if err != nil {
-		return fmt.Errorf("loading decryption key: %w", err)
+	// A text plaintext is still JSON under --json, as jsonPayloadValue reports
+	// it, so a --json consumer never receives raw text.
+	if jsonOut {
+		return writeCompactJSON(w, string(in.plaintext))
 	}
-	plaintext, err := jwe.Decrypt(key)
-	if err != nil {
-		return fmt.Errorf("decrypting JWE: %w", err)
-	}
-
-	switch sel.kind {
-	case selectHeader:
-		return writeSelected(w, header, sel, jsonOut)
-	case selectPayload:
-		var value any
-		if err := decodeJSON(plaintext, &value); err == nil {
-			return writeSelected(w, value, sel, jsonOut)
-		}
-		// A text plaintext is still JSON under --json, as jsonPayloadValue
-		// reports it, so a --json consumer never receives raw text.
-		if jsonOut {
-			return writeCompactJSON(w, string(plaintext))
-		}
-		_, err := fmt.Fprintln(w, escapeTerminalText(plaintext))
-		return err
-	}
-
-	// The JSON decode is tried first. The shape checks only count dots, so a
-	// claims set with two or four of them in total (a URL iss, a domain, an
-	// email) is token-shaped by count while being the JSON object it is.
-	var claims map[string]any
-	if err := decodeJSON(plaintext, &claims); err != nil || claims == nil {
-		// Claims of a token nested inside the JWE are feature #7's territory:
-		// the nested token may need a different key, and its claims may need
-		// validating, neither of which extraction does yet.
-		if isJWEBytes(plaintext) || isJWTBytes(plaintext) {
-			return errors.New("--claim on a nested token is not supported yet")
-		}
-		return errors.New("decrypted payload is not a JSON object")
-	}
-	value, ok := claims[sel.claim]
-	if !ok {
-		return fmt.Errorf("claim %q not present", sel.claim)
-	}
-	return writeSelected(w, value, sel, jsonOut)
+	_, err := fmt.Fprintln(w, escapeTerminalText(in.plaintext))
+	return err
 }
 
 // writeSelected renders an extracted value. A header or payload is formatted

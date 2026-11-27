@@ -145,7 +145,6 @@ func run(cmd *cobra.Command, args []string) error {
 		decrypt: resolveKeyArg(cmd, "key", "JWTD_KEY"),
 		verify:  resolveKeyArg(cmd, "verify-key", "JWTD_VERIFY_KEY"),
 	}
-	verifyKeyStr, _ := keys.verification()
 
 	checks := claimChecks{
 		verify:     verifyClaimsFlag,
@@ -162,14 +161,6 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	if isJWE(token) {
-		// Extraction promises that every requested check ran before a value is
-		// printed. Claim validation does not run on a JWE yet, so a selector
-		// with claim flags is refused rather than printing a value whose
-		// claims were never checked; the stderr note below would not reach a
-		// $(...) capture.
-		if sel.active() && checks.requested() {
-			return errors.New("claim validation (--verify-claims/--aud/--iss/--sub/--leeway/--require-exp) is not supported with --header/--payload/--claim on a JWE yet")
-		}
 		jwe, header, err := parseJWE(token)
 		if err != nil {
 			return err
@@ -186,7 +177,7 @@ func run(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if sel.active() {
-			return extractJWE(w, jwe, header, keys.decrypt, sel, jsonOut)
+			return extractLayer(w, cmd.ErrOrStderr(), l, checks, sel, jsonOut)
 		}
 		if jsonOut {
 			return decodeLayerJSON(w, l, checks)
@@ -206,7 +197,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if sel.active() {
-		return extractJWT(w, cmd.ErrOrStderr(), p, verifyKeyStr, checks, sel, jsonOut)
+		return extractLayer(w, cmd.ErrOrStderr(), l, checks, sel, jsonOut)
 	}
 	if jsonOut {
 		return decodeLayerJSON(w, l, checks)
@@ -627,25 +618,6 @@ func splitCompactJWT(tokenStr string) ([]string, bool) {
 		return nil, false
 	}
 	return []string{header, claims, signature}, true
-}
-
-// verifyJWTSignature performs the cryptographic signature check and reports the
-// outcome without printing anything, so both the human and --json paths share
-// one verification. It returns valid=true on success; valid=false with a
-// non-nil reason for a genuinely invalid signature; and a non-nil err only for
-// hard failures (unparseable token, unusable key) that are not a verdict on the
-// signature itself.
-func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, err error) {
-	kid, err := headerKID(p.header)
-	if err != nil {
-		return false, nil, err
-	}
-	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
-	if err != nil {
-		return false, nil, fmt.Errorf("error loading key: %w", err)
-	}
-	valid, reason = verifyLoadedKeySignature(p, key)
-	return valid, reason, nil
 }
 
 // verifyLoadedKeySignature is the verification core, taking a key that has

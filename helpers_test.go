@@ -633,3 +633,22 @@ func decodeJWEJSON(w io.Writer, tokenStr, keyStr string) error {
 	}
 	return decodeLayerJSON(w, l, claimChecks{})
 }
+
+// verifyJWTSignature performs the cryptographic signature check and reports the
+// outcome without printing anything, so both the human and --json paths share
+// one verification. It returns valid=true on success; valid=false with a
+// non-nil reason for a genuinely invalid signature; and a non-nil err only for
+// hard failures (unparseable token, unusable key) that are not a verdict on the
+// signature itself.
+func verifyJWTSignature(p *parsedJWT, keyStr string) (valid bool, reason error, err error) {
+	kid, err := headerKID(p.header)
+	if err != nil {
+		return false, nil, err
+	}
+	key, err := loadKeyForToken(keyStr, keySelector{kid: kid, use: "sig", alg: p.method.Alg()})
+	if err != nil {
+		return false, nil, fmt.Errorf("error loading key: %w", err)
+	}
+	valid, reason = verifyLoadedKeySignature(p, key)
+	return valid, reason, nil
+}
