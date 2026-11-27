@@ -26,7 +26,7 @@ jobs:
         run: node --check site/script.js
 
       - name: Run website JavaScript tests
-        run: node --test site/script.test.js
+        run: node --test script.test.js
 
       - name: Check formatting
         run: |

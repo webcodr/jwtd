@@ -8,7 +8,8 @@ const {
   installMethodForOperatingSystem,
   heroCommandForOperatingSystem,
   heroMethodForOperatingSystem,
-} = require("./script.js");
+  heroCopyLabelForOperatingSystem,
+} = require("./site/script.js");
 
 test("detectOperatingSystem classifies supported operating systems", () => {
   const cases = [
@@ -88,6 +89,25 @@ test("heroMethodForOperatingSystem labels the command it accompanies", () => {
   assert.equal(heroMethodForOperatingSystem("linux"), "Linux · install script");
   assert.equal(heroMethodForOperatingSystem("windows"), "Windows · install script");
   assert.equal(heroMethodForOperatingSystem("unknown"), "macOS · Homebrew");
+});
+
+test("heroCopyLabelForOperatingSystem describes the active hero command", () => {
+  assert.equal(
+    heroCopyLabelForOperatingSystem("macos"),
+    "Copy macOS Homebrew install command",
+  );
+  assert.equal(
+    heroCopyLabelForOperatingSystem("linux"),
+    "Copy Linux install script command",
+  );
+  assert.equal(
+    heroCopyLabelForOperatingSystem("windows"),
+    "Copy Windows install script command",
+  );
+  assert.equal(
+    heroCopyLabelForOperatingSystem("unknown"),
+    "Copy macOS Homebrew install command",
+  );
 });
 
 test("detectOperatingSystem honors platform source priority", () => {

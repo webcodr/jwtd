@@ -61,17 +61,105 @@ function heroMethodForOperatingSystem(operatingSystem) {
   return "macOS · Homebrew";
 }
 
+function heroCopyLabelForOperatingSystem(operatingSystem) {
+  if (operatingSystem === "windows") {
+    return "Copy Windows install script command";
+  }
+  if (operatingSystem === "linux") {
+    return "Copy Linux install script command";
+  }
+  return "Copy macOS Homebrew install command";
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     detectOperatingSystem,
     installMethodForOperatingSystem,
     heroCommandForOperatingSystem,
     heroMethodForOperatingSystem,
+    heroCopyLabelForOperatingSystem,
   };
 }
 
 if (typeof document !== "undefined") {
   document.documentElement.classList.add("js");
+
+  const setupHorizontalTabs = ({
+    tabList,
+    tabs,
+    panels,
+    getTabKey,
+    getPanelKey,
+    panelIdPrefix,
+    tabIdPrefix,
+    initialKey,
+    onSelect,
+  }) => {
+    if (!tabList || tabs.length === 0 || panels.length === 0) {
+      return null;
+    }
+
+    const selectTab = (key, moveFocus = false) => {
+      for (const tab of tabs) {
+        const selected = getTabKey(tab) === key;
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        if (selected && moveFocus) {
+          tab.focus();
+        }
+      }
+
+      for (const panel of panels) {
+        panel.hidden = getPanelKey(panel) !== key;
+      }
+    };
+
+    tabList.setAttribute("role", "tablist");
+    for (const tab of tabs) {
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", `${panelIdPrefix}${getTabKey(tab)}`);
+    }
+    for (const panel of panels) {
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", `${tabIdPrefix}${getPanelKey(panel)}`);
+      panel.tabIndex = 0;
+    }
+
+    selectTab(initialKey);
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", (event) => {
+        event.preventDefault();
+        const key = getTabKey(tab);
+        selectTab(key);
+        onSelect?.(key);
+      });
+
+      // Horizontal tablists follow WAI-ARIA APG: Left/Right/Home/End switch
+      // tabs while Up/Down remain free to scroll the page.
+      tab.addEventListener("keydown", (event) => {
+        let nextIndex;
+        if (event.key === "ArrowRight") {
+          nextIndex = (index + 1) % tabs.length;
+        } else if (event.key === "ArrowLeft") {
+          nextIndex = (index - 1 + tabs.length) % tabs.length;
+        } else if (event.key === "Home") {
+          nextIndex = 0;
+        } else if (event.key === "End") {
+          nextIndex = tabs.length - 1;
+        } else {
+          return;
+        }
+
+        event.preventDefault();
+        const key = getTabKey(tabs[nextIndex]);
+        selectTab(key, true);
+        onSelect?.(key);
+      });
+    });
+
+    return selectTab;
+  };
 
   const initialize = () => {
     let operatingSystem = "unknown";
@@ -95,6 +183,34 @@ if (typeof document !== "undefined") {
       heroMethod.textContent = heroMethodForOperatingSystem(operatingSystem);
     }
 
+    const heroCopyButton = document.querySelector(
+      '[data-copy-target="hero-install-command"]',
+    );
+    if (heroCopyButton) {
+      heroCopyButton.setAttribute(
+        "aria-label",
+        heroCopyLabelForOperatingSystem(operatingSystem),
+      );
+    }
+
+    const specimenTabList = document.querySelector("[data-specimen-tabs]");
+    const specimenTabs = Array.from(
+      document.querySelectorAll("[data-specimen-tab]"),
+    );
+    const specimenPanels = Array.from(
+      document.querySelectorAll("[data-specimen-panel]"),
+    );
+    setupHorizontalTabs({
+      tabList: specimenTabList,
+      tabs: specimenTabs,
+      panels: specimenPanels,
+      getTabKey: (tab) => tab.dataset.specimenTab,
+      getPanelKey: (panel) => panel.dataset.specimenPanel,
+      panelIdPrefix: "specimen-",
+      tabIdPrefix: "specimen-tab-",
+      initialKey: "decode",
+    });
+
     const tabList = document.querySelector("[data-install-tabs]");
     const tabs = Array.from(document.querySelectorAll("[data-install-method]"));
     const panels = Array.from(document.querySelectorAll("[data-install-panel]"));
@@ -111,69 +227,25 @@ if (typeof document !== "undefined") {
       window.history.replaceState(null, "", `#install-${method}`);
     };
 
-    const selectTab = (method, moveFocus = false) => {
-      for (const tab of tabs) {
-        const selected = tab.dataset.installMethod === method;
-        tab.setAttribute("aria-selected", String(selected));
-        tab.tabIndex = selected ? 0 : -1;
-        if (selected && moveFocus) {
-          tab.focus();
-        }
-      }
-
-      for (const panel of panels) {
-        panel.hidden = panel.dataset.installPanel !== method;
-      }
-    };
-
-    if (tabList && tabs.length > 0 && panels.length > 0) {
-      tabList.setAttribute("role", "tablist");
-      for (const tab of tabs) {
-        tab.setAttribute("role", "tab");
-        tab.setAttribute("aria-controls", `install-${tab.dataset.installMethod}`);
-      }
-      for (const panel of panels) {
-        panel.setAttribute("role", "tabpanel");
-        panel.setAttribute("aria-labelledby", `install-tab-${panel.dataset.installPanel}`);
-        panel.tabIndex = 0;
-      }
-
-      selectTab(
+    const selectInstallTab = setupHorizontalTabs({
+      tabList,
+      tabs,
+      panels,
+      getTabKey: (tab) => tab.dataset.installMethod,
+      getPanelKey: (panel) => panel.dataset.installPanel,
+      panelIdPrefix: "install-",
+      tabIdPrefix: "install-tab-",
+      initialKey:
         methodForHash(window.location.hash) ||
-          installMethodForOperatingSystem(operatingSystem),
-      );
+        installMethodForOperatingSystem(operatingSystem),
+      onSelect: rememberSelection,
+    });
 
-      tabs.forEach((tab, index) => {
-        tab.addEventListener("click", (event) => {
-          event.preventDefault();
-          selectTab(tab.dataset.installMethod);
-          rememberSelection(tab.dataset.installMethod);
-        });
-
-        tab.addEventListener("keydown", (event) => {
-          let nextIndex;
-          if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-            nextIndex = (index + 1) % tabs.length;
-          } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-            nextIndex = (index - 1 + tabs.length) % tabs.length;
-          } else if (event.key === "Home") {
-            nextIndex = 0;
-          } else if (event.key === "End") {
-            nextIndex = tabs.length - 1;
-          } else {
-            return;
-          }
-
-          event.preventDefault();
-          selectTab(tabs[nextIndex].dataset.installMethod, true);
-          rememberSelection(tabs[nextIndex].dataset.installMethod);
-        });
-      });
-
+    if (selectInstallTab) {
       window.addEventListener("hashchange", () => {
         const method = methodForHash(window.location.hash);
         if (method) {
-          selectTab(method);
+          selectInstallTab(method);
         }
       });
     }
@@ -192,20 +264,36 @@ if (typeof document !== "undefined") {
           window.clearTimeout(previousTimer);
         }
 
+        // Clearing before reassigning lets aria-live re-announce consecutive
+        // clicks within the 3-second feedback window.
+        feedback.textContent = "";
+        delete button.dataset.copied;
+
+        let message;
+        let copied = false;
         try {
           if (!navigator.clipboard?.writeText) {
             throw new Error("Clipboard API unavailable");
           }
           await navigator.clipboard.writeText(command.textContent.trim());
-          feedback.textContent = "Copied.";
+          message = "Copied.";
+          copied = true;
         } catch {
-          feedback.textContent = "Select the command and copy it manually.";
+          message = "Select the command and copy it manually.";
         }
+
+        window.setTimeout(() => {
+          feedback.textContent = message;
+          if (copied) {
+            button.dataset.copied = "true";
+          }
+        }, 0);
 
         feedbackTimers.set(
           button,
           window.setTimeout(() => {
             feedback.textContent = "";
+            delete button.dataset.copied;
           }, 3000),
         );
       });

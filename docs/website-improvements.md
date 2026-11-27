@@ -173,3 +173,31 @@ The following findings are now fixed:
 - Added a Pages trigger after successful release workflows on `main`. Version
   metadata still resolves GitHub's latest release, so publishing a prerelease
   or an older version cannot replace it. Failed release workflows skip the build.
+
+## Follow-up review — November 2026
+
+The following findings are now fixed:
+
+- Moved `script.test.js` out of `site/` (so test files are not published to
+  GitHub Pages) and added a `site_test.go` guard against `site/*.test.js`.
+- Switched the Pages version/lastmod placeholders to `__VERSION__` and
+  `__LASTMOD__` with non-empty checks before substitution.
+- Split multi-OS Usage blocks (stdin and `JWTD_KEY`) into separate
+  `.command-block` cards, added X11 clipboard (`xclip`), and added a defensive
+  top border for multi-label blocks.
+- Added `scroll-margin-top: var(--header)` to `.install-panel` so `#install-*`
+  hash links do not land under the sticky header.
+- Updated `--json`, expiry FAQ, claim validation, completions, and key-format
+  examples (`hmac:` ahead of `raw:` with process-list note) to match current
+  CLI behavior.
+- Tucked manual `.deb`/`.rpm` packages inside a `<details>` disclosure in a
+  single-column layout so full download URLs fit without clipping on desktop.
+- Added progressively enhanced hero specimen tabs (`Decode`, `Verify`,
+  `JWE`, `--json`) and a numeric claim so all syntax colors appear.
+- Regenerated `site/og.png` without repeated "from the terminal" phrasing and
+  added `site/favicon.ico` and `site/apple-touch-icon.png` fallbacks.
+- Improved accessibility: contextual `aria-label` on every Copy button,
+  `aria-live` re-announcement + visual copied state, `tabindex="0"` on
+  scrollable `<pre>` blocks, horizontal-only arrow keys on tablists,
+  higher-contrast interactive borders, mobile header action alignment, and a
+  CSP comment noting `frame-ancestors` limitations.

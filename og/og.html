@@ -40,6 +40,7 @@
         --blue: #6d8cff;
         --cyan: #5fdcff;
         --green: #7df58f;
+        --yellow: #ffc95c;
         --magenta: #c98cff;
         --red: #ff5f7d;
         --sans: "Adwaita Sans", system-ui, sans-serif;
@@ -201,6 +202,10 @@
         color: var(--green);
       }
 
+      .num {
+        color: var(--yellow);
+      }
+
       .b {
         color: var(--magenta);
       }
@@ -225,7 +230,7 @@
       <p class="eyebrow">A command-line tool for JWT, JWS, and JWE</p>
       <h1>Inspect tokens<br /><span>from the terminal.</span></h1>
       <p class="lede">
-        Decode JWTs, verify JWS signatures, and decrypt JWEs from the terminal.
+        Decode JWTs, verify JWS signatures, and decrypt JWEs locally.
       </p>
     </div>
 
@@ -245,6 +250,7 @@
 {
   <span class="k">"admin"</span>: <span class="b">true</span>,
   <span class="k">"exp"</span>: <span class="s">"2026-07-25T10:00:00Z (1784973600, expires in 15m)"</span>,
+  <span class="k">"level"</span>: <span class="num">2</span>,
   <span class="k">"note"</span>: <span class="n">null</span>,
   <span class="k">"sub"</span>: <span class="s">"user_2048"</span>
 }
